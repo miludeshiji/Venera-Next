@@ -37,7 +37,7 @@ class BangumiApi implements BangumiGateway {
   @override
   Future<BangumiUser> currentUser() async {
     final response = await _get('/v0/me');
-    return BangumiUser.fromJson(_jsonMap(response.data));
+    return _decode(response, BangumiUser.fromJson);
   }
 
   @override
@@ -50,23 +50,37 @@ class BangumiApi implements BangumiGateway {
         'nsfw': true,
       },
     });
-    final data = _jsonMap(response.data)['data'];
-    if (data is! List) {
+    final data = _decode<Map<String, dynamic>>(
+      response,
+      (json) => json,
+    )['data'];
+    if (data == null) {
       return [];
     }
-    return data
-        .whereType<Map>()
-        .map((item) => BangumiSubject.fromJson(_jsonMap(item)))
-        .where(
-          (subject) => subject.platform == null || subject.platform == '漫画',
-        )
-        .toList();
+    if (data is! List) {
+      throw _invalidResponse(response);
+    }
+    final subjects = <BangumiSubject>[];
+    for (final item in data) {
+      if (item is! Map) {
+        continue;
+      }
+      try {
+        final subject = BangumiSubject.fromJson(_jsonMap(item));
+        if (subject.platform == null || subject.platform == '漫画') {
+          subjects.add(subject);
+        }
+      } catch (_) {
+        // A malformed item should not hide other search results.
+      }
+    }
+    return subjects;
   }
 
   @override
   Future<BangumiSubject> getSubject(int subjectId) async {
     final response = await _get('/v0/subjects/$subjectId');
-    return BangumiSubject.fromJson(_jsonMap(response.data));
+    return _decode(response, BangumiSubject.fromJson);
   }
 
   @override
@@ -82,7 +96,7 @@ class BangumiApi implements BangumiGateway {
     if (response.statusCode == 404) {
       return null;
     }
-    return BangumiCollection.fromJson(_jsonMap(response.data));
+    return _decode(response, BangumiCollection.fromJson);
   }
 
   @override
@@ -151,6 +165,22 @@ class BangumiApi implements BangumiGateway {
     }
     return Map<String, dynamic>.from(data as Map);
   }
+
+  static T _decode<T>(
+    Response<dynamic> response,
+    T Function(Map<String, dynamic>) decoder,
+  ) {
+    try {
+      return decoder(_jsonMap(response.data));
+    } on BangumiApiException {
+      rethrow;
+    } catch (_) {
+      throw _invalidResponse(response);
+    }
+  }
+
+  static BangumiApiException _invalidResponse(Response<dynamic> response) =>
+      BangumiApiException(response.statusCode, 'Invalid Bangumi response');
 
   static String _errorMessage(Response<dynamic> response) {
     final data = response.data;

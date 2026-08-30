@@ -47,6 +47,29 @@ void main() {
       },
     );
 
+    test(
+      'skips malformed subjects without dropping valid search results',
+      () async {
+        final adapter = QueueAdapter.json([
+          (
+            200,
+            {
+              'data': [
+                {'id': 1, 'name': 'First', 'platform': '漫画'},
+                {'id': 'bad', 'name': 1, 'platform': []},
+                {'id': 2, 'name': 'Second', 'platform': '漫画'},
+              ],
+            },
+          ),
+        ]);
+        final api = BangumiApi(token: 'token', dio: dioWith(adapter));
+
+        final subjects = await api.searchSubjects('keyword');
+
+        expect(subjects.map((subject) => subject.id), [1, 2]);
+      },
+    );
+
     test('maps the current user', () async {
       final adapter = QueueAdapter.json([
         (200, {'username': 'alice', 'nickname': 'Alice'}),
@@ -59,6 +82,13 @@ void main() {
       expect(user.nickname, 'Alice');
       expect(adapter.requests.single.path, '/v0/me');
       expect(adapter.requests.single.method, 'GET');
+    });
+
+    test('wraps an invalid current user schema in an API exception', () async {
+      final adapter = QueueAdapter.json([(200, [])]);
+      final api = BangumiApi(token: 'token', dio: dioWith(adapter));
+
+      await expectLater(api.currentUser(), throwsA(isA<BangumiApiException>()));
     });
 
     test('returns a default user for an empty 204 response', () async {
@@ -91,6 +121,18 @@ void main() {
       expect(subject.title, '标题');
       expect(adapter.requests.single.path, '/v0/subjects/123');
       expect(adapter.requests.single.method, 'GET');
+    });
+
+    test('wraps an invalid subject schema in an API exception', () async {
+      final adapter = QueueAdapter.json([
+        (200, {'id': 'bad'}),
+      ]);
+      final api = BangumiApi(token: 'token', dio: dioWith(adapter));
+
+      await expectLater(
+        api.getSubject(123),
+        throwsA(isA<BangumiApiException>()),
+      );
     });
 
     test('returns a default subject for an empty response', () async {
@@ -184,9 +226,24 @@ void main() {
     expect(const BangumiApiException(500, 'server').isRetryable, isTrue);
     expect(const BangumiApiException(400, 'bad request').isRetryable, isFalse);
   });
+
+  test('wraps Dio transport failures as retryable API exceptions', () async {
+    final api = BangumiApi(token: 'token', dio: dioWith(_ThrowingAdapter()));
+
+    await expectLater(
+      api.currentUser(),
+      throwsA(
+        isA<BangumiApiException>().having(
+          (error) => error.statusCode,
+          'statusCode',
+          isNull,
+        ),
+      ),
+    );
+  });
 }
 
-Dio dioWith(QueueAdapter adapter) {
+Dio dioWith(HttpClientAdapter adapter) {
   final dio = Dio(BaseOptions(baseUrl: 'https://api.bgm.tv'));
   dio.httpClientAdapter = adapter;
   return dio;
@@ -215,6 +272,19 @@ class QueueAdapter implements HttpClientAdapter {
       },
     );
   }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _ThrowingAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) =>
+      throw DioException(requestOptions: options, message: 'Connection failed');
 
   @override
   void close({bool force = false}) {}
