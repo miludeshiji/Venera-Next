@@ -45,6 +45,20 @@ void main() {
     expect(saveCount, 0);
   });
 
+  test('connect restores an existing connection when saving fails', () async {
+    appdata.settings['bangumiAccessToken'] = 'old-token';
+    appdata.settings['bangumiUsername'] = 'old-user';
+    final savingService = BangumiService.forTesting(
+      gatewayFactory: (_) => gateway,
+      saveSettings: () async => throw StateError('save failed'),
+    );
+
+    await expectLater(savingService.connect('new-token'), throwsStateError);
+
+    expect(appdata.settings['bangumiAccessToken'], 'old-token');
+    expect(appdata.settings['bangumiUsername'], 'old-user');
+  });
+
   test('disconnect clears connection but retains bindings', () async {
     appdata.settings['bangumiAccessToken'] = 'token';
     appdata.settings['bangumiUsername'] = 'alice';
@@ -262,7 +276,7 @@ void main() {
   test('manual confirmed decrease patches progress and rating', () async {
     connectSettings();
     setBinding(binding());
-    gateway.collection = collection(epStatus: 12, rate: 6);
+    gateway.collection = collection(epStatus: 12, volStatus: 5, rate: 6);
 
     await service.updateManual(
       sourceKey: 'source',
@@ -278,6 +292,7 @@ void main() {
     ]);
     final updated = service.bindingFor('source', 'comic')!;
     expect(updated.lastRemoteEpisode, 10);
+    expect(updated.lastRemoteVolume, 5);
     expect(updated.rating, 8);
   });
 
@@ -304,8 +319,8 @@ void main() {
     'manual update omits unchanged fields and validates input ranges',
     () async {
       connectSettings();
-      setBinding(binding());
-      gateway.collection = collection(epStatus: 12, rate: 8);
+      setBinding(binding(lastRemoteEpisode: 1, lastRemoteVolume: 2, rating: 3));
+      gateway.collection = collection(epStatus: 12, volStatus: 5, rate: 8);
 
       await service.updateManual(
         sourceKey: 'source',
@@ -339,6 +354,11 @@ void main() {
       );
 
       expect(gateway.patchFields, isEmpty);
+      final updated = service.bindingFor('source', 'comic')!;
+      expect(updated.lastRemoteEpisode, 12);
+      expect(updated.lastRemoteVolume, 5);
+      expect(updated.rating, 8);
+      expect(saveCount, 1);
     },
   );
 
@@ -378,6 +398,22 @@ void main() {
     };
 
     expect(() => service.bindingFor('source', 'comic'), returnsNormally);
+    expect(service.bindingFor('source', 'comic'), isNull);
+  });
+
+  test('an incomplete or mismatched binding returns null', () {
+    final key = bangumiBindingKey('source', 'comic');
+    appdata.settings['bangumiBindings'] = {key: {}};
+    expect(service.bindingFor('source', 'comic'), isNull);
+
+    appdata.settings['bangumiBindings'] = {
+      key: {...binding().toJson(), 'sourceKey': 'another-source'},
+    };
+    expect(service.bindingFor('source', 'comic'), isNull);
+
+    appdata.settings['bangumiBindings'] = {
+      key: {...binding().toJson(), 'subjectId': 0},
+    };
     expect(service.bindingFor('source', 'comic'), isNull);
   });
 }

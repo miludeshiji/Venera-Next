@@ -53,9 +53,17 @@ class BangumiService {
     }
 
     final user = await _gatewayFactory(trimmedToken).currentUser();
+    final oldToken = appdata.settings['bangumiAccessToken'];
+    final oldUsername = appdata.settings['bangumiUsername'];
     appdata.settings['bangumiAccessToken'] = trimmedToken;
     appdata.settings['bangumiUsername'] = user.username;
-    await _saveSettings();
+    try {
+      await _saveSettings();
+    } catch (_) {
+      appdata.settings['bangumiAccessToken'] = oldToken;
+      appdata.settings['bangumiUsername'] = oldUsername;
+      rethrow;
+    }
     return user;
   }
 
@@ -81,7 +89,15 @@ class BangumiService {
       return null;
     }
     try {
-      return BangumiBinding.fromJson(Map<String, dynamic>.from(rawBinding));
+      final binding = BangumiBinding.fromJson(
+        Map<String, dynamic>.from(rawBinding),
+      );
+      if (binding.sourceKey != sourceKey ||
+          binding.comicId != comicId ||
+          binding.subjectId <= 0) {
+        return null;
+      }
+      return binding;
     } catch (_) {
       return null;
     }
@@ -209,6 +225,11 @@ class BangumiService {
     if (collection == null) {
       throw StateError('Bangumi collection no longer exists');
     }
+    final freshBinding = binding.copyWith(
+      lastRemoteEpisode: collection.epStatus,
+      lastRemoteVolume: collection.volStatus,
+      rating: collection.rate,
+    );
     final remoteProgress = _progressValue(collection, field);
     if (progress < remoteProgress && !allowDecrease) {
       throw BangumiProgressDecreaseRequired(
@@ -228,18 +249,19 @@ class BangumiService {
       fields['rate'] = rating;
     }
     if (fields.isEmpty) {
+      await _saveBinding(freshBinding);
       return;
     }
 
     await gateway.patchCollection(binding.subjectId, fields);
     await _saveBinding(
-      binding.copyWith(
+      freshBinding.copyWith(
         lastRemoteEpisode: field == BangumiProgressField.episode
             ? progress
-            : binding.lastRemoteEpisode,
+            : freshBinding.lastRemoteEpisode,
         lastRemoteVolume: field == BangumiProgressField.volume
             ? progress
-            : binding.lastRemoteVolume,
+            : freshBinding.lastRemoteVolume,
         rating: rating,
       ),
     );
