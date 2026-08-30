@@ -177,6 +177,9 @@ class BangumiService {
     }
   }
 
+  bool hasPendingProgress(String sourceKey, String comicId) =>
+      _pendingEntries(bangumiBindingKey(sourceKey, comicId)).isNotEmpty;
+
   Future<BangumiBinding> bind({
     required String sourceKey,
     required String comicId,
