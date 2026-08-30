@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:venera_next/features/bangumi/bangumi_api.dart';
 import 'package:venera_next/features/bangumi/bangumi_models.dart';
@@ -14,6 +16,16 @@ class BangumiProgressDecreaseRequired implements Exception {
 
   final int remote;
   final int proposed;
+}
+
+class BangumiLocalPersistenceException implements Exception {
+  const BangumiLocalPersistenceException({
+    required this.remoteSucceeded,
+    required this.cause,
+  });
+
+  final bool remoteSucceeded;
+  final Object cause;
 }
 
 class BangumiService {
@@ -41,22 +53,31 @@ class BangumiService {
 
   final BangumiGatewayFactory _gatewayFactory;
   final BangumiSettingsSaver _saveSettings;
+  Future<void> _connectionTail = Future.value();
+  final _bindingTails = <String, Future<void>>{};
 
   bool get isConnected =>
       _settingString('bangumiAccessToken').isNotEmpty &&
       _settingString('bangumiUsername').isNotEmpty;
 
-  Future<BangumiUser> connect(String token) async {
+  Future<BangumiUser> connect(String token) =>
+      _runConnection(() => _connect(token));
+
+  Future<BangumiUser> _connect(String token) async {
     final trimmedToken = token.trim();
     if (trimmedToken.isEmpty) {
       throw ArgumentError.value(token, 'token', 'Token must not be empty');
     }
 
     final user = await _gatewayFactory(trimmedToken).currentUser();
+    final username = user.username.trim();
+    if (username.isEmpty) {
+      throw StateError('Bangumi user has no username');
+    }
     final oldToken = appdata.settings['bangumiAccessToken'];
     final oldUsername = appdata.settings['bangumiUsername'];
     appdata.settings['bangumiAccessToken'] = trimmedToken;
-    appdata.settings['bangumiUsername'] = user.username;
+    appdata.settings['bangumiUsername'] = username;
     try {
       await _saveSettings();
     } catch (_) {
@@ -67,10 +88,20 @@ class BangumiService {
     return user;
   }
 
-  Future<void> disconnect() async {
+  Future<void> disconnect() => _runConnection(_disconnect);
+
+  Future<void> _disconnect() async {
+    final oldToken = appdata.settings['bangumiAccessToken'];
+    final oldUsername = appdata.settings['bangumiUsername'];
     appdata.settings['bangumiAccessToken'] = '';
     appdata.settings['bangumiUsername'] = '';
-    await _saveSettings();
+    try {
+      await _saveSettings();
+    } catch (_) {
+      appdata.settings['bangumiAccessToken'] = oldToken;
+      appdata.settings['bangumiUsername'] = oldUsername;
+      rethrow;
+    }
   }
 
   Future<List<BangumiSubject>> searchSubjects(String keyword) =>
@@ -94,7 +125,13 @@ class BangumiService {
       );
       if (binding.sourceKey != sourceKey ||
           binding.comicId != comicId ||
-          binding.subjectId <= 0) {
+          binding.subjectId <= 0 ||
+          binding.totalEpisodes < 0 ||
+          binding.totalVolumes < 0 ||
+          binding.lastRemoteEpisode < 0 ||
+          binding.lastRemoteVolume < 0 ||
+          binding.rating < 0 ||
+          binding.rating > 10) {
         return null;
       }
       return binding;
@@ -109,11 +146,37 @@ class BangumiService {
     required BangumiSubject subject,
     required BangumiProgressMode mode,
     BangumiProgress? reliableLocalProgress,
+  }) => _runBinding(
+    sourceKey,
+    comicId,
+    () => _bind(
+      sourceKey: sourceKey,
+      comicId: comicId,
+      subject: subject,
+      mode: mode,
+      reliableLocalProgress: reliableLocalProgress,
+    ),
+  );
+
+  Future<BangumiBinding> _bind({
+    required String sourceKey,
+    required String comicId,
+    required BangumiSubject subject,
+    required BangumiProgressMode mode,
+    BangumiProgress? reliableLocalProgress,
   }) async {
+    if (subject.id <= 0) {
+      throw ArgumentError.value(
+        subject.id,
+        'subject.id',
+        'Subject id must be positive',
+      );
+    }
     final gateway = _gateway();
     final collection = await gateway.getCollection(_username(), subject.id);
     final localProgress = _reliableProgress(mode, reliableLocalProgress);
     BangumiCollection finalCollection;
+    var remoteSucceeded = false;
 
     if (collection == null) {
       final fields = <String, dynamic>{'type': localProgress == null ? 1 : 3};
@@ -121,6 +184,7 @@ class BangumiService {
         fields[localProgress.apiField] = localProgress.value;
       }
       await gateway.createCollection(subject.id, fields);
+      remoteSucceeded = true;
       finalCollection = BangumiCollection(
         type: fields['type'] as int,
         rate: 0,
@@ -139,6 +203,7 @@ class BangumiService {
         await gateway.patchCollection(subject.id, {
           localProgress.apiField: localProgress.value,
         });
+        remoteSucceeded = true;
         finalCollection = _withProgress(
           collection,
           localProgress.field,
@@ -161,11 +226,14 @@ class BangumiService {
       lastRemoteVolume: finalCollection.volStatus,
       rating: finalCollection.rate,
     );
-    await _saveBinding(binding);
+    await _saveBinding(binding, remoteSucceeded: remoteSucceeded);
     return binding;
   }
 
-  Future<BangumiCollection?> refresh(String sourceKey, String comicId) async {
+  Future<BangumiCollection?> refresh(String sourceKey, String comicId) =>
+      _runBinding(sourceKey, comicId, () => _refresh(sourceKey, comicId));
+
+  Future<BangumiCollection?> _refresh(String sourceKey, String comicId) async {
     final binding = _requiredBinding(sourceKey, comicId);
     final collection = await _gateway().getCollection(
       _username(),
@@ -188,12 +256,42 @@ class BangumiService {
     String sourceKey,
     String comicId,
     BangumiProgressMode mode,
+  ) => _runBinding(
+    sourceKey,
+    comicId,
+    () => _updateMode(sourceKey, comicId, mode),
+  );
+
+  Future<void> _updateMode(
+    String sourceKey,
+    String comicId,
+    BangumiProgressMode mode,
   ) async {
     final binding = _requiredBinding(sourceKey, comicId);
     await _saveBinding(binding.copyWith(progressMode: mode));
   }
 
   Future<void> updateManual({
+    required String sourceKey,
+    required String comicId,
+    required BangumiProgressField field,
+    required int progress,
+    required int rating,
+    required bool allowDecrease,
+  }) => _runBinding(
+    sourceKey,
+    comicId,
+    () => _updateManual(
+      sourceKey: sourceKey,
+      comicId: comicId,
+      field: field,
+      progress: progress,
+      rating: rating,
+      allowDecrease: allowDecrease,
+    ),
+  );
+
+  Future<void> _updateManual({
     required String sourceKey,
     required String comicId,
     required BangumiProgressField field,
@@ -264,15 +362,25 @@ class BangumiService {
             : freshBinding.lastRemoteVolume,
         rating: rating,
       ),
+      remoteSucceeded: true,
     );
   }
 
-  Future<void> unbind(String sourceKey, String comicId) async {
+  Future<void> unbind(String sourceKey, String comicId) =>
+      _runBinding(sourceKey, comicId, () => _unbind(sourceKey, comicId));
+
+  Future<void> _unbind(String sourceKey, String comicId) async {
     final key = bangumiBindingKey(sourceKey, comicId);
+    final previousBindings = appdata.settings['bangumiBindings'];
     final bindings = _copiedBindings();
     bindings.remove(key);
     appdata.settings['bangumiBindings'] = bindings;
-    await _saveSettings();
+    try {
+      await _saveSettings();
+    } catch (_) {
+      appdata.settings['bangumiBindings'] = previousBindings;
+      rethrow;
+    }
   }
 
   BangumiGateway _gateway() {
@@ -280,6 +388,70 @@ class BangumiService {
       throw StateError('Bangumi is not connected');
     }
     return _gatewayFactory(_settingString('bangumiAccessToken'));
+  }
+
+  Future<T> _runConnection<T>(Future<T> Function() action) async {
+    final previous = _connectionTail;
+    final done = Completer<void>();
+    _connectionTail = done.future;
+    try {
+      try {
+        await previous;
+      } catch (_) {}
+      return await action();
+    } finally {
+      done.complete();
+    }
+  }
+
+  Future<T> _runBinding<T>(
+    String sourceKey,
+    String comicId,
+    Future<T> Function() action,
+  ) {
+    final key = bangumiBindingKey(sourceKey, comicId);
+    final previous = _bindingTails[key];
+    final done = Completer<void>();
+    _bindingTails[key] = done.future;
+    final result = Completer<T>();
+
+    void finish() {
+      done.complete();
+      if (identical(_bindingTails[key], done.future)) {
+        _bindingTails.remove(key);
+      }
+    }
+
+    void start() {
+      Future<T> operation;
+      try {
+        operation = action();
+      } catch (error, stackTrace) {
+        result.completeError(error, stackTrace);
+        finish();
+        return;
+      }
+      operation.then(
+        (value) {
+          result.complete(value);
+          finish();
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          result.completeError(error, stackTrace);
+          finish();
+        },
+      );
+    }
+
+    if (previous == null) {
+      start();
+    } else {
+      previous.then<void>(
+        (_) => start(),
+        onError: (Object _, StackTrace _) => start(),
+      );
+    }
+    return result.future;
   }
 
   String _username() => _settingString('bangumiUsername');
@@ -336,12 +508,27 @@ class BangumiService {
         : collection.volStatus,
   );
 
-  Future<void> _saveBinding(BangumiBinding binding) async {
+  Future<void> _saveBinding(
+    BangumiBinding binding, {
+    bool remoteSucceeded = false,
+  }) async {
+    final previousBindings = appdata.settings['bangumiBindings'];
     final bindings = _copiedBindings();
     bindings[bangumiBindingKey(binding.sourceKey, binding.comicId)] = binding
         .toJson();
     appdata.settings['bangumiBindings'] = bindings;
-    await _saveSettings();
+    try {
+      await _saveSettings();
+    } catch (error) {
+      if (remoteSucceeded) {
+        throw BangumiLocalPersistenceException(
+          remoteSucceeded: true,
+          cause: error,
+        );
+      }
+      appdata.settings['bangumiBindings'] = previousBindings;
+      rethrow;
+    }
   }
 
   Map<String, dynamic> _copiedBindings() {
