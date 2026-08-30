@@ -174,6 +174,55 @@ void main() {
     expect(saveCount, 0);
   });
 
+  test(
+    'bind rejects negative subject totals before making a remote call',
+    () async {
+      connectSettings();
+      const invalidSubject = BangumiSubject(
+        id: 42,
+        title: 'Title',
+        originalTitle: 'Original',
+        coverUrl: 'cover',
+        totalEpisodes: -1,
+        totalVolumes: 4,
+      );
+
+      await expectLater(
+        service.bind(
+          sourceKey: 'source',
+          comicId: 'comic',
+          subject: invalidSubject,
+          mode: BangumiProgressMode.episode,
+        ),
+        throwsArgumentError,
+      );
+
+      expect(gateway.collectionCalls, isEmpty);
+      expect(gateway.createFields, isEmpty);
+      expect(gateway.patchFields, isEmpty);
+      expect(saveCount, 0);
+    },
+  );
+
+  test('bind rejects an invalid remote collection without saving', () async {
+    connectSettings();
+    gateway.collection = collection(epStatus: -1);
+
+    await expectLater(
+      service.bind(
+        sourceKey: 'source',
+        comicId: 'comic',
+        subject: subject(),
+        mode: BangumiProgressMode.episode,
+      ),
+      throwsStateError,
+    );
+
+    expect(service.bindingFor('source', 'comic'), isNull);
+    expect(gateway.patchFields, isEmpty);
+    expect(saveCount, 0);
+  });
+
   test('bind retains a higher remote episode progress', () async {
     connectSettings();
     gateway.collection = collection(epStatus: 20);
@@ -360,6 +409,21 @@ void main() {
   );
 
   test(
+    'refresh rejects an invalid remote collection without overwriting',
+    () async {
+      connectSettings();
+      final original = binding();
+      setBinding(original);
+      gateway.collection = collection(rate: 11);
+
+      await expectLater(service.refresh('source', 'comic'), throwsStateError);
+
+      expect(service.bindingFor('source', 'comic'), original);
+      expect(saveCount, 0);
+    },
+  );
+
+  test(
     'manual progress decrease requires confirmation before patching',
     () async {
       connectSettings();
@@ -444,6 +508,32 @@ void main() {
     expect(updated.lastRemoteVolume, 5);
     expect(updated.rating, 8);
   });
+
+  test(
+    'manual rejects an invalid remote collection without patching',
+    () async {
+      connectSettings();
+      final original = binding();
+      setBinding(original);
+      gateway.collection = collection(volStatus: -1);
+
+      await expectLater(
+        service.updateManual(
+          sourceKey: 'source',
+          comicId: 'comic',
+          field: BangumiProgressField.episode,
+          progress: 13,
+          rating: 8,
+          allowDecrease: false,
+        ),
+        throwsStateError,
+      );
+
+      expect(gateway.patchFields, isEmpty);
+      expect(service.bindingFor('source', 'comic'), original);
+      expect(saveCount, 0);
+    },
+  );
 
   test('manual rating-only updates only its changed field', () async {
     connectSettings();
@@ -607,6 +697,99 @@ void main() {
     },
   );
 
+  test(
+    'a failed binding save does not overwrite a later binding update',
+    () async {
+      final bindingA = binding();
+      final bindingB = bindingForComic('comic-b');
+      setBindings([bindingA, bindingB]);
+      final firstSaveEntered = Completer<void>();
+      final allowFirstSaveToFail = Completer<void>();
+      final secondSaveEntered = Completer<void>();
+      var saveCalls = 0;
+      final savingService = BangumiService.forTesting(
+        gatewayFactory: (_) => gateway,
+        saveSettings: () async {
+          saveCalls++;
+          if (saveCalls == 1) {
+            firstSaveEntered.complete();
+            await allowFirstSaveToFail.future;
+            throw StateError('first save failed');
+          }
+          secondSaveEntered.complete();
+        },
+      );
+
+      final updateA = savingService.updateMode(
+        'source',
+        'comic',
+        BangumiProgressMode.volume,
+      );
+      await firstSaveEntered.future;
+      final updateB = savingService.updateMode(
+        'source',
+        'comic-b',
+        BangumiProgressMode.volume,
+      );
+      await Future<void>.delayed(Duration.zero);
+      final secondSaveStartedEarly = secondSaveEntered.isCompleted;
+
+      allowFirstSaveToFail.complete();
+      await expectLater(updateA, throwsStateError);
+      await updateB;
+
+      expect(secondSaveStartedEarly, isFalse);
+      expect(savingService.bindingFor('source', 'comic'), bindingA);
+      expect(
+        savingService.bindingFor('source', 'comic-b')!.progressMode,
+        BangumiProgressMode.volume,
+      );
+    },
+  );
+
+  test('a failed unbind does not discard a later binding update', () async {
+    final bindingA = binding();
+    final bindingB = bindingForComic('comic-b');
+    setBindings([bindingA, bindingB]);
+    final firstSaveEntered = Completer<void>();
+    final allowFirstSaveToFail = Completer<void>();
+    final secondSaveEntered = Completer<void>();
+    var saveCalls = 0;
+    final savingService = BangumiService.forTesting(
+      gatewayFactory: (_) => gateway,
+      saveSettings: () async {
+        saveCalls++;
+        if (saveCalls == 1) {
+          firstSaveEntered.complete();
+          await allowFirstSaveToFail.future;
+          throw StateError('first save failed');
+        }
+        secondSaveEntered.complete();
+      },
+    );
+
+    final unbindA = savingService.unbind('source', 'comic');
+    await firstSaveEntered.future;
+    final updateB = savingService.updateMode(
+      'source',
+      'comic-b',
+      BangumiProgressMode.volume,
+    );
+    await Future<void>.delayed(Duration.zero);
+    final secondSaveStartedEarly = secondSaveEntered.isCompleted;
+
+    allowFirstSaveToFail.complete();
+    await expectLater(unbindA, throwsStateError);
+    await updateB;
+
+    expect(secondSaveStartedEarly, isFalse);
+    expect(savingService.bindingFor('source', 'comic'), bindingA);
+    expect(
+      savingService.bindingFor('source', 'comic-b')!.progressMode,
+      BangumiProgressMode.volume,
+    );
+  });
+
   test('a corrupted binding returns null instead of throwing', () {
     appdata.settings['bangumiBindings'] = {
       bangumiBindingKey('source', 'comic'): 'not a binding',
@@ -659,6 +842,13 @@ void setBinding(BangumiBinding binding) {
   };
 }
 
+void setBindings(Iterable<BangumiBinding> bindings) {
+  appdata.settings['bangumiBindings'] = {
+    for (final binding in bindings)
+      bangumiBindingKey(binding.sourceKey, binding.comicId): binding.toJson(),
+  };
+}
+
 BangumiSubject subject() => const BangumiSubject(
   id: 42,
   title: 'Title',
@@ -697,6 +887,9 @@ BangumiBinding binding({
   lastRemoteVolume: lastRemoteVolume,
   rating: rating,
 );
+
+BangumiBinding bindingForComic(String comicId) =>
+    binding().copyWith(comicId: comicId);
 
 class FakeBangumiGateway implements BangumiGateway {
   BangumiUser user = const BangumiUser('alice', 'Alice');

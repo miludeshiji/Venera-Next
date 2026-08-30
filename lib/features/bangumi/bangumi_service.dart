@@ -55,6 +55,7 @@ class BangumiService {
   final BangumiSettingsSaver _saveSettings;
   Future<void> _connectionTail = Future.value();
   final _bindingTails = <String, Future<void>>{};
+  Future<void> _bindingCommitTail = Future.value();
 
   bool get isConnected =>
       _settingString('bangumiAccessToken').isNotEmpty &&
@@ -123,15 +124,7 @@ class BangumiService {
       final binding = BangumiBinding.fromJson(
         Map<String, dynamic>.from(rawBinding),
       );
-      if (binding.sourceKey != sourceKey ||
-          binding.comicId != comicId ||
-          binding.subjectId <= 0 ||
-          binding.totalEpisodes < 0 ||
-          binding.totalVolumes < 0 ||
-          binding.lastRemoteEpisode < 0 ||
-          binding.lastRemoteVolume < 0 ||
-          binding.rating < 0 ||
-          binding.rating > 10) {
+      if (!_isValidBinding(binding, sourceKey: sourceKey, comicId: comicId)) {
         return null;
       }
       return binding;
@@ -172,6 +165,13 @@ class BangumiService {
         'Subject id must be positive',
       );
     }
+    if (subject.totalEpisodes < 0 || subject.totalVolumes < 0) {
+      throw ArgumentError.value(
+        subject,
+        'subject',
+        'Subject totals must be non-negative',
+      );
+    }
     final gateway = _gateway();
     final collection = await gateway.getCollection(_username(), subject.id);
     final localProgress = _reliableProgress(mode, reliableLocalProgress);
@@ -196,6 +196,7 @@ class BangumiService {
             : 0,
       );
     } else {
+      _validateCollection(collection);
       finalCollection = collection;
       if (localProgress != null &&
           localProgress.value >
@@ -242,6 +243,7 @@ class BangumiService {
     if (collection == null) {
       return null;
     }
+    _validateCollection(collection);
     await _saveBinding(
       binding.copyWith(
         lastRemoteEpisode: collection.epStatus,
@@ -323,6 +325,7 @@ class BangumiService {
     if (collection == null) {
       throw StateError('Bangumi collection no longer exists');
     }
+    _validateCollection(collection);
     final freshBinding = binding.copyWith(
       lastRemoteEpisode: collection.epStatus,
       lastRemoteVolume: collection.volStatus,
@@ -371,16 +374,18 @@ class BangumiService {
 
   Future<void> _unbind(String sourceKey, String comicId) async {
     final key = bangumiBindingKey(sourceKey, comicId);
-    final previousBindings = appdata.settings['bangumiBindings'];
-    final bindings = _copiedBindings();
-    bindings.remove(key);
-    appdata.settings['bangumiBindings'] = bindings;
-    try {
-      await _saveSettings();
-    } catch (_) {
-      appdata.settings['bangumiBindings'] = previousBindings;
-      rethrow;
-    }
+    await _runBindingCommit(() async {
+      final previousBindings = appdata.settings['bangumiBindings'];
+      final bindings = _copiedBindings();
+      bindings.remove(key);
+      appdata.settings['bangumiBindings'] = bindings;
+      try {
+        await _saveSettings();
+      } catch (_) {
+        appdata.settings['bangumiBindings'] = previousBindings;
+        rethrow;
+      }
+    });
   }
 
   BangumiGateway _gateway() {
@@ -454,6 +459,20 @@ class BangumiService {
     return result.future;
   }
 
+  Future<T> _runBindingCommit<T>(Future<T> Function() action) async {
+    final previous = _bindingCommitTail;
+    final done = Completer<void>();
+    _bindingCommitTail = done.future;
+    try {
+      try {
+        await previous;
+      } catch (_) {}
+      return await action();
+    } finally {
+      done.complete();
+    }
+  }
+
   String _username() => _settingString('bangumiUsername');
 
   String _settingString(String key) {
@@ -467,6 +486,30 @@ class BangumiService {
       throw StateError('Comic is not bound to Bangumi');
     }
     return binding;
+  }
+
+  bool _isValidBinding(
+    BangumiBinding binding, {
+    String? sourceKey,
+    String? comicId,
+  }) =>
+      (sourceKey == null || binding.sourceKey == sourceKey) &&
+      (comicId == null || binding.comicId == comicId) &&
+      binding.subjectId > 0 &&
+      binding.totalEpisodes >= 0 &&
+      binding.totalVolumes >= 0 &&
+      binding.lastRemoteEpisode >= 0 &&
+      binding.lastRemoteVolume >= 0 &&
+      binding.rating >= 0 &&
+      binding.rating <= 10;
+
+  void _validateCollection(BangumiCollection collection) {
+    if (collection.epStatus < 0 ||
+        collection.volStatus < 0 ||
+        collection.rate < 0 ||
+        collection.rate > 10) {
+      throw StateError('Bangumi collection has invalid progress or rating');
+    }
   }
 
   BangumiProgress? _reliableProgress(
@@ -512,23 +555,32 @@ class BangumiService {
     BangumiBinding binding, {
     bool remoteSucceeded = false,
   }) async {
-    final previousBindings = appdata.settings['bangumiBindings'];
-    final bindings = _copiedBindings();
-    bindings[bangumiBindingKey(binding.sourceKey, binding.comicId)] = binding
-        .toJson();
-    appdata.settings['bangumiBindings'] = bindings;
-    try {
-      await _saveSettings();
-    } catch (error) {
-      if (remoteSucceeded) {
-        throw BangumiLocalPersistenceException(
-          remoteSucceeded: true,
-          cause: error,
-        );
-      }
-      appdata.settings['bangumiBindings'] = previousBindings;
-      rethrow;
+    if (!_isValidBinding(binding)) {
+      throw ArgumentError.value(
+        binding,
+        'binding',
+        'Binding has invalid values',
+      );
     }
+    await _runBindingCommit(() async {
+      final previousBindings = appdata.settings['bangumiBindings'];
+      final bindings = _copiedBindings();
+      bindings[bangumiBindingKey(binding.sourceKey, binding.comicId)] = binding
+          .toJson();
+      appdata.settings['bangumiBindings'] = bindings;
+      try {
+        await _saveSettings();
+      } catch (error) {
+        if (remoteSucceeded) {
+          throw BangumiLocalPersistenceException(
+            remoteSucceeded: true,
+            cause: error,
+          );
+        }
+        appdata.settings['bangumiBindings'] = previousBindings;
+        rethrow;
+      }
+    });
   }
 
   Map<String, dynamic> _copiedBindings() {
