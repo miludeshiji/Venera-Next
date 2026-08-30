@@ -654,6 +654,7 @@ void main() {
     gateway.getCollectionBlocker = Completer<void>();
 
     final refresh = service.refresh('source', 'comic');
+    await pumpEventQueue();
     expect(gateway.collectionCalls, hasLength(1));
     var unbindCompleted = false;
     final unbind = service
@@ -678,6 +679,7 @@ void main() {
       gateway.getCollectionBlocker = Completer<void>();
 
       final refresh = service.refresh('source', 'comic');
+      await pumpEventQueue();
       expect(gateway.collectionCalls, hasLength(1));
       var updateCompleted = false;
       final update = service
@@ -829,6 +831,1976 @@ void main() {
       expect(service.bindingFor('source', 'comic'), isNull);
     }
   });
+
+  group('automatic chapter progress upload', () {
+    late Map<String, dynamic> implicitData;
+    late List<RecordingTimer> timers;
+    late DateTime now;
+    var implicitWrites = 0;
+
+    BangumiService automaticService() => BangumiService.forTesting(
+      gatewayFactory: (_) => gateway,
+      saveSettings: () async => saveCount++,
+      implicitData: implicitData,
+      writeImplicitData: () => implicitWrites++,
+      now: () => now,
+      timerFactory: (duration, callback) {
+        final timer = RecordingTimer(duration, callback);
+        timers.add(timer);
+        return timer;
+      },
+    );
+
+    setUp(() {
+      implicitData = <String, dynamic>{};
+      timers = [];
+      now = DateTime.utc(2026, 8, 30, 12);
+      implicitWrites = 0;
+    });
+
+    test(
+      'does not call the network when automatic upload is disabled',
+      () async {
+        connectSettings();
+        appdata.settings['bangumiAutoSyncEnabled'] = false;
+        setBinding(binding());
+
+        await automaticService().onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+
+        expect(gateway.collectionCalls, isEmpty);
+        expect(gateway.patchFields, isEmpty);
+      },
+    );
+
+    test('does not call the network when disconnected or unbound', () async {
+      final automatic = automaticService();
+      await automatic.onChapterCompleted(
+        sourceKey: 'source',
+        comicId: 'comic',
+        chapterTitle: '第 12 话',
+      );
+
+      connectSettings();
+      await automatic.onChapterCompleted(
+        sourceKey: 'source',
+        comicId: 'comic',
+        chapterTitle: '第 12 话',
+      );
+
+      expect(gateway.collectionCalls, isEmpty);
+      expect(gateway.patchFields, isEmpty);
+    });
+
+    test(
+      'uploads the parser-selected episode, volume, and auto fields',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1, volStatus: 1);
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        await automatic.updateMode(
+          'source',
+          'comic',
+          BangumiProgressMode.volume,
+        );
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 3 卷',
+        );
+        await automatic.updateMode('source', 'comic', BangumiProgressMode.auto);
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 13 话',
+        );
+
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+          {'vol_status': 3},
+          {'ep_status': 13},
+        ]);
+      },
+    );
+
+    test(
+      'skips ambiguous and unreliable chapter titles without a request',
+      () async {
+        connectSettings();
+        setBinding(binding().copyWith(progressMode: BangumiProgressMode.auto));
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 3 卷 第 12 话',
+        );
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12.5 话',
+        );
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '番外',
+        );
+
+        expect(gateway.collectionCalls, isEmpty);
+        expect(gateway.patchFields, isEmpty);
+      },
+    );
+
+    test(
+      'fetches latest collection and never patches lower or equal progress',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 12);
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 11 话',
+        );
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+
+        expect(gateway.collectionCalls, hasLength(2));
+        expect(gateway.patchFields, isEmpty);
+        expect(automatic.bindingFor('source', 'comic')!.lastRemoteEpisode, 12);
+      },
+    );
+
+    test(
+      'patches higher progress with only the required status change',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 11, type: 1);
+
+        await automaticService().onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+
+        expect(gateway.patchFields.single, {'ep_status': 12, 'type': 3});
+      },
+    );
+
+    for (final collectionType in [1, 4, 5]) {
+      test(
+        'advancing collection type $collectionType changes it to reading',
+        () async {
+          connectSettings();
+          setBinding(binding());
+          gateway.collection = collection(epStatus: 11, type: collectionType);
+
+          await automaticService().onChapterCompleted(
+            sourceKey: 'source',
+            comicId: 'comic',
+            chapterTitle: '第 12 话',
+          );
+
+          expect(gateway.patchFields.single, {'ep_status': 12, 'type': 3});
+        },
+      );
+    }
+
+    test(
+      'marks a known total complete and leaves completed type unchanged',
+      () async {
+        connectSettings();
+        setBinding(binding(totalEpisodes: 12));
+        gateway.collection = collection(epStatus: 11, type: 3);
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        gateway.collection = collection(epStatus: 12, type: 2);
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 13 话',
+        );
+
+        expect(gateway.patchFields, [
+          {'ep_status': 12, 'type': 2},
+          {'ep_status': 13},
+        ]);
+      },
+    );
+
+    test(
+      'retryable automatic failures are swallowed and queued locally',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(503, 'unavailable');
+
+        await automaticService().onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+
+        final pending = implicitData['bangumiPendingProgress'] as Map;
+        expect(pending[bangumiBindingKey('source', 'comic')]['ep_status'], {
+          'field': 'ep_status',
+          'value': 12,
+          'attempts': 0,
+          'nextAttemptAt': now
+              .add(const Duration(minutes: 5))
+              .millisecondsSinceEpoch,
+        });
+        expect(implicitWrites, 1);
+      },
+    );
+
+    test(
+      'non-retryable automatic failures do not create a pending item',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(400, 'bad request');
+
+        await automaticService().onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+
+        expect(implicitData['bangumiPendingProgress'], isNull);
+        expect(implicitWrites, 0);
+      },
+    );
+
+    test(
+      'compresses retryable failures to the largest value and increases backoff',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(null, 'offline');
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        now = now.add(const Duration(minutes: 5));
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 15 话',
+        );
+
+        final pending = implicitData['bangumiPendingProgress'] as Map;
+        expect(pending[bangumiBindingKey('source', 'comic')]['ep_status'], {
+          'field': 'ep_status',
+          'value': 15,
+          'attempts': 1,
+          'nextAttemptAt': now
+              .add(const Duration(minutes: 10))
+              .millisecondsSinceEpoch,
+        });
+      },
+    );
+
+    test(
+      'retains a four-times-failed item without scheduling another timer',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(503, 'unavailable');
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        for (var attempt = 0; attempt < 4; attempt++) {
+          now = now.add(const Duration(minutes: 40));
+          await automatic.onChapterCompleted(
+            sourceKey: 'source',
+            comicId: 'comic',
+            chapterTitle: '第 12 话',
+          );
+        }
+
+        final pending = implicitData['bangumiPendingProgress'] as Map;
+        expect(
+          (pending[bangumiBindingKey('source', 'comic')]['ep_status']
+              as Map)['attempts'],
+          4,
+        );
+        expect(timers.where((timer) => timer.isActive), isEmpty);
+      },
+    );
+
+    test(
+      'initialization replays ready pending progress and clears it on success',
+      () async {
+        connectSettings();
+        setBinding(binding(lastRemoteEpisode: 1));
+        gateway.collection = collection(epStatus: 1);
+        implicitData['bangumiPendingProgress'] = {
+          bangumiBindingKey('source', 'comic'): {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 1,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+
+        await automatic.initialize();
+
+        expect(gateway.patchFields.single, {'ep_status': 12});
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+        expect(automatic.bindingFor('source', 'comic')!.lastRemoteEpisode, 12);
+      },
+    );
+
+    test(
+      'next completion retries its pending item before uploading newer progress',
+      () async {
+        connectSettings();
+        setBinding(binding(lastRemoteEpisode: 1));
+        gateway.collection = collection(epStatus: 1);
+        implicitData['bangumiPendingProgress'] = {
+          bangumiBindingKey('source', 'comic'): {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 1,
+            'nextAttemptAt': now
+                .add(const Duration(hours: 1))
+                .millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 13 话',
+        );
+
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+          {'ep_status': 13},
+        ]);
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'mode changes and unbinding clear no-longer-applicable pending items',
+      () async {
+        setBinding(binding());
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 1,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+
+        await automatic.updateMode(
+          'source',
+          'comic',
+          BangumiProgressMode.volume,
+        );
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'vol_status',
+            'value': 3,
+            'attempts': 1,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        await automatic.unbind('source', 'comic');
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test('dispose cancels the service retry timer', () async {
+      connectSettings();
+      setBinding(binding());
+      implicitData['bangumiPendingProgress'] = {
+        bangumiBindingKey('source', 'comic'): {
+          'field': 'ep_status',
+          'value': 12,
+          'attempts': 1,
+          'nextAttemptAt': now
+              .add(const Duration(minutes: 5))
+              .millisecondsSinceEpoch,
+        },
+      };
+      final automatic = automaticService();
+
+      await automatic.initialize();
+      automatic.dispose();
+
+      expect(timers.single.cancelled, isTrue);
+    });
+
+    test(
+      'connection lifecycle schedules pending work only while connected',
+      () async {
+        setBinding(binding());
+        implicitData['bangumiPendingProgress'] = {
+          bangumiBindingKey('source', 'comic'): {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 1,
+            'nextAttemptAt': now
+                .add(const Duration(minutes: 5))
+                .millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+
+        await automatic.initialize();
+        expect(timers, isEmpty);
+
+        await automatic.connect('token');
+        expect(timers, hasLength(1));
+        expect(timers.single.isActive, isTrue);
+
+        await automatic.disconnect();
+        expect(timers.single.cancelled, isTrue);
+      },
+    );
+
+    test(
+      'automatic switch blocks initialization and timer retries but not explicit retry',
+      () async {
+        connectSettings();
+        setBinding(binding(lastRemoteEpisode: 1));
+        gateway.collection = collection(epStatus: 1);
+        appdata.settings['bangumiAutoSyncEnabled'] = false;
+        implicitData['bangumiPendingProgress'] = {
+          bangumiBindingKey('source', 'comic'): {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+
+        await automatic.initialize();
+        expect(gateway.collectionCalls, isEmpty);
+        expect(timers, isEmpty);
+        await automatic.retryPending();
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+        ]);
+      },
+    );
+
+    test(
+      'remote success clears pending even when binding persistence fails',
+      () async {
+        connectSettings();
+        setBinding(binding(lastRemoteEpisode: 1));
+        gateway.collection = collection(epStatus: 1);
+        implicitData['bangumiPendingProgress'] = {
+          bangumiBindingKey('source', 'comic'): {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        final failing = BangumiService.forTesting(
+          gatewayFactory: (_) => gateway,
+          saveSettings: () async => throw StateError('disk full'),
+          implicitData: implicitData,
+          writeImplicitData: () => implicitWrites++,
+          now: () => now,
+          timerFactory: (duration, callback) =>
+              RecordingTimer(duration, callback),
+        );
+
+        await failing.retryPending();
+
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'initial failure starts at zero and four retry failures use 10/20/40 delays',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(503, 'unavailable');
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        expect(
+          ((implicitData['bangumiPendingProgress'] as Map).values.single
+              as Map)['ep_status'],
+          {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now
+                .add(const Duration(minutes: 5))
+                .millisecondsSinceEpoch,
+          },
+        );
+        for (final delay in [10, 20, 40, 40]) {
+          now = now.add(Duration(minutes: delay));
+          await automatic.initialize();
+        }
+        expect(
+          (((implicitData['bangumiPendingProgress'] as Map).values.single
+                  as Map)['ep_status']
+              as Map)['attempts'],
+          4,
+        );
+        expect(timers.where((timer) => timer.isActive), isEmpty);
+      },
+    );
+
+    test(
+      'bind clears stale pending only after it persists its binding',
+      () async {
+        connectSettings();
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+
+        await automaticService().bind(
+          sourceKey: 'source',
+          comicId: 'comic',
+          subject: subject(),
+          mode: BangumiProgressMode.episode,
+        );
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test('incompatible pending mode is cleaned before retrying', () async {
+      connectSettings();
+      setBinding(binding().copyWith(progressMode: BangumiProgressMode.volume));
+      final key = bangumiBindingKey('source', 'comic');
+      implicitData['bangumiPendingProgress'] = {
+        key: {
+          'field': 'ep_status',
+          'value': 12,
+          'attempts': 0,
+          'nextAttemptAt': now.millisecondsSinceEpoch,
+        },
+      };
+
+      await automaticService().initialize();
+
+      expect(implicitData['bangumiPendingProgress'], isEmpty);
+      expect(gateway.collectionCalls, isEmpty);
+    });
+
+    test(
+      'manual confirmed progress clears matching automatic pending after remote success',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 12, rate: 6);
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 15,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+
+        await automaticService().updateManual(
+          sourceKey: 'source',
+          comicId: 'comic',
+          field: BangumiProgressField.episode,
+          progress: 10,
+          rating: 6,
+          allowDecrease: true,
+        );
+
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test('deterministic retry errors discard the due pending item', () async {
+      connectSettings();
+      setBinding(binding());
+      final key = bangumiBindingKey('source', 'comic');
+      implicitData['bangumiPendingProgress'] = {
+        key: {
+          'field': 'ep_status',
+          'value': 12,
+          'attempts': 0,
+          'nextAttemptAt': now.millisecondsSinceEpoch,
+        },
+      };
+
+      await automaticService().initialize();
+
+      expect(implicitData['bangumiPendingProgress'], isEmpty);
+      expect(timers.where((timer) => timer.isActive), isEmpty);
+    });
+
+    test(
+      'an unparseable chapter still replays a due pending progress',
+      () async {
+        connectSettings();
+        setBinding(binding().copyWith(progressMode: BangumiProgressMode.auto));
+        gateway.collection = collection(epStatus: 1);
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 12,
+              'attempts': 0,
+              'nextAttemptAt': now.millisecondsSinceEpoch,
+            },
+          },
+        };
+
+        await automaticService().onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '番外',
+        );
+
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+        ]);
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'auto mode preserves either pending field while explicit mode keeps only its field',
+      () async {
+        setBinding(
+          binding().copyWith(progressMode: BangumiProgressMode.episode),
+        );
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+
+        await automatic.updateMode('source', 'comic', BangumiProgressMode.auto);
+        expect(implicitData['bangumiPendingProgress'], isNotEmpty);
+        await automatic.updateMode(
+          'source',
+          'comic',
+          BangumiProgressMode.volume,
+        );
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'retry queued behind mode change rereads the binding before sending',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.getCollectionBlocker = Completer<void>();
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+
+        final refresh = automatic.refresh('source', 'comic');
+        await pumpEventQueue();
+        expect(gateway.collectionCalls, hasLength(1));
+        final modeChange = automatic.updateMode(
+          'source',
+          'comic',
+          BangumiProgressMode.volume,
+        );
+        final retry = automatic.retryPending();
+        gateway.getCollectionBlocker!.complete();
+        await Future.wait([refresh, modeChange, retry]);
+
+        expect(gateway.collectionCalls, hasLength(1));
+        expect(gateway.patchFields, isEmpty);
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'retry queued behind unbind rereads the binding before sending',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.getCollectionBlocker = Completer<void>();
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+
+        final refresh = automatic.refresh('source', 'comic');
+        await pumpEventQueue();
+        expect(gateway.collectionCalls, hasLength(1));
+        final unbind = automatic.unbind('source', 'comic');
+        final retry = automatic.retryPending();
+        gateway.getCollectionBlocker!.complete();
+        await Future.wait([refresh, unbind, retry]);
+
+        expect(gateway.collectionCalls, hasLength(1));
+        expect(gateway.patchFields, isEmpty);
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'queued automatic upload observes a disabled switch after the binding lock',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection();
+        gateway.getCollectionBlocker = Completer<void>();
+        final automatic = automaticService();
+        final refresh = automatic.refresh('source', 'comic');
+        await pumpEventQueue();
+        final upload = automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        appdata.settings['bangumiAutoSyncEnabled'] = false;
+        gateway.getCollectionBlocker!.complete();
+        await Future.wait([refresh, upload]);
+
+        expect(gateway.collectionCalls, hasLength(1));
+        expect(gateway.patchFields, isEmpty);
+      },
+    );
+
+    test(
+      'queued explicit retry observes disconnect after the binding lock',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection();
+        gateway.getCollectionBlocker = Completer<void>();
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+        final refresh = automatic.refresh('source', 'comic');
+        final retry = automatic.retryPending();
+        var disconnected = false;
+        final disconnect = automatic.disconnect().then(
+          (_) => disconnected = true,
+        );
+        await pumpEventQueue();
+        expect(disconnected, isFalse);
+        gateway.getCollectionBlocker!.complete();
+        await Future.wait([refresh, disconnect, retry]);
+
+        expect(gateway.collectionCalls, hasLength(1));
+        expect(gateway.patchFields, isEmpty);
+        expect(implicitData['bangumiPendingProgress'], isNotEmpty);
+      },
+    );
+
+    test(
+      'retry queued behind a compatible mode change keeps the pending field',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(volStatus: 1);
+        gateway.getCollectionBlocker = Completer<void>();
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'vol_status',
+            'value': 3,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+        final refresh = automatic.refresh('source', 'comic');
+        await pumpEventQueue();
+        final mode = automatic.updateMode(
+          'source',
+          'comic',
+          BangumiProgressMode.volume,
+        );
+        final retry = automatic.retryPending();
+        gateway.getCollectionBlocker!.complete();
+        await Future.wait([refresh, mode, retry]);
+
+        expect(gateway.collectionCalls, hasLength(2));
+        expect(gateway.patchFields, [
+          {'vol_status': 3},
+        ]);
+      },
+    );
+
+    test(
+      'queued initialize observes disabled automatic sync after the binding lock',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection();
+        gateway.getCollectionBlocker = Completer<void>();
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+        final refresh = automatic.refresh('source', 'comic');
+        await pumpEventQueue();
+        final initialize = automatic.initialize();
+        appdata.settings['bangumiAutoSyncEnabled'] = false;
+        gateway.getCollectionBlocker!.complete();
+        await Future.wait([refresh, initialize]);
+
+        expect(gateway.collectionCalls, hasLength(1));
+        expect(gateway.patchFields, isEmpty);
+        expect(implicitData['bangumiPendingProgress'], isNotEmpty);
+      },
+    );
+
+    test(
+      'queued initialize rereads a retry backoff before sending again',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(503, 'unavailable');
+        gateway.getCollectionBlocker = Completer<void>();
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+        final refresh = automatic.refresh('source', 'comic');
+        final completion = automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 13 话',
+        );
+        await pumpEventQueue();
+        final initialize = automatic.initialize();
+        gateway.getCollectionBlocker!.complete();
+        await Future.wait([refresh, completion, initialize]);
+
+        expect(gateway.collectionCalls, hasLength(2));
+        expect(gateway.patchFields, hasLength(1));
+        final pending =
+            (implicitData['bangumiPendingProgress'] as Map)[key] as Map;
+        expect((pending['ep_status'] as Map)['attempts'], 1);
+        expect(
+          timers.where((timer) => timer.isActive).single.duration,
+          const Duration(minutes: 10),
+        );
+      },
+    );
+
+    test(
+      'initialization removes pending entries without a valid binding',
+      () async {
+        connectSettings();
+        final key = bangumiBindingKey('source', 'comic');
+        for (final rawBinding in [null, <String, dynamic>{}]) {
+          appdata.settings['bangumiBindings'] = rawBinding == null
+              ? <String, dynamic>{}
+              : <String, dynamic>{key: rawBinding};
+          implicitData['bangumiPendingProgress'] = {
+            key: {
+              'field': 'ep_status',
+              'value': 12,
+              'attempts': 1,
+              'nextAttemptAt': now.millisecondsSinceEpoch,
+            },
+          };
+          timers.clear();
+
+          await automaticService().initialize();
+
+          expect(implicitData['bangumiPendingProgress'], isEmpty);
+          expect(timers, isEmpty);
+        }
+      },
+    );
+
+    test(
+      'initialization removes pending entries with a mismatched binding key',
+      () async {
+        connectSettings();
+        final key = bangumiBindingKey('source', 'comic');
+        appdata.settings['bangumiBindings'] = {
+          key: binding().copyWith(comicId: 'another-comic').toJson(),
+        };
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+
+        await automaticService().initialize();
+
+        expect(gateway.collectionCalls, isEmpty);
+        expect(gateway.patchFields, isEmpty);
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'auto mode retains independent episode and volume pending entries',
+      () async {
+        connectSettings();
+        setBinding(binding().copyWith(progressMode: BangumiProgressMode.auto));
+        gateway.collection = collection(epStatus: 1, volStatus: 1);
+        gateway.patchError = const BangumiApiException(503, 'offline');
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'vol_status': {
+              'field': 'vol_status',
+              'value': 3,
+              'attempts': 0,
+              'nextAttemptAt': now.millisecondsSinceEpoch,
+            },
+          },
+        };
+
+        await automaticService().onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+
+        expect((implicitData['bangumiPendingProgress'] as Map)[key], {
+          'ep_status': {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now
+                .add(const Duration(minutes: 5))
+                .millisecondsSinceEpoch,
+          },
+          'vol_status': {
+            'field': 'vol_status',
+            'value': 3,
+            'attempts': 1,
+            'nextAttemptAt': now
+                .add(const Duration(minutes: 10))
+                .millisecondsSinceEpoch,
+          },
+        });
+      },
+    );
+
+    test(
+      'explicit retry surfaces retryable and deterministic API errors',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        };
+        gateway.patchError = const BangumiApiException(503, 'offline');
+        final automatic = automaticService();
+
+        await expectLater(
+          automatic.retryPending(),
+          throwsA(isA<BangumiApiException>()),
+        );
+        gateway.patchError = const BangumiApiException(400, 'invalid');
+        await expectLater(
+          automatic.retryPending(),
+          throwsA(isA<BangumiApiException>()),
+        );
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'authentication failure pauses startup replay before another binding',
+      () async {
+        connectSettings();
+        final first = binding();
+        final second = binding().copyWith(
+          sourceKey: 'source-two',
+          comicId: 'comic-two',
+          subjectId: 2,
+        );
+        setBindings([first, second]);
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(401, 'expired token');
+        final firstKey = bangumiBindingKey(first.sourceKey, first.comicId);
+        final secondKey = bangumiBindingKey(second.sourceKey, second.comicId);
+        implicitData['bangumiPendingProgress'] = {
+          firstKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 12,
+              'attempts': 0,
+              'nextAttemptAt': now.millisecondsSinceEpoch,
+            },
+          },
+          secondKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 8,
+              'attempts': 0,
+              'nextAttemptAt': now.millisecondsSinceEpoch,
+            },
+          },
+        };
+
+        await automaticService().initialize();
+
+        expect(gateway.collectionCalls, [('alice', first.subjectId)]);
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+        ]);
+        expect(
+          implicitData['bangumiPendingProgress'],
+          containsPair(firstKey, isNotNull),
+        );
+        expect(
+          implicitData['bangumiPendingProgress'],
+          containsPair(secondKey, isNotNull),
+        );
+        expect(timers.where((timer) => timer.isActive), isEmpty);
+      },
+    );
+
+    test(
+      'authentication failure queues the current automatic progress',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(403, 'forbidden');
+        final key = bangumiBindingKey('source', 'comic');
+
+        await automaticService().onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+
+        expect((implicitData['bangumiPendingProgress'] as Map)[key], {
+          'ep_status': {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now
+                .add(const Duration(minutes: 5))
+                .millisecondsSinceEpoch,
+          },
+        });
+        expect(timers.where((timer) => timer.isActive), isEmpty);
+      },
+    );
+
+    test(
+      'authentication pause merges later automatic progress without another request',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(401, 'expired token');
+        final key = bangumiBindingKey('source', 'comic');
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        gateway.patchError = null;
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 13 话',
+        );
+
+        expect(gateway.collectionCalls, [('alice', 42)]);
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+        ]);
+        expect(
+          (((implicitData['bangumiPendingProgress'] as Map)[key]
+                  as Map)['ep_status']
+              as Map)['value'],
+          13,
+        );
+        expect(timers.where((timer) => timer.isActive), isEmpty);
+      },
+    );
+
+    test(
+      'a successful explicit retry resumes due work and schedules future work',
+      () async {
+        connectSettings();
+        final first = binding();
+        final second = binding().copyWith(
+          sourceKey: 'source-two',
+          comicId: 'comic-two',
+          subjectId: 2,
+        );
+        final future = binding().copyWith(
+          sourceKey: 'source-three',
+          comicId: 'comic-three',
+          subjectId: 3,
+        );
+        setBindings([first, second, future]);
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(403, 'expired token');
+        final secondKey = bangumiBindingKey(second.sourceKey, second.comicId);
+        final futureKey = bangumiBindingKey(future.sourceKey, future.comicId);
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: first.sourceKey,
+          comicId: first.comicId,
+          chapterTitle: '第 12 话',
+        );
+        implicitData['bangumiPendingProgress'] = {
+          ...(implicitData['bangumiPendingProgress'] as Map),
+          secondKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 13,
+              'attempts': 0,
+              'nextAttemptAt': now.millisecondsSinceEpoch,
+            },
+          },
+          futureKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 6,
+              'attempts': 0,
+              'nextAttemptAt': now
+                  .add(const Duration(minutes: 5))
+                  .millisecondsSinceEpoch,
+            },
+          },
+        };
+        gateway.patchFields.clear();
+        gateway.patchError = null;
+
+        await automatic.retryPending();
+
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+          {'ep_status': 13},
+        ]);
+        expect((implicitData['bangumiPendingProgress'] as Map), {
+          futureKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 6,
+              'attempts': 0,
+              'nextAttemptAt': now
+                  .add(const Duration(minutes: 5))
+                  .millisecondsSinceEpoch,
+            },
+          },
+        });
+        expect(timers.where((timer) => timer.isActive), hasLength(1));
+        expect(
+          timers.where((timer) => timer.isActive).single.duration,
+          const Duration(minutes: 5),
+        );
+      },
+    );
+
+    test(
+      'a remotely successful explicit retry resumes timers when local persistence fails',
+      () async {
+        connectSettings();
+        final first = binding();
+        final future = binding().copyWith(
+          sourceKey: 'source-two',
+          comicId: 'comic-two',
+          subjectId: 2,
+        );
+        setBindings([first, future]);
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(401, 'expired token');
+        final futureKey = bangumiBindingKey(future.sourceKey, future.comicId);
+        var failSave = false;
+        final automatic = BangumiService.forTesting(
+          gatewayFactory: (_) => gateway,
+          saveSettings: () async {
+            if (failSave) throw StateError('save failed');
+          },
+          implicitData: implicitData,
+          writeImplicitData: () => implicitWrites++,
+          now: () => now,
+          timerFactory: (duration, callback) {
+            final timer = RecordingTimer(duration, callback);
+            timers.add(timer);
+            return timer;
+          },
+        );
+
+        await automatic.onChapterCompleted(
+          sourceKey: first.sourceKey,
+          comicId: first.comicId,
+          chapterTitle: '第 12 话',
+        );
+        implicitData['bangumiPendingProgress'] = {
+          ...(implicitData['bangumiPendingProgress'] as Map),
+          futureKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 6,
+              'attempts': 0,
+              'nextAttemptAt': now
+                  .add(const Duration(minutes: 5))
+                  .millisecondsSinceEpoch,
+            },
+          },
+        };
+        gateway.patchFields.clear();
+        gateway.patchError = null;
+        failSave = true;
+
+        await automatic.retryPending();
+
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+        ]);
+        expect((implicitData['bangumiPendingProgress'] as Map), {
+          futureKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 6,
+              'attempts': 0,
+              'nextAttemptAt': now
+                  .add(const Duration(minutes: 5))
+                  .millisecondsSinceEpoch,
+            },
+          },
+        });
+        expect(timers.where((timer) => timer.isActive), hasLength(1));
+      },
+    );
+
+    test(
+      'a successful reconnect resumes an authentication-paused queue',
+      () async {
+        final oldGateway = FakeBangumiGateway()
+          ..collection = collection(epStatus: 1)
+          ..patchError = const BangumiApiException(401, 'expired token');
+        final newGateway = FakeBangumiGateway()
+          ..user = const BangumiUser('new-user', 'New User')
+          ..collection = collection(epStatus: 1);
+        connectSettings();
+        setBinding(binding());
+        final switching = BangumiService.forTesting(
+          gatewayFactory: (token) =>
+              token == 'new-token' ? newGateway : oldGateway,
+          saveSettings: () async => saveCount++,
+          implicitData: implicitData,
+          writeImplicitData: () => implicitWrites++,
+          now: () => now,
+          timerFactory: (duration, callback) {
+            final timer = RecordingTimer(duration, callback);
+            timers.add(timer);
+            return timer;
+          },
+        );
+
+        await switching.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        await switching.connect('new-token');
+        await switching.retryPending();
+
+        expect(newGateway.patchFields, [
+          {'ep_status': 12},
+        ]);
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'startup retries an exhausted pending item despite its future backoff',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 12,
+              'attempts': 4,
+              'nextAttemptAt': now
+                  .add(const Duration(minutes: 40))
+                  .millisecondsSinceEpoch,
+            },
+          },
+        };
+
+        await automaticService().initialize();
+
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+        ]);
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'startup retries each exhausted field only once for an auto binding',
+      () async {
+        connectSettings();
+        setBinding(binding().copyWith(progressMode: BangumiProgressMode.auto));
+        gateway.collection = collection(epStatus: 1, volStatus: 1);
+        gateway.patchError = const BangumiApiException(503, 'offline');
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 12,
+              'attempts': 4,
+              'nextAttemptAt': now
+                  .add(const Duration(minutes: 40))
+                  .millisecondsSinceEpoch,
+            },
+            'vol_status': {
+              'field': 'vol_status',
+              'value': 3,
+              'attempts': 4,
+              'nextAttemptAt': now
+                  .add(const Duration(minutes: 40))
+                  .millisecondsSinceEpoch,
+            },
+          },
+        };
+
+        await automaticService().initialize();
+
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+          {'vol_status': 3},
+        ]);
+        final pending =
+            (implicitData['bangumiPendingProgress'] as Map)[key] as Map;
+        expect((pending['ep_status'] as Map)['attempts'], 5);
+        expect((pending['vol_status'] as Map)['attempts'], 5);
+      },
+    );
+
+    test(
+      'startup keeps a non-exhausted pending item in its future backoff',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 12,
+              'attempts': 3,
+              'nextAttemptAt': now
+                  .add(const Duration(minutes: 40))
+                  .millisecondsSinceEpoch,
+            },
+          },
+        };
+
+        await automaticService().initialize();
+
+        expect(gateway.collectionCalls, isEmpty);
+        expect((implicitData['bangumiPendingProgress'] as Map)[key], isNotNull);
+      },
+    );
+
+    test(
+      'startup cleans invalid canonical siblings without dropping a valid item',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        final key = bangumiBindingKey('source', 'comic');
+        final valid = {
+          'field': 'ep_status',
+          'value': 12,
+          'attempts': 0,
+          'nextAttemptAt': now
+              .add(const Duration(minutes: 5))
+              .millisecondsSinceEpoch,
+        };
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'ep_status': valid,
+            'vol_status': {
+              'field': 'ep_status',
+              'value': 3,
+              'attempts': 0,
+              'nextAttemptAt': now.millisecondsSinceEpoch,
+            },
+          },
+        };
+
+        await automaticService().initialize();
+
+        expect(gateway.collectionCalls, isEmpty);
+        expect((implicitData['bangumiPendingProgress'] as Map)[key], {
+          'ep_status': valid,
+        });
+        expect(implicitWrites, greaterThanOrEqualTo(1));
+      },
+    );
+
+    test(
+      'a timer skips exhausted work when another pending item becomes due',
+      () async {
+        connectSettings();
+        final exhausted = binding();
+        final due = binding().copyWith(
+          sourceKey: 'source-two',
+          comicId: 'comic-two',
+          subjectId: 2,
+        );
+        setBindings([exhausted, due]);
+        final exhaustedKey = bangumiBindingKey(
+          exhausted.sourceKey,
+          exhausted.comicId,
+        );
+        final dueKey = bangumiBindingKey(due.sourceKey, due.comicId);
+        implicitData['bangumiPendingProgress'] = {
+          exhaustedKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 12,
+              'attempts': 3,
+              'nextAttemptAt': now
+                  .add(const Duration(minutes: 5))
+                  .millisecondsSinceEpoch,
+            },
+          },
+        };
+        final automatic = automaticService();
+        await automatic.initialize();
+        implicitData['bangumiPendingProgress'] = {
+          ...(implicitData['bangumiPendingProgress'] as Map),
+          exhaustedKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 12,
+              'attempts': 4,
+              'nextAttemptAt': now.millisecondsSinceEpoch,
+            },
+          },
+          dueKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 8,
+              'attempts': 0,
+              'nextAttemptAt': now.millisecondsSinceEpoch,
+            },
+          },
+        };
+        gateway.collection = collection(epStatus: 1);
+
+        timers.single.fire();
+        await pumpEventQueue();
+
+        expect(gateway.collectionCalls, [('alice', due.subjectId)]);
+        expect(gateway.patchFields, [
+          {'ep_status': 8},
+        ]);
+        expect(
+          (implicitData['bangumiPendingProgress'] as Map).containsKey(
+            exhaustedKey,
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'queue writes discard invalid canonical siblings instead of repairing them',
+      () async {
+        connectSettings();
+        setBinding(binding().copyWith(progressMode: BangumiProgressMode.auto));
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(503, 'offline');
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'vol_status': {
+              'field': 'ep_status',
+              'value': 99,
+              'attempts': 0,
+              'nextAttemptAt': now.millisecondsSinceEpoch,
+            },
+          },
+        };
+
+        await automaticService().onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+
+        expect((implicitData['bangumiPendingProgress'] as Map)[key], {
+          'ep_status': {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now
+                .add(const Duration(minutes: 5))
+                .millisecondsSinceEpoch,
+          },
+        });
+      },
+    );
+
+    test('field removal discards invalid canonical siblings', () async {
+      connectSettings();
+      setBinding(binding());
+      gateway.collection = collection(epStatus: 1, volStatus: 3, rate: 6);
+      final key = bangumiBindingKey('source', 'comic');
+      final validEpisode = {
+        'field': 'ep_status',
+        'value': 12,
+        'attempts': 0,
+        'nextAttemptAt': now.millisecondsSinceEpoch,
+      };
+      implicitData['bangumiPendingProgress'] = {
+        key: {
+          'ep_status': validEpisode,
+          'vol_status': {
+            'field': 'ep_status',
+            'value': 99,
+            'attempts': 0,
+            'nextAttemptAt': now.millisecondsSinceEpoch,
+          },
+        },
+      };
+
+      await automaticService().updateManual(
+        sourceKey: 'source',
+        comicId: 'comic',
+        field: BangumiProgressField.volume,
+        progress: 3,
+        rating: 6,
+        allowDecrease: true,
+      );
+
+      expect((implicitData['bangumiPendingProgress'] as Map)[key], {
+        'ep_status': validEpisode,
+      });
+    });
+
+    test(
+      'legacy pending data is migrated before its future retry is skipped',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now
+                .add(const Duration(minutes: 5))
+                .millisecondsSinceEpoch,
+          },
+        };
+
+        await automaticService().initialize();
+
+        expect((implicitData['bangumiPendingProgress'] as Map)[key], {
+          'ep_status': {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now
+                .add(const Duration(minutes: 5))
+                .millisecondsSinceEpoch,
+          },
+        });
+        expect(implicitWrites, greaterThanOrEqualTo(1));
+      },
+    );
+
+    test('fired retry timer uploads an expired pending item', () async {
+      connectSettings();
+      setBinding(binding(lastRemoteEpisode: 1));
+      gateway.collection = collection(epStatus: 1);
+      final key = bangumiBindingKey('source', 'comic');
+      implicitData['bangumiPendingProgress'] = {
+        key: {
+          'field': 'ep_status',
+          'value': 12,
+          'attempts': 0,
+          'nextAttemptAt': now
+              .add(const Duration(minutes: 5))
+              .millisecondsSinceEpoch,
+        },
+      };
+      final automatic = automaticService();
+      await automatic.initialize();
+      now = now.add(const Duration(minutes: 5));
+
+      timers.single.fire();
+      await pumpEventQueue();
+
+      expect(gateway.patchFields, [
+        {'ep_status': 12},
+      ]);
+      expect(implicitData['bangumiPendingProgress'], isEmpty);
+    });
+
+    test(
+      'failed connection save cancels then restores the pending retry timer',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now
+                .add(const Duration(minutes: 5))
+                .millisecondsSinceEpoch,
+          },
+        };
+        final saveBlocker = Completer<void>();
+        final saving = BangumiService.forTesting(
+          gatewayFactory: (_) => gateway,
+          saveSettings: () async {
+            await saveBlocker.future;
+            throw StateError('save failed');
+          },
+          implicitData: implicitData,
+          writeImplicitData: () => implicitWrites++,
+          now: () => now,
+          timerFactory: (duration, callback) {
+            final timer = RecordingTimer(duration, callback);
+            timers.add(timer);
+            return timer;
+          },
+        );
+        await saving.initialize();
+        final connect = saving.connect('new-token');
+        await pumpEventQueue();
+        expect(timers.single.cancelled, isTrue);
+
+        saveBlocker.complete();
+        await expectLater(connect, throwsStateError);
+        expect(timers.where((timer) => timer.isActive), hasLength(1));
+      },
+    );
+
+    test('connect waits for a blocked old-account automatic upload', () async {
+      final oldGateway = FakeBangumiGateway()
+        ..collection = collection(epStatus: 1)
+        ..getCollectionBlocker = Completer<void>();
+      final newGateway = FakeBangumiGateway()
+        ..user = const BangumiUser('new-user', 'New');
+      connectSettings();
+      setBinding(binding());
+      final switching = BangumiService.forTesting(
+        gatewayFactory: (token) =>
+            token == 'new-token' ? newGateway : oldGateway,
+        implicitData: implicitData,
+        writeImplicitData: () => implicitWrites++,
+        now: () => now,
+        timerFactory: (duration, callback) =>
+            RecordingTimer(duration, callback),
+      );
+
+      final upload = switching.onChapterCompleted(
+        sourceKey: 'source',
+        comicId: 'comic',
+        chapterTitle: '第 12 话',
+      );
+      await pumpEventQueue();
+      expect(oldGateway.collectionCalls, hasLength(1));
+      var connected = false;
+      final connect = switching
+          .connect('new-token')
+          .then((_) => connected = true);
+      await pumpEventQueue();
+      expect(connected, isFalse);
+      oldGateway.getCollectionBlocker!.complete();
+      await Future.wait([upload, connect]);
+
+      expect(oldGateway.patchFields, [
+        {'ep_status': 12},
+      ]);
+      expect(newGateway.collectionCalls, isEmpty);
+      expect(newGateway.patchFields, isEmpty);
+      expect(newGateway.currentUserCalls, 1);
+      expect(appdata.settings['bangumiUsername'], 'new-user');
+    });
+
+    test(
+      'disconnect waits for a blocked old-account upload before clearing credentials',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.getCollectionBlocker = Completer<void>();
+        final automatic = automaticService();
+        final upload = automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        await pumpEventQueue();
+        var disconnected = false;
+        final disconnect = automatic.disconnect().then(
+          (_) => disconnected = true,
+        );
+        await pumpEventQueue();
+        expect(disconnected, isFalse);
+        gateway.getCollectionBlocker!.complete();
+        await Future.wait([upload, disconnect]);
+
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+        ]);
+        expect(appdata.settings['bangumiAccessToken'], '');
+      },
+    );
+
+    test(
+      'fired retry timers back off through four failed attempts then stop',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(503, 'offline');
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now
+                .add(const Duration(minutes: 5))
+                .millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+        await automatic.initialize();
+
+        for (final delay in [5, 10, 20, 40]) {
+          now = now.add(Duration(minutes: delay));
+          final active = timers.where((timer) => timer.isActive).single;
+          active.fire();
+          await pumpEventQueue();
+        }
+
+        expect(
+          (((implicitData['bangumiPendingProgress'] as Map)[key]
+                  as Map)['ep_status']
+              as Map)['attempts'],
+          4,
+        );
+        expect(timers.where((timer) => timer.isActive), isEmpty);
+      },
+    );
+
+    test(
+      'cancelled disconnect and dispose timers cannot make network calls when fired',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        final key = bangumiBindingKey('source', 'comic');
+        implicitData['bangumiPendingProgress'] = {
+          key: {
+            'field': 'ep_status',
+            'value': 12,
+            'attempts': 0,
+            'nextAttemptAt': now
+                .add(const Duration(minutes: 5))
+                .millisecondsSinceEpoch,
+          },
+        };
+        final automatic = automaticService();
+        await automatic.initialize();
+        final disconnectTimer = timers.single;
+        await automatic.disconnect();
+        disconnectTimer.fire();
+        automatic.dispose();
+
+        expect(gateway.collectionCalls, isEmpty);
+        expect(gateway.patchFields, isEmpty);
+      },
+    );
+
+    test('unbind immediately removes malformed pending entries', () async {
+      final key = bangumiBindingKey('source', 'comic');
+      setBinding(binding());
+      implicitData['bangumiPendingProgress'] = {
+        key: {'field': 'invalid'},
+      };
+
+      await automaticService().unbind('source', 'comic');
+
+      expect(implicitData['bangumiPendingProgress'], isEmpty);
+      expect(implicitWrites, 1);
+    });
+
+    test('startup cleans malformed pending entries in one write', () async {
+      connectSettings();
+      implicitData['bangumiPendingProgress'] = {
+        for (var index = 0; index < 50; index++) 'broken-$index': 'invalid',
+      };
+
+      await automaticService().initialize();
+
+      expect(implicitData['bangumiPendingProgress'], isEmpty);
+      expect(implicitWrites, 1);
+      expect(timers, isEmpty);
+    });
+
+    test('failed disconnect save restores the pending retry timer', () async {
+      connectSettings();
+      setBinding(binding());
+      final key = bangumiBindingKey('source', 'comic');
+      implicitData['bangumiPendingProgress'] = {
+        key: {
+          'field': 'ep_status',
+          'value': 12,
+          'attempts': 0,
+          'nextAttemptAt': now
+              .add(const Duration(minutes: 5))
+              .millisecondsSinceEpoch,
+        },
+      };
+      final saveBlocker = Completer<void>();
+      final saving = BangumiService.forTesting(
+        gatewayFactory: (_) => gateway,
+        saveSettings: () async {
+          await saveBlocker.future;
+          throw StateError('save failed');
+        },
+        implicitData: implicitData,
+        writeImplicitData: () => implicitWrites++,
+        now: () => now,
+        timerFactory: (duration, callback) {
+          final timer = RecordingTimer(duration, callback);
+          timers.add(timer);
+          return timer;
+        },
+      );
+      await saving.initialize();
+      final disconnect = saving.disconnect();
+      await pumpEventQueue();
+      expect(timers.single.cancelled, isTrue);
+
+      saveBlocker.complete();
+      await expectLater(disconnect, throwsStateError);
+      expect(appdata.settings['bangumiAccessToken'], 'token');
+      expect(timers.where((timer) => timer.isActive), hasLength(1));
+    });
+  });
 }
 
 void connectSettings() {
@@ -862,8 +2834,9 @@ BangumiCollection collection({
   int epStatus = 0,
   int volStatus = 3,
   int rate = 0,
+  int type = 3,
 }) => BangumiCollection(
-  type: 3,
+  type: type,
   rate: rate,
   epStatus: epStatus,
   volStatus: volStatus,
@@ -873,6 +2846,8 @@ BangumiBinding binding({
   int lastRemoteEpisode = 12,
   int lastRemoteVolume = 3,
   int rating = 6,
+  int totalEpisodes = 24,
+  int totalVolumes = 4,
 }) => BangumiBinding(
   sourceKey: 'source',
   comicId: 'comic',
@@ -881,8 +2856,8 @@ BangumiBinding binding({
   subjectOriginalTitle: 'Original',
   coverUrl: 'cover',
   progressMode: BangumiProgressMode.episode,
-  totalEpisodes: 24,
-  totalVolumes: 4,
+  totalEpisodes: totalEpisodes,
+  totalVolumes: totalVolumes,
   lastRemoteEpisode: lastRemoteEpisode,
   lastRemoteVolume: lastRemoteVolume,
   rating: rating,
@@ -963,10 +2938,36 @@ class FakeBangumiGateway implements BangumiGateway {
     if (patchError != null) throw patchError!;
     final current = collection!;
     collection = BangumiCollection(
-      type: current.type,
+      type: fields['type'] as int? ?? current.type,
       rate: fields['rate'] as int? ?? current.rate,
       epStatus: fields['ep_status'] as int? ?? current.epStatus,
       volStatus: fields['vol_status'] as int? ?? current.volStatus,
     );
+  }
+}
+
+class RecordingTimer implements Timer {
+  RecordingTimer(this.duration, this.callback);
+
+  final Duration duration;
+  final void Function() callback;
+  var cancelled = false;
+
+  @override
+  bool get isActive => !cancelled;
+
+  @override
+  int get tick => 0;
+
+  @override
+  void cancel() {
+    cancelled = true;
+  }
+
+  void fire() {
+    if (!cancelled) {
+      cancelled = true;
+      callback();
+    }
   }
 }

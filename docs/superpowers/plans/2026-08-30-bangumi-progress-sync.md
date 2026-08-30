@@ -668,7 +668,7 @@ if (collection.type != 2 && total > 0 && progress.value >= total) {
 }
 ```
 
-Queue only retryable `BangumiApiException`. Store `field`, maximum `value`, `attempts`, and `nextAttemptAt` under `appdata.implicitData['bangumiPendingProgress']`, then call `writeImplicitData()`. `initialize` replays ready items and starts one owned Timer. Use 5, 10, 20, and 40 minute delays; after four failed attempts retain the item for the next explicit sync/startup but stop foreground rescheduling. Cancel the Timer in `dispose`.
+Queue retryable `BangumiApiException`, plus retain the current automatic progress when authentication fails. Under `appdata.implicitData['bangumiPendingProgress'][bindingKey]`, store independent `ep_status` and `vol_status` children containing `field`, maximum `value`, `attempts`, and `nextAttemptAt`, then call `writeImplicitData()`. Migrate the legacy single-entry shape while reading. `initialize` replays ready items, retries exhausted items once per startup, and starts one owned Timer. Use 5, 10, 20, and 40 minute delays; after four failed attempts retain the item for the next explicit sync/startup and exclude it from foreground Timer batches. A 401/403 retains the queue, stops the current batch, and pauses automatic chapter uploads and the Timer until a successful reconnect or successful explicit retry. Cancel the Timer in `dispose`.
 
 - [ ] **Step 4: Run service tests**
 

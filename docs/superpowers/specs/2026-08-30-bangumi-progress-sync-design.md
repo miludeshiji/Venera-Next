@@ -91,15 +91,23 @@ Access Token、已验证用户名和绑定关系不加入 `Appdata._disableSync`
 ```text
 bangumiPendingProgress: {
   bindingKey: {
-    field: ep_status | vol_status,
-    value: int,
-    attempts: int,
-    nextAttemptAt: int
+    ep_status?: {
+      field: ep_status,
+      value: int,
+      attempts: int,
+      nextAttemptAt: int
+    },
+    vol_status?: {
+      field: vol_status,
+      value: int,
+      attempts: int,
+      nextAttemptAt: int
+    }
   }
 }
 ```
 
-该状态不进入 WebDAV。相同绑定、相同字段只保留最大的待同步值。更改进度模式或解除绑定时清理不再适用的待处理项。
+该状态不进入 WebDAV。同一绑定可同时保留按话和按卷两条记录，相同字段只保留最大的待同步值。旧版单条记录会在读取时迁移为上述按字段结构；无效字段会被清理。更改进度模式或解除绑定时清理不再适用的待处理项。
 
 ## 章节标题解析
 
@@ -254,6 +262,8 @@ mergedProgress = max(reliableLocalProgress, remoteProgress)
 - 应用保持前台期间的定时重试。
 
 前台定时重试以 5 分钟为初始延迟，采用指数退避，最多执行 4 次。应用退出后不要求系统后台唤醒；下次启动继续处理仍有效的待处理项。
+
+遇到 `401/403` 时保留当前及尚未处理的待处理项，停止本批次并暂停自动章节上传和前台定时重试，避免使用失效 Token 连续请求；暂停期间的新章节进度只合并到本地队列。用户成功重新连接后恢复队列；显式“立即同步”仍会尝试一次并把认证错误反馈给界面，如果该次远端请求成功，也解除认证暂停并继续本批次中已到重试时间的其余项。达到四次自动重试上限的记录不再安排或参与前台定时重试，但应用下次启动或用户显式同步时仍会再尝试一次。同一绑定的按话和按卷记录在每个重试批次中各最多尝试一次。
 
 ## 错误处理与日志
 
