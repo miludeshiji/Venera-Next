@@ -2,7 +2,13 @@ enum BangumiProgressMode { auto, episode, volume }
 
 enum BangumiProgressField { episode, volume }
 
-enum BangumiTitleParseFailure { unknownUnit, ambiguous, decimal, negative, noNumber }
+enum BangumiTitleParseFailure {
+  unknownUnit,
+  ambiguous,
+  decimal,
+  negative,
+  noNumber,
+}
 
 class BangumiProgress {
   final BangumiProgressField field;
@@ -10,9 +16,8 @@ class BangumiProgress {
 
   const BangumiProgress(this.field, this.value);
 
-  String get apiField => field == BangumiProgressField.episode
-      ? 'ep_status'
-      : 'vol_status';
+  String get apiField =>
+      field == BangumiProgressField.episode ? 'ep_status' : 'vol_status';
 
   @override
   bool operator ==(Object other) =>
@@ -24,15 +29,11 @@ class BangumiProgress {
 
 class BangumiTitleParseResult {
   final BangumiProgress? progress;
-  final BangumiTitleParseFailure? failureReason;
+  final BangumiTitleParseFailure? failure;
 
-  const BangumiTitleParseResult.success(BangumiProgress progress)
-    : progress = progress,
-      failureReason = null;
+  const BangumiTitleParseResult.success(this.progress) : failure = null;
 
-  const BangumiTitleParseResult.failure(BangumiTitleParseFailure failureReason)
-    : progress = null,
-      failureReason = failureReason;
+  const BangumiTitleParseResult.failure(this.failure) : progress = null;
 
   bool get isSuccess => progress != null;
 
@@ -40,10 +41,10 @@ class BangumiTitleParseResult {
   bool operator ==(Object other) =>
       other is BangumiTitleParseResult &&
       other.progress == progress &&
-      other.failureReason == failureReason;
+      other.failure == failure;
 
   @override
-  int get hashCode => Object.hash(progress, failureReason);
+  int get hashCode => Object.hash(progress, failure);
 }
 
 class BangumiTitleProgressParser {
@@ -83,7 +84,9 @@ class BangumiTitleProgressParser {
 
     final values = _associatedValues(title, field).toSet();
     if (values.length == 1) {
-      return BangumiTitleParseResult.success(BangumiProgress(field, values.single));
+      return BangumiTitleParseResult.success(
+        BangumiProgress(field, values.single),
+      );
     }
     if (values.length > 1) {
       return const BangumiTitleParseResult.failure(
@@ -91,7 +94,9 @@ class BangumiTitleProgressParser {
       );
     }
 
-    final numbers = RegExp(r'\d+').allMatches(title).map((match) => match.group(0)!);
+    final numbers = RegExp(
+      r'\d+',
+    ).allMatches(title).map((match) => match.group(0)!);
     final uniqueNumbers = numbers.map(int.parse).toSet();
     if (uniqueNumbers.isEmpty) {
       return const BangumiTitleParseResult.failure(
@@ -103,7 +108,9 @@ class BangumiTitleProgressParser {
         BangumiTitleParseFailure.ambiguous,
       );
     }
-    return BangumiTitleParseResult.success(BangumiProgress(field, uniqueNumbers.single));
+    return BangumiTitleParseResult.success(
+      BangumiProgress(field, uniqueNumbers.single),
+    );
   }
 
   static BangumiProgressField? _autoField(String title) {
@@ -112,18 +119,23 @@ class BangumiTitleProgressParser {
     if (hasEpisode == hasVolume) {
       return null;
     }
-    return hasEpisode ? BangumiProgressField.episode : BangumiProgressField.volume;
+    return hasEpisode
+        ? BangumiProgressField.episode
+        : BangumiProgressField.volume;
   }
 
   static Iterable<int> _associatedValues(
     String title,
     BangumiProgressField field,
   ) sync* {
-    final unit = field == BangumiProgressField.episode ? r'[话話]' : r'(?:卷|[Vv]ol\.?)';
-    final pattern = RegExp('(?:\\d+)\\s*$unit|$unit\\s*(?:\\d+)');
-    for (final match in pattern.allMatches(title)) {
-      final value = RegExp(r'\d+').firstMatch(match.group(0)!)!.group(0)!;
-      yield int.parse(value);
+    final unit = field == BangumiProgressField.episode
+        ? r'[话話]'
+        : r'(?:卷|[Vv]ol\.?)';
+    for (final pattern in [RegExp('\\d+\\s*$unit'), RegExp('$unit\\s*\\d+')]) {
+      for (final match in pattern.allMatches(title)) {
+        final value = RegExp(r'\d+').firstMatch(match.group(0)!)!.group(0)!;
+        yield int.parse(value);
+      }
     }
   }
 }
@@ -143,7 +155,9 @@ class BangumiUser {
 
   @override
   bool operator ==(Object other) =>
-      other is BangumiUser && other.username == username && other.nickname == nickname;
+      other is BangumiUser &&
+      other.username == username &&
+      other.nickname == nickname;
 
   @override
   int get hashCode => Object.hash(username, nickname);
@@ -156,7 +170,7 @@ class BangumiSubject {
   final String coverUrl;
   final int totalEpisodes;
   final int totalVolumes;
-  final String platform;
+  final String? platform;
 
   const BangumiSubject({
     required this.id,
@@ -165,7 +179,7 @@ class BangumiSubject {
     required this.coverUrl,
     required this.totalEpisodes,
     required this.totalVolumes,
-    required this.platform,
+    this.platform,
   });
 
   factory BangumiSubject.fromJson(Map<String, dynamic> json) {
@@ -179,7 +193,7 @@ class BangumiSubject {
       coverUrl: images is Map ? images['common'] as String? ?? '' : '',
       totalEpisodes: (json['eps'] as num?)?.toInt() ?? 0,
       totalVolumes: (json['volumes'] as num?)?.toInt() ?? 0,
-      platform: json['platform'] as String? ?? '',
+      platform: json['platform'] as String?,
     );
   }
 
@@ -207,12 +221,13 @@ class BangumiCollection {
     required this.volStatus,
   });
 
-  factory BangumiCollection.fromJson(Map<String, dynamic> json) => BangumiCollection(
-    type: (json['type'] as num?)?.toInt() ?? 0,
-    rate: (json['rate'] as num?)?.toInt() ?? 0,
-    epStatus: (json['ep_status'] as num?)?.toInt() ?? 0,
-    volStatus: (json['vol_status'] as num?)?.toInt() ?? 0,
-  );
+  factory BangumiCollection.fromJson(Map<String, dynamic> json) =>
+      BangumiCollection(
+        type: (json['type'] as num?)?.toInt() ?? 0,
+        rate: (json['rate'] as num?)?.toInt() ?? 0,
+        epStatus: (json['ep_status'] as num?)?.toInt() ?? 0,
+        volStatus: (json['vol_status'] as num?)?.toInt() ?? 0,
+      );
 
   Map<String, dynamic> toJson() => {
     'type': type,

@@ -58,7 +58,9 @@ void main() {
           '第 12 卷 第 63 话',
           BangumiProgressMode.auto,
         ),
-        const BangumiTitleParseResult.failure(BangumiTitleParseFailure.ambiguous),
+        const BangumiTitleParseResult.failure(
+          BangumiTitleParseFailure.ambiguous,
+        ),
       );
     });
 
@@ -69,41 +71,70 @@ void main() {
       );
       expect(
         BangumiTitleProgressParser.parse('-3 话', BangumiProgressMode.auto),
-        const BangumiTitleParseResult.failure(BangumiTitleParseFailure.negative),
+        const BangumiTitleParseResult.failure(
+          BangumiTitleParseFailure.negative,
+        ),
       );
     });
 
     test('rejects titles without Arabic numbers', () {
       expect(
         BangumiTitleProgressParser.parse('番外', BangumiProgressMode.episode),
-        const BangumiTitleParseResult.failure(BangumiTitleParseFailure.noNumber),
+        const BangumiTitleParseResult.failure(
+          BangumiTitleParseFailure.noNumber,
+        ),
       );
       expect(
         BangumiTitleProgressParser.parse('第十二话', BangumiProgressMode.auto),
-        const BangumiTitleParseResult.failure(BangumiTitleParseFailure.noNumber),
+        const BangumiTitleParseResult.failure(
+          BangumiTitleParseFailure.noNumber,
+        ),
+      );
+    });
+
+    test('rejects multiple values associated with the same unit', () {
+      expect(
+        BangumiTitleProgressParser.parse('12卷13', BangumiProgressMode.volume),
+        const BangumiTitleParseResult.failure(
+          BangumiTitleParseFailure.ambiguous,
+        ),
       );
     });
   });
 
-  test('BangumiBinding round-trips through JSON and creates an escaped key', () {
-    const binding = BangumiBinding(
-      sourceKey: 'source',
-      comicId: 'comic/1',
-      subjectId: 42,
-      subjectTitle: '标题',
-      subjectOriginalTitle: 'Original',
-      coverUrl: 'https://example.com/cover.jpg',
-      progressMode: BangumiProgressMode.volume,
-      totalEpisodes: 12,
-      totalVolumes: 3,
-      lastRemoteEpisode: 10,
-      lastRemoteVolume: 2,
-      rating: 8,
+  test('BangumiTitleParseResult exposes its failure', () {
+    const result = BangumiTitleParseResult.failure(
+      BangumiTitleParseFailure.noNumber,
     );
 
-    expect(BangumiBinding.fromJson(binding.toJson()), binding);
-    expect(bangumiBindingKey(binding.sourceKey, binding.comicId), 'source@comic%2F1');
+    expect(result.failure, BangumiTitleParseFailure.noNumber);
   });
+
+  test(
+    'BangumiBinding round-trips through JSON and creates an escaped key',
+    () {
+      const binding = BangumiBinding(
+        sourceKey: 'source',
+        comicId: 'comic/1',
+        subjectId: 42,
+        subjectTitle: '标题',
+        subjectOriginalTitle: 'Original',
+        coverUrl: 'https://example.com/cover.jpg',
+        progressMode: BangumiProgressMode.volume,
+        totalEpisodes: 12,
+        totalVolumes: 3,
+        lastRemoteEpisode: 10,
+        lastRemoteVolume: 2,
+        rating: 8,
+      );
+
+      expect(BangumiBinding.fromJson(binding.toJson()), binding);
+      expect(
+        bangumiBindingKey(binding.sourceKey, binding.comicId),
+        'source@comic%2F1',
+      );
+    },
+  );
 
   test('Bangumi model JSON mappings use expected values and defaults', () {
     const user = BangumiUser('user', '昵称');
@@ -127,9 +158,15 @@ void main() {
       'totalVolumes': 4,
       'platform': 'TV',
     });
+    expect(BangumiCollection.fromJson({}).toJson(), {
+      'type': 0,
+      'rate': 0,
+      'epStatus': 0,
+      'volStatus': 0,
+    });
     expect(
-      BangumiCollection.fromJson({}).toJson(),
-      {'type': 0, 'rate': 0, 'epStatus': 0, 'volStatus': 0},
+      BangumiSubject.fromJson({'id': 2, 'name': 'No platform'}).platform,
+      isNull,
     );
   });
 
@@ -137,6 +174,9 @@ void main() {
     expect(appdata.settings['bangumiAccessToken'], '');
     expect(appdata.settings['bangumiUsername'], '');
     expect(appdata.settings['bangumiAutoSyncEnabled'], isTrue);
-    expect(appdata.settings['bangumiBindings'], isA<Map<String, Map<String, dynamic>>>());
+    expect(
+      appdata.settings['bangumiBindings'],
+      isA<Map<String, Map<String, dynamic>>>(),
+    );
   });
 }
