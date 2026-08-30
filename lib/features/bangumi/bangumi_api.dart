@@ -143,8 +143,14 @@ class BangumiApi implements BangumiGateway {
     throw BangumiApiException(statusCode, _errorMessage(response));
   }
 
-  static Map<String, dynamic> _jsonMap(Object? data) =>
-      Map<String, dynamic>.from(data as Map);
+  static Map<String, dynamic> _jsonMap(Object? data) {
+    if (data == null ||
+        (data is String && data.isEmpty) ||
+        (data is List<int> && data.isEmpty)) {
+      return const {};
+    }
+    return Map<String, dynamic>.from(data as Map);
+  }
 
   static String _errorMessage(Response<dynamic> response) {
     final data = response.data;

@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:venera_next/features/bangumi/bangumi_api.dart';
+import 'package:venera_next/features/bangumi/bangumi.dart';
 
 void main() {
   group('BangumiApi', () {
@@ -61,6 +61,24 @@ void main() {
       expect(adapter.requests.single.method, 'GET');
     });
 
+    test('returns a default user for an empty 204 response', () async {
+      final adapter = QueueAdapter.json([(204, null)]);
+      final api = BangumiApi(token: 'token', dio: dioWith(adapter));
+
+      final user = await api.currentUser();
+
+      expect(user, const BangumiUser('', ''));
+    });
+
+    test('returns no subjects for an empty 205 response', () async {
+      final adapter = QueueAdapter.json([(205, null)]);
+      final api = BangumiApi(token: 'token', dio: dioWith(adapter));
+
+      final subjects = await api.searchSubjects('keyword');
+
+      expect(subjects, isEmpty);
+    });
+
     test('gets a subject by its numeric id', () async {
       final adapter = QueueAdapter.json([
         (200, {'id': 123, 'name': 'Original', 'name_cn': '标题'}),
@@ -73,6 +91,15 @@ void main() {
       expect(subject.title, '标题');
       expect(adapter.requests.single.path, '/v0/subjects/123');
       expect(adapter.requests.single.method, 'GET');
+    });
+
+    test('returns a default subject for an empty response', () async {
+      final adapter = QueueAdapter.json([(200, '')]);
+      final api = BangumiApi(token: 'token', dio: dioWith(adapter));
+
+      final subject = await api.getSubject(123);
+
+      expect(subject.id, 0);
     });
 
     test(
@@ -92,6 +119,19 @@ void main() {
         );
       },
     );
+
+    test('returns a default collection for an empty 204 response', () async {
+      final adapter = QueueAdapter.json([(204, null)]);
+      final api = BangumiApi(token: 'token', dio: dioWith(adapter));
+
+      final collection = await api.getCollection('alice', 9);
+
+      expect(collection, isNotNull);
+      expect(collection!.type, 0);
+      expect(collection.rate, 0);
+      expect(collection.epStatus, 0);
+      expect(collection.volStatus, 0);
+    });
 
     test(
       'throws extracted error text for a non-404 collection failure',
