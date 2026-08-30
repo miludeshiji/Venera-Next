@@ -2005,6 +2005,7 @@ void main() {
           comicId: 'comic',
           chapterTitle: '第 12 话',
         );
+        expect(automatic.isAuthenticationPaused, isTrue);
         gateway.patchError = null;
         await automatic.onChapterCompleted(
           sourceKey: 'source',
@@ -2023,6 +2024,8 @@ void main() {
           13,
         );
         expect(timers.where((timer) => timer.isActive), isEmpty);
+        await automatic.disconnect();
+        expect(automatic.isAuthenticationPaused, isFalse);
       },
     );
 

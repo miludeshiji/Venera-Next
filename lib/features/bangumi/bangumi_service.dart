@@ -91,6 +91,8 @@ class BangumiService {
       _settingString('bangumiAccessToken').isNotEmpty &&
       _settingString('bangumiUsername').isNotEmpty;
 
+  bool get isAuthenticationPaused => _authenticationPaused;
+
   Future<BangumiUser> connect(String token) =>
       _runConnection(() => _connect(token));
 
@@ -133,13 +135,16 @@ class BangumiService {
     final oldUsername = appdata.settings['bangumiUsername'];
     appdata.settings['bangumiAccessToken'] = '';
     appdata.settings['bangumiUsername'] = '';
+    var saved = false;
     try {
       await _saveSettings();
+      saved = true;
     } catch (_) {
       appdata.settings['bangumiAccessToken'] = oldToken;
       appdata.settings['bangumiUsername'] = oldUsername;
       rethrow;
     } finally {
+      if (saved) _authenticationPaused = false;
       _scheduleRetry();
     }
   }

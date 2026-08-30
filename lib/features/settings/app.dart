@@ -9,6 +9,7 @@ import 'package:venera_next/components/button.dart';
 import 'package:venera_next/components/message.dart';
 import 'package:venera_next/components/pop_up_widget.dart';
 import 'package:venera_next/components/scroll.dart';
+import 'package:venera_next/features/bangumi/bangumi.dart';
 import 'package:venera_next/features/history/history.dart';
 import 'package:venera_next/features/local_comics/local_comics.dart';
 import 'package:venera_next/features/comic_source/comic_source.dart';
@@ -169,6 +170,26 @@ class _AppSettingsState extends State<AppSettings> {
           actionTitle: 'Import'.tl,
         ).toSliver(),
         CallbackSetting(
+          key: const Key('bangumi-settings-entry'),
+          title: 'Bangumi',
+          subtitle: (appdata.settings['bangumiUsername'] as String).isEmpty
+              ? 'Not connected'.tl
+              : appdata.settings['bangumiUsername'] as String,
+          callback: () async {
+            await showPopUpWidget(
+              context,
+              BangumiSettingsPage(
+                onConnectionChanged: () {
+                  if (mounted) setState(() {});
+                },
+              ),
+            );
+            if (mounted) setState(() {});
+          },
+          actionTitle: 'Set'.tl,
+        ).toSliver(),
+        CallbackSetting(
+          key: const Key('data-sync-entry'),
           title: "Data Sync".tl,
           callback: () async {
             showPopUpWidget(context, const _WebdavSetting());
