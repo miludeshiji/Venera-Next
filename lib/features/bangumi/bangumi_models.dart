@@ -128,9 +128,7 @@ class BangumiTitleProgressParser {
     String title,
     BangumiProgressField field,
   ) sync* {
-    final unit = field == BangumiProgressField.episode
-        ? r'[话話]'
-        : r'(?:卷|[Vv]ol\.?)';
+    final unit = field == BangumiProgressField.episode ? r'[话話]' : r'卷';
     for (final pattern in [RegExp('\\d+\\s*$unit'), RegExp('$unit\\s*\\d+')]) {
       for (final match in pattern.allMatches(title)) {
         final value = RegExp(r'\d+').firstMatch(match.group(0)!)!.group(0)!;
@@ -183,16 +181,20 @@ class BangumiSubject {
   });
 
   factory BangumiSubject.fromJson(Map<String, dynamic> json) {
-    final originalTitle = json['name'] as String? ?? '';
-    final chineseTitle = json['name_cn'] as String? ?? '';
+    final originalTitle =
+        (json['name'] ?? json['originalTitle']) as String? ?? '';
+    final chineseTitle = (json['name_cn'] ?? json['title']) as String? ?? '';
     final images = json['images'];
+    final apiCoverUrl = images is Map ? images['common'] as String? : null;
     return BangumiSubject(
       id: (json['id'] as num?)?.toInt() ?? 0,
       title: chineseTitle.isNotEmpty ? chineseTitle : originalTitle,
       originalTitle: originalTitle,
-      coverUrl: images is Map ? images['common'] as String? ?? '' : '',
-      totalEpisodes: (json['eps'] as num?)?.toInt() ?? 0,
-      totalVolumes: (json['volumes'] as num?)?.toInt() ?? 0,
+      coverUrl: apiCoverUrl ?? json['coverUrl'] as String? ?? '',
+      totalEpisodes:
+          ((json['eps'] ?? json['totalEpisodes']) as num?)?.toInt() ?? 0,
+      totalVolumes:
+          ((json['volumes'] ?? json['totalVolumes']) as num?)?.toInt() ?? 0,
       platform: json['platform'] as String?,
     );
   }
@@ -225,8 +227,10 @@ class BangumiCollection {
       BangumiCollection(
         type: (json['type'] as num?)?.toInt() ?? 0,
         rate: (json['rate'] as num?)?.toInt() ?? 0,
-        epStatus: (json['ep_status'] as num?)?.toInt() ?? 0,
-        volStatus: (json['vol_status'] as num?)?.toInt() ?? 0,
+        epStatus:
+            ((json['ep_status'] ?? json['epStatus']) as num?)?.toInt() ?? 0,
+        volStatus:
+            ((json['vol_status'] ?? json['volStatus']) as num?)?.toInt() ?? 0,
       );
 
   Map<String, dynamic> toJson() => {
@@ -273,9 +277,7 @@ class BangumiBinding {
     subjectTitle: json['subjectTitle'] as String? ?? '',
     subjectOriginalTitle: json['subjectOriginalTitle'] as String? ?? '',
     coverUrl: json['coverUrl'] as String? ?? '',
-    progressMode: BangumiProgressMode.values.byName(
-      json['progressMode'] as String? ?? BangumiProgressMode.auto.name,
-    ),
+    progressMode: _progressModeFromJson(json['progressMode']),
     totalEpisodes: (json['totalEpisodes'] as num?)?.toInt() ?? 0,
     totalVolumes: (json['totalVolumes'] as num?)?.toInt() ?? 0,
     lastRemoteEpisode: (json['lastRemoteEpisode'] as num?)?.toInt() ?? 0,
@@ -361,3 +363,14 @@ class BangumiBinding {
 
 String bangumiBindingKey(String sourceKey, String comicId) =>
     '${Uri.encodeComponent(sourceKey)}@${Uri.encodeComponent(comicId)}';
+
+BangumiProgressMode _progressModeFromJson(Object? value) {
+  if (value is String) {
+    for (final mode in BangumiProgressMode.values) {
+      if (mode.name == value) {
+        return mode;
+      }
+    }
+  }
+  return BangumiProgressMode.auto;
+}

@@ -31,6 +31,18 @@ void main() {
       );
     });
 
+    test('rejects multiple fallback numbers in Vol. titles', () {
+      expect(
+        BangumiTitleProgressParser.parse(
+          'Vol. 8 extra 9',
+          BangumiProgressMode.volume,
+        ),
+        const BangumiTitleParseResult.failure(
+          BangumiTitleParseFailure.ambiguous,
+        ),
+      );
+    });
+
     test('uses the requested field when a title contains both units', () {
       expect(
         BangumiTitleProgressParser.parse(
@@ -133,6 +145,20 @@ void main() {
         bangumiBindingKey(binding.sourceKey, binding.comicId),
         'source@comic%2F1',
       );
+      expect(
+        BangumiBinding.fromJson({
+          ...binding.toJson(),
+          'progressMode': 'future-mode',
+        }).progressMode,
+        BangumiProgressMode.auto,
+      );
+      expect(
+        BangumiBinding.fromJson({
+          ...binding.toJson(),
+          'progressMode': 1,
+        }).progressMode,
+        BangumiProgressMode.auto,
+      );
     },
   );
 
@@ -168,6 +194,38 @@ void main() {
       BangumiSubject.fromJson({'id': 2, 'name': 'No platform'}).platform,
       isNull,
     );
+
+    const localSubject = BangumiSubject(
+      id: 3,
+      title: '中文标题',
+      originalTitle: 'Original title',
+      coverUrl: 'https://example.com/cover.jpg',
+      totalEpisodes: 24,
+      totalVolumes: 4,
+      platform: 'TV',
+    );
+    final restoredSubject = BangumiSubject.fromJson(localSubject.toJson());
+    expect(restoredSubject.id, localSubject.id);
+    expect(restoredSubject.title, localSubject.title);
+    expect(restoredSubject.originalTitle, localSubject.originalTitle);
+    expect(restoredSubject.coverUrl, localSubject.coverUrl);
+    expect(restoredSubject.totalEpisodes, localSubject.totalEpisodes);
+    expect(restoredSubject.totalVolumes, localSubject.totalVolumes);
+    expect(restoredSubject.platform, localSubject.platform);
+
+    const localCollection = BangumiCollection(
+      type: 2,
+      rate: 8,
+      epStatus: 12,
+      volStatus: 3,
+    );
+    final restoredCollection = BangumiCollection.fromJson(
+      localCollection.toJson(),
+    );
+    expect(restoredCollection.type, localCollection.type);
+    expect(restoredCollection.rate, localCollection.rate);
+    expect(restoredCollection.epStatus, localCollection.epStatus);
+    expect(restoredCollection.volStatus, localCollection.volStatus);
   });
 
   test('Bangumi settings have defaults', () {
