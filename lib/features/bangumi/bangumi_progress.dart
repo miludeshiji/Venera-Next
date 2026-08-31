@@ -5,7 +5,7 @@ import 'package:venera_next/components/message.dart';
 import 'package:venera_next/components/pop_up_widget.dart';
 import 'package:venera_next/features/bangumi/bangumi_models.dart';
 import 'package:venera_next/features/bangumi/bangumi_service.dart';
-import 'package:venera_next/features/comic_source/models.dart';
+import 'package:venera_next/features/comic_source/comic_source.dart';
 import 'package:venera_next/features/history/history.dart';
 import 'package:venera_next/foundation/translations.dart';
 
