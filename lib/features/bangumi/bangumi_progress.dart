@@ -38,6 +38,8 @@ class _BangumiProgressPanelState extends State<BangumiProgressPanel> {
   List<BangumiSubject>? _results;
   BangumiSubject? _selected;
   BangumiProgressMode _mode = BangumiProgressMode.auto;
+  String? _loadedProgressText;
+  String? _loadedRatingText;
   bool _rebinding = false;
   String? _error;
   bool _loading = false;
@@ -65,11 +67,15 @@ class _BangumiProgressPanelState extends State<BangumiProgressPanel> {
     final binding = _binding;
     if (binding == null) return;
     _mode = binding.progressMode;
-    _progressController.text = _remoteProgress(
+    final progressText = _remoteProgress(
       binding,
       _manualField(binding),
     ).toString();
-    _ratingController.text = binding.rating.toString();
+    final ratingText = binding.rating.toString();
+    _progressController.text = progressText;
+    _ratingController.text = ratingText;
+    _loadedProgressText = progressText;
+    _loadedRatingText = ratingText;
   }
 
   @override
@@ -198,7 +204,7 @@ class _BangumiProgressPanelState extends State<BangumiProgressPanel> {
         Button.filled(
           key: const Key('bangumi-save'),
           isLoading: _loading,
-          onPressed: _loading || autoAmbiguous ? () {} : () => _save(),
+          onPressed: _loading ? () {} : () => _save(),
           child: Text('Save'.tl),
         ),
         const SizedBox(height: 8),
@@ -378,14 +384,16 @@ class _BangumiProgressPanelState extends State<BangumiProgressPanel> {
   Future<void> _save({bool allowDecrease = false}) async {
     final binding = _binding;
     final field = binding == null ? null : _manualField(binding);
-    final progress = int.tryParse(_progressController.text);
-    final rating = int.tryParse(_ratingController.text);
-    if (field == null ||
-        progress == null ||
-        rating == null ||
-        progress < 0 ||
-        rating < 0 ||
-        rating > 10) {
+    final progressChanged =
+        field != null && _progressController.text != _loadedProgressText;
+    final ratingChanged = _ratingController.text != _loadedRatingText;
+    final progress = !progressChanged
+        ? null
+        : int.tryParse(_progressController.text);
+    final rating = !ratingChanged ? null : int.tryParse(_ratingController.text);
+    if (binding == null ||
+        (progressChanged && (progress == null || progress < 0)) ||
+        (ratingChanged && (rating == null || rating < 0 || rating > 10))) {
       setState(
         () => _error =
             'Enter a non-negative progress and a rating from 0 to 10'.tl,
@@ -400,7 +408,7 @@ class _BangumiProgressPanelState extends State<BangumiProgressPanel> {
       await _service.updateManual(
         sourceKey: widget.sourceKey,
         comicId: widget.comicId,
-        field: field,
+        field: progressChanged ? field : null,
         progress: progress,
         rating: rating,
         allowDecrease: allowDecrease,
@@ -480,7 +488,11 @@ class _BangumiProgressPanelState extends State<BangumiProgressPanel> {
 
   BangumiProgress? _reliableLocalProgress() {
     final history = widget.history;
-    if (history?.maxPage == null || history!.page < history.maxPage!) {
+    final maxPage = history?.maxPage;
+    if (maxPage == null ||
+        maxPage <= 0 ||
+        history!.page <= 0 ||
+        history.page != maxPage) {
       return null;
     }
     return _localProgress(_mode);

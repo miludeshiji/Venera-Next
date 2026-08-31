@@ -215,6 +215,57 @@ void main() {
     expect(saves, 1);
   });
 
+  testWidgets('automatic sync switch ignores a second in-flight change', (
+    tester,
+  ) async {
+    final save = Completer<void>();
+    var saves = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BangumiSettingsPage(
+          service: BangumiService.forTesting(gatewayFactory: (_) => _Gateway()),
+          saveSettings: () {
+            saves++;
+            return save.future;
+          },
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(Switch));
+    await tester.pump();
+    expect(tester.widget<Switch>(find.byType(Switch)).onChanged, isNull);
+    await tester.tap(find.byType(Switch));
+    await tester.pump();
+    expect(saves, 1);
+    save.complete();
+    await tester.pumpAndSettle();
+    expect(appdata.settings['bangumiAutoSyncEnabled'], isFalse);
+  });
+
+  testWidgets('invalid synced setting types fall back safely', (tester) async {
+    appdata.settings['bangumiAccessToken'] = 42;
+    appdata.settings['bangumiUsername'] = <String>[];
+    appdata.settings['bangumiAutoSyncEnabled'] = 'invalid';
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BangumiSettingsPage(
+          service: BangumiService.forTesting(gatewayFactory: (_) => _Gateway()),
+        ),
+      ),
+    );
+
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('bangumi-token-field')))
+          .controller!
+          .text,
+      isEmpty,
+    );
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+  });
+
   testWidgets('failed automatic sync save restores the switch and setting', (
     tester,
   ) async {

@@ -36,6 +36,10 @@ class AppSettings extends StatefulWidget {
 class _AppSettingsState extends State<AppSettings> {
   @override
   Widget build(BuildContext context) {
+    final rawBangumiUsername = appdata.settings['bangumiUsername'];
+    final bangumiUsername = rawBangumiUsername is String
+        ? rawBangumiUsername
+        : '';
     return SmoothCustomScrollView(
       slivers: [
         SliverAppbar(title: Text("App".tl)),
@@ -172,9 +176,9 @@ class _AppSettingsState extends State<AppSettings> {
         CallbackSetting(
           key: const Key('bangumi-settings-entry'),
           title: 'Bangumi',
-          subtitle: (appdata.settings['bangumiUsername'] as String).isEmpty
+          subtitle: bangumiUsername.isEmpty
               ? 'Not connected'.tl
-              : appdata.settings['bangumiUsername'] as String,
+              : bangumiUsername,
           callback: () async {
             await showPopUpWidget(
               context,

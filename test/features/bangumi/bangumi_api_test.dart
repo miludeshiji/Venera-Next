@@ -32,6 +32,7 @@ void main() {
         final request = adapter.requests.single;
         expect(request.method, 'POST');
         expect(request.path, '/v0/search/subjects');
+        expect(request.queryParameters, {'limit': 20});
         expect(request.data, {
           'keyword': 'keyword',
           'sort': 'match',

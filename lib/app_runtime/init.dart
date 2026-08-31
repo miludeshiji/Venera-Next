@@ -44,6 +44,28 @@ extension _FutureInit<T> on Future<T> {
   }
 }
 
+@visibleForTesting
+Future<void> initializeBangumiAfterDataSync({
+  required Future<void> Function() waitForDownload,
+  required Future<void> Function() Function() createInitializer,
+}) async {
+  await waitForDownload();
+  await createInitializer()();
+}
+
+@visibleForTesting
+void startBangumiAfterDataSync({
+  required Future<void> Function() waitForDownload,
+  required Future<void> Function() Function() createInitializer,
+}) {
+  unawaited(
+    initializeBangumiAfterDataSync(
+      waitForDownload: waitForDownload,
+      createInitializer: createInitializer,
+    ).wait(),
+  );
+}
+
 Future<void> init() async {
   await App.init().wait();
   await SingleInstanceCookieJar.createInstance();
@@ -111,8 +133,11 @@ Future<void> init() async {
   } catch (e, s) {
     Log.error("init", "$e\n$s");
   }
-  DataSync();
-  await BangumiService().initialize().wait();
+  final dataSync = DataSync();
+  startBangumiAfterDataSync(
+    waitForDownload: dataSync.waitForDownload,
+    createInitializer: () => BangumiService().initialize,
+  );
   WebDavLibrarySource.initializeAutoSync();
   CacheManager().setLimitSize(appdata.settings['cacheSize']);
   _checkOldConfigs();

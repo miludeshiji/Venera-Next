@@ -30,6 +30,26 @@ class BangumiLocalPersistenceException implements Exception {
   final Object cause;
 }
 
+class _BangumiStaleOperationException implements Exception {
+  const _BangumiStaleOperationException();
+}
+
+typedef _BangumiCredentials = ({String token, String username});
+
+class _BangumiOperationSnapshot {
+  const _BangumiOperationSnapshot({
+    required this.credentials,
+    required this.sourceKey,
+    required this.comicId,
+    required this.binding,
+  });
+
+  final _BangumiCredentials credentials;
+  final String sourceKey;
+  final String comicId;
+  final BangumiBinding? binding;
+}
+
 class BangumiService {
   BangumiService._({
     required BangumiGatewayFactory gatewayFactory,
@@ -38,12 +58,20 @@ class BangumiService {
     required void Function() writeImplicitData,
     required DateTime Function() now,
     required BangumiRetryTimerFactory timerFactory,
+    required bool observeSettings,
   }) : _gatewayFactory = gatewayFactory,
        _saveSettings = saveSettings,
        _implicitData = implicitData,
        _writeImplicitData = writeImplicitData,
        _now = now,
-       _timerFactory = timerFactory;
+       _timerFactory = timerFactory,
+       _observeSettings = observeSettings {
+    if (_observeSettings) {
+      _observedCredentials = _credentials;
+      _observedAutoSyncEnabled = _autoSyncEnabled;
+      appdata.settings.addListener(_onSettingsChanged);
+    }
+  }
 
   static BangumiService? _instance;
 
@@ -54,6 +82,7 @@ class BangumiService {
     writeImplicitData: appdata.writeImplicitData,
     now: DateTime.now,
     timerFactory: (duration, callback) => Timer(duration, callback),
+    observeSettings: true,
   );
 
   @visibleForTesting
@@ -64,6 +93,7 @@ class BangumiService {
     void Function()? writeImplicitData,
     DateTime Function()? now,
     BangumiRetryTimerFactory? timerFactory,
+    bool observeSettings = false,
   }) => BangumiService._(
     gatewayFactory: gatewayFactory,
     saveSettings: saveSettings ?? () async {},
@@ -72,6 +102,7 @@ class BangumiService {
     now: now ?? DateTime.now,
     timerFactory:
         timerFactory ?? ((duration, callback) => Timer(duration, callback)),
+    observeSettings: observeSettings,
   );
 
   final BangumiGatewayFactory _gatewayFactory;
@@ -80,18 +111,26 @@ class BangumiService {
   final void Function() _writeImplicitData;
   final DateTime Function() _now;
   final BangumiRetryTimerFactory _timerFactory;
+  final bool _observeSettings;
   Future<void> _connectionTail = Future.value();
   final _bindingTails = <String, Future<void>>{};
   Future<void> _bindingCommitTail = Future.value();
   Timer? _retryTimer;
   bool _disposed = false;
   bool _authenticationPaused = false;
+  _BangumiCredentials? _pausedCredentials;
+  late _BangumiCredentials _observedCredentials;
+  late bool _observedAutoSyncEnabled;
+  bool _settingsRefreshScheduled = false;
 
   bool get isConnected =>
       _settingString('bangumiAccessToken').isNotEmpty &&
       _settingString('bangumiUsername').isNotEmpty;
 
-  bool get isAuthenticationPaused => _authenticationPaused;
+  bool get isAuthenticationPaused {
+    _refreshAuthenticationPause();
+    return _authenticationPaused;
+  }
 
   Future<BangumiUser> connect(String token) =>
       _runConnection(() => _connect(token));
@@ -121,7 +160,7 @@ class BangumiService {
       appdata.settings['bangumiUsername'] = oldUsername;
       rethrow;
     } finally {
-      if (saved) _authenticationPaused = false;
+      if (saved) _clearAuthenticationPause();
       _scheduleRetry();
     }
     return user;
@@ -144,7 +183,7 @@ class BangumiService {
       appdata.settings['bangumiUsername'] = oldUsername;
       rethrow;
     } finally {
-      if (saved) _authenticationPaused = false;
+      if (saved) _clearAuthenticationPause();
       _scheduleRetry();
     }
   }
@@ -221,8 +260,10 @@ class BangumiService {
         'Subject totals must be non-negative',
       );
     }
+    final snapshot = _operationSnapshotFor(sourceKey, comicId);
     final gateway = _gateway();
     final collection = await gateway.getCollection(_username(), subject.id);
+    _ensureOperationCurrent(snapshot);
     final localProgress = _reliableProgress(mode, reliableLocalProgress);
     BangumiCollection finalCollection;
     var remoteSucceeded = false;
@@ -233,6 +274,7 @@ class BangumiService {
         fields[localProgress.apiField] = localProgress.value;
       }
       await gateway.createCollection(subject.id, fields);
+      _ensureOperationCurrent(snapshot);
       remoteSucceeded = true;
       finalCollection = BangumiCollection(
         type: fields['type'] as int,
@@ -253,6 +295,7 @@ class BangumiService {
         await gateway.patchCollection(subject.id, {
           localProgress.apiField: localProgress.value,
         });
+        _ensureOperationCurrent(snapshot);
         remoteSucceeded = true;
         finalCollection = _withProgress(
           collection,
@@ -277,7 +320,11 @@ class BangumiService {
       rating: finalCollection.rate,
     );
     try {
-      await _saveBinding(binding, remoteSucceeded: remoteSucceeded);
+      await _saveBinding(
+        binding,
+        remoteSucceeded: remoteSucceeded,
+        expected: snapshot,
+      );
     } on BangumiLocalPersistenceException {
       _removePending(bangumiBindingKey(sourceKey, comicId));
       rethrow;
@@ -295,10 +342,12 @@ class BangumiService {
 
   Future<BangumiCollection?> _refresh(String sourceKey, String comicId) async {
     final binding = _requiredBinding(sourceKey, comicId);
+    final snapshot = _operationSnapshot(binding);
     final collection = await _gateway().getCollection(
       _username(),
       binding.subjectId,
     );
+    _ensureOperationCurrent(snapshot);
     if (collection == null) {
       return null;
     }
@@ -309,6 +358,7 @@ class BangumiService {
         lastRemoteVolume: collection.volStatus,
         rating: collection.rate,
       ),
+      expected: snapshot,
     );
     return collection;
   }
@@ -329,7 +379,11 @@ class BangumiService {
     BangumiProgressMode mode,
   ) async {
     final binding = _requiredBinding(sourceKey, comicId);
-    await _saveBinding(binding.copyWith(progressMode: mode));
+    final snapshot = _operationSnapshot(binding);
+    await _saveBinding(
+      binding.copyWith(progressMode: mode),
+      expected: snapshot,
+    );
     final expectedField = switch (mode) {
       BangumiProgressMode.episode => 'ep_status',
       BangumiProgressMode.volume => 'vol_status',
@@ -346,9 +400,9 @@ class BangumiService {
   Future<void> updateManual({
     required String sourceKey,
     required String comicId,
-    required BangumiProgressField field,
-    required int progress,
-    required int rating,
+    required BangumiProgressField? field,
+    required int? progress,
+    required int? rating,
     required bool allowDecrease,
   }) => _runBinding(
     sourceKey,
@@ -368,19 +422,22 @@ class BangumiService {
   Future<void> _updateManual({
     required String sourceKey,
     required String comicId,
-    required BangumiProgressField field,
-    required int progress,
-    required int rating,
+    required BangumiProgressField? field,
+    required int? progress,
+    required int? rating,
     required bool allowDecrease,
   }) async {
-    if (progress < 0) {
+    if ((field == null) != (progress == null)) {
+      throw ArgumentError('Progress field and value must be supplied together');
+    }
+    if (progress != null && progress < 0) {
       throw ArgumentError.value(
         progress,
         'progress',
         'Progress must be non-negative',
       );
     }
-    if (rating < 0 || rating > 10) {
+    if (rating != null && (rating < 0 || rating > 10)) {
       throw ArgumentError.value(
         rating,
         'rating',
@@ -389,11 +446,13 @@ class BangumiService {
     }
 
     final binding = _requiredBinding(sourceKey, comicId);
+    final snapshot = _operationSnapshot(binding);
     final gateway = _gateway();
     final collection = await gateway.getCollection(
       _username(),
       binding.subjectId,
     );
+    _ensureOperationCurrent(snapshot);
     if (collection == null) {
       throw StateError('Bangumi collection no longer exists');
     }
@@ -403,8 +462,13 @@ class BangumiService {
       lastRemoteVolume: collection.volStatus,
       rating: collection.rate,
     );
-    final remoteProgress = _progressValue(collection, field);
-    if (progress < remoteProgress && !allowDecrease) {
+    final remoteProgress = field == null
+        ? null
+        : _progressValue(collection, field);
+    if (progress != null &&
+        remoteProgress != null &&
+        progress < remoteProgress &&
+        !allowDecrease) {
       throw BangumiProgressDecreaseRequired(
         remote: remoteProgress,
         proposed: progress,
@@ -412,19 +476,18 @@ class BangumiService {
     }
 
     final fields = <String, dynamic>{};
-    if (progress != remoteProgress) {
+    if (field != null && progress != remoteProgress) {
       fields[field == BangumiProgressField.episode
               ? 'ep_status'
               : 'vol_status'] =
           progress;
     }
-    if (rating != collection.rate) {
+    if (rating != null && rating != collection.rate) {
       fields['rate'] = rating;
     }
     if (fields.isEmpty) {
-      try {
-        await _saveBinding(freshBinding);
-      } finally {
+      await _saveBinding(freshBinding, expected: snapshot);
+      if (field != null) {
         _removePending(
           bangumiBindingKey(sourceKey, comicId),
           field: field == BangumiProgressField.episode
@@ -436,6 +499,7 @@ class BangumiService {
     }
 
     await gateway.patchCollection(binding.subjectId, fields);
+    _ensureOperationCurrent(snapshot);
     try {
       await _saveBinding(
         freshBinding.copyWith(
@@ -445,11 +509,25 @@ class BangumiService {
           lastRemoteVolume: field == BangumiProgressField.volume
               ? progress
               : freshBinding.lastRemoteVolume,
-          rating: rating,
+          rating: rating ?? freshBinding.rating,
         ),
         remoteSucceeded: true,
+        expected: snapshot,
       );
-    } finally {
+    } on _BangumiStaleOperationException {
+      rethrow;
+    } catch (_) {
+      if (field != null) {
+        _removePending(
+          bangumiBindingKey(sourceKey, comicId),
+          field: field == BangumiProgressField.episode
+              ? 'ep_status'
+              : 'vol_status',
+        );
+      }
+      rethrow;
+    }
+    if (field != null) {
       _removePending(
         bangumiBindingKey(sourceKey, comicId),
         field: field == BangumiProgressField.episode
@@ -464,7 +542,9 @@ class BangumiService {
 
   Future<void> _unbind(String sourceKey, String comicId) async {
     final key = bangumiBindingKey(sourceKey, comicId);
+    final snapshot = _operationSnapshotFor(sourceKey, comicId);
     await _runBindingCommit(() async {
+      _ensureOperationCurrent(snapshot);
       final previousBindings = appdata.settings['bangumiBindings'];
       final bindings = _copiedBindings();
       bindings.remove(key);
@@ -472,8 +552,13 @@ class BangumiService {
       try {
         await _saveSettings();
       } catch (_) {
-        appdata.settings['bangumiBindings'] = previousBindings;
+        if (identical(appdata.settings['bangumiBindings'], bindings)) {
+          appdata.settings['bangumiBindings'] = previousBindings;
+        }
         rethrow;
+      }
+      if (!identical(appdata.settings['bangumiBindings'], bindings)) {
+        throw const _BangumiStaleOperationException();
       }
     });
     _removePending(key);
@@ -481,6 +566,7 @@ class BangumiService {
 
   Future<void> initialize() async {
     _disposed = false;
+    _refreshAuthenticationPause();
     if (!_autoSyncEnabled || _authenticationPaused) {
       _cancelRetry();
       return;
@@ -494,6 +580,7 @@ class BangumiService {
     required String comicId,
     required String chapterTitle,
   }) async {
+    _refreshAuthenticationPause();
     if (!isConnected ||
         appdata.settings['bangumiAutoSyncEnabled'] != true ||
         bindingFor(sourceKey, comicId) == null) {
@@ -547,17 +634,30 @@ class BangumiService {
       }
     }
     if (progress == null) return;
+    final uploadBinding = _requiredBinding(sourceKey, comicId);
+    final targetUsername = _username();
     try {
-      await _uploadProgress(key, binding, progress);
+      await _uploadProgress(key, uploadBinding, progress);
+    } on _BangumiStaleOperationException {
+      final currentBinding = _bindingForKey(key);
+      if (_username() == targetUsername &&
+          currentBinding?.subjectId == uploadBinding.subjectId) {
+        _enqueueInitialPending(key, progress);
+      }
     } on BangumiApiException catch (error) {
       if (error.isRetryable || _isAuthenticationError(error)) {
         if (_isAuthenticationError(error)) _pauseForAuthentication();
-        _enqueueInitialPending(key, progress);
+        final currentBinding = _bindingForKey(key);
+        if (_username() == targetUsername &&
+            currentBinding?.subjectId == uploadBinding.subjectId) {
+          _enqueueInitialPending(key, progress);
+        }
       }
     }
   }
 
   Future<void> retryPending({String? bindingKey}) async {
+    _refreshAuthenticationPause();
     try {
       if (!isConnected && _pendingEntries(bindingKey).isNotEmpty) {
         throw StateError('Bangumi is not connected');
@@ -655,16 +755,15 @@ class BangumiService {
         binding,
         BangumiProgress(pending.field, pending.value),
       );
-      if (reportErrors) _authenticationPaused = false;
+      if (reportErrors) _clearAuthenticationPause();
       return true;
+    } on _BangumiStaleOperationException {
+      return false;
     } on BangumiApiException catch (error) {
       if (_isAuthenticationError(error)) {
         _pauseForAuthentication();
       } else if (error.isRetryable) {
-        _enqueueRetryPending(
-          key,
-          BangumiProgress(pending.field, pending.value),
-        );
+        _enqueueRetryPending(key, pending);
       } else {
         _removePending(key, field: _apiField(pending.field));
       }
@@ -673,7 +772,7 @@ class BangumiService {
       if (!error.isRetryable) return true;
       return false;
     } on BangumiLocalPersistenceException {
-      if (reportErrors) _authenticationPaused = false;
+      if (reportErrors) _clearAuthenticationPause();
       return true;
     } catch (error) {
       _removePending(key, field: _apiField(pending.field));
@@ -687,10 +786,11 @@ class BangumiService {
     BangumiBinding binding,
     BangumiProgress progress,
   ) async {
+    final snapshot = _operationSnapshot(binding);
     final gateway = _gateway();
-    final collection = await gateway.getCollection(
-      _username(),
-      binding.subjectId,
+    final collection = await _awaitRemoteOperation(
+      snapshot,
+      gateway.getCollection(_username(), binding.subjectId),
     );
     if (collection == null) {
       throw StateError('Bangumi collection no longer exists');
@@ -703,10 +803,14 @@ class BangumiService {
     );
     if (progress.value <= _progressValue(collection, progress.field)) {
       try {
-        await _saveBinding(freshBinding);
-      } finally {
+        await _saveBinding(freshBinding, expected: snapshot);
+      } on _BangumiStaleOperationException {
+        rethrow;
+      } catch (_) {
         _removePending(key, field: progress.apiField);
+        rethrow;
       }
+      _removePending(key, field: progress.apiField);
       return;
     }
 
@@ -719,7 +823,10 @@ class BangumiService {
     } else if ({1, 4, 5}.contains(collection.type)) {
       fields['type'] = 3;
     }
-    await gateway.patchCollection(binding.subjectId, fields);
+    await _awaitRemoteOperation(
+      snapshot,
+      gateway.patchCollection(binding.subjectId, fields),
+    );
     try {
       await _saveBinding(
         freshBinding.copyWith(
@@ -731,15 +838,23 @@ class BangumiService {
               : freshBinding.lastRemoteVolume,
         ),
         remoteSucceeded: true,
+        expected: snapshot,
       );
-    } finally {
+    } on _BangumiStaleOperationException {
+      rethrow;
+    } catch (_) {
       _removePending(key, field: progress.apiField);
+      rethrow;
     }
+    _removePending(key, field: progress.apiField);
   }
 
   void dispose() {
     _disposed = true;
     _cancelRetry();
+    if (_observeSettings) {
+      appdata.settings.removeListener(_onSettingsChanged);
+    }
   }
 
   BangumiGateway _gateway() {
@@ -829,6 +944,9 @@ class BangumiService {
 
   String _username() => _settingString('bangumiUsername');
 
+  _BangumiCredentials get _credentials =>
+      (token: _settingString('bangumiAccessToken'), username: _username());
+
   bool get _autoSyncEnabled =>
       appdata.settings['bangumiAutoSyncEnabled'] == true;
 
@@ -837,7 +955,81 @@ class BangumiService {
 
   void _pauseForAuthentication() {
     _authenticationPaused = true;
+    _pausedCredentials = _credentials;
     _cancelRetry();
+  }
+
+  void _clearAuthenticationPause() {
+    _authenticationPaused = false;
+    _pausedCredentials = null;
+  }
+
+  void _refreshAuthenticationPause() {
+    if (_authenticationPaused && _pausedCredentials != _credentials) {
+      _clearAuthenticationPause();
+    }
+  }
+
+  _BangumiOperationSnapshot _operationSnapshot(BangumiBinding binding) =>
+      _BangumiOperationSnapshot(
+        credentials: _credentials,
+        sourceKey: binding.sourceKey,
+        comicId: binding.comicId,
+        binding: binding,
+      );
+
+  _BangumiOperationSnapshot _operationSnapshotFor(
+    String sourceKey,
+    String comicId,
+  ) => _BangumiOperationSnapshot(
+    credentials: _credentials,
+    sourceKey: sourceKey,
+    comicId: comicId,
+    binding: bindingFor(sourceKey, comicId),
+  );
+
+  void _ensureOperationCurrent(_BangumiOperationSnapshot snapshot) {
+    if (_credentials != snapshot.credentials ||
+        bindingFor(snapshot.sourceKey, snapshot.comicId) != snapshot.binding) {
+      throw const _BangumiStaleOperationException();
+    }
+  }
+
+  Future<T> _awaitRemoteOperation<T>(
+    _BangumiOperationSnapshot snapshot,
+    Future<T> operation,
+  ) async {
+    try {
+      final result = await operation;
+      _ensureOperationCurrent(snapshot);
+      return result;
+    } catch (error, stackTrace) {
+      _ensureOperationCurrent(snapshot);
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  }
+
+  void _onSettingsChanged() {
+    if (_disposed || _settingsRefreshScheduled) return;
+    _settingsRefreshScheduled = true;
+    scheduleMicrotask(() {
+      _settingsRefreshScheduled = false;
+      if (_disposed) return;
+      final credentials = _credentials;
+      final autoSyncEnabled = _autoSyncEnabled;
+      if (credentials == _observedCredentials &&
+          autoSyncEnabled == _observedAutoSyncEnabled) {
+        return;
+      }
+      _observedCredentials = credentials;
+      _observedAutoSyncEnabled = autoSyncEnabled;
+      _refreshAuthenticationPause();
+      if (!isConnected || !autoSyncEnabled) {
+        _cancelRetry();
+        return;
+      }
+      unawaited(initialize());
+    });
   }
 
   String _settingString(String key) {
@@ -919,6 +1111,7 @@ class BangumiService {
   Future<void> _saveBinding(
     BangumiBinding binding, {
     bool remoteSucceeded = false,
+    _BangumiOperationSnapshot? expected,
   }) async {
     if (!_isValidBinding(binding)) {
       throw ArgumentError.value(
@@ -928,6 +1121,9 @@ class BangumiService {
       );
     }
     await _runBindingCommit(() async {
+      if (expected != null) {
+        _ensureOperationCurrent(expected);
+      }
       final previousBindings = appdata.settings['bangumiBindings'];
       final bindings = _copiedBindings();
       bindings[bangumiBindingKey(binding.sourceKey, binding.comicId)] = binding
@@ -936,14 +1132,23 @@ class BangumiService {
       try {
         await _saveSettings();
       } catch (error) {
+        final stillCurrent = identical(
+          appdata.settings['bangumiBindings'],
+          bindings,
+        );
         if (remoteSucceeded) {
           throw BangumiLocalPersistenceException(
             remoteSucceeded: true,
             cause: error,
           );
         }
-        appdata.settings['bangumiBindings'] = previousBindings;
+        if (stillCurrent) {
+          appdata.settings['bangumiBindings'] = previousBindings;
+        }
         rethrow;
+      }
+      if (!identical(appdata.settings['bangumiBindings'], bindings)) {
+        throw const _BangumiStaleOperationException();
       }
     });
   }
@@ -991,10 +1196,14 @@ class BangumiService {
     String key,
     BangumiBinding binding,
   ) {
-    final pending = _pendingEntries(key)
-        .map((entry) => entry.pending)
-        .where((entry) => _isPendingCompatible(entry, binding))
-        .toList();
+    final pending = <_BangumiPendingProgress>[];
+    for (final entry in _pendingEntries(key)) {
+      if (_isPendingCompatible(entry.pending, binding)) {
+        pending.add(entry.pending);
+      } else {
+        _removePending(key, field: _apiField(entry.pending.field));
+      }
+    }
     if (binding.progressMode != BangumiProgressMode.auto) {
       _removePending(
         key,
@@ -1009,12 +1218,16 @@ class BangumiService {
   bool _isPendingCompatible(
     _BangumiPendingProgress pending,
     BangumiBinding binding,
-  ) => switch (binding.progressMode) {
-    BangumiProgressMode.auto => true,
-    BangumiProgressMode.episode =>
-      pending.field == BangumiProgressField.episode,
-    BangumiProgressMode.volume => pending.field == BangumiProgressField.volume,
-  };
+  ) =>
+      pending.subjectId == binding.subjectId &&
+      pending.username == _username() &&
+      switch (binding.progressMode) {
+        BangumiProgressMode.auto => true,
+        BangumiProgressMode.episode =>
+          pending.field == BangumiProgressField.episode,
+        BangumiProgressMode.volume =>
+          pending.field == BangumiProgressField.volume,
+      };
 
   List<({String key, _BangumiPendingProgress pending})> _pendingEntries(
     String? onlyKey,
@@ -1129,9 +1342,16 @@ class BangumiService {
   }
 
   void _enqueueInitialPending(String key, BangumiProgress progress) {
+    final binding = _bindingForKey(key);
+    final username = _username();
+    if (binding == null || username.isEmpty) return;
     final existing = _pendingFor(key, progress.field);
-    final attempts = existing?.attempts ?? 0;
-    final value = existing != null && existing.value > progress.value
+    final compatible =
+        existing != null &&
+        existing.subjectId == binding.subjectId &&
+        existing.username == username;
+    final attempts = compatible ? existing.attempts : 0;
+    final value = compatible && existing.value > progress.value
         ? existing.value
         : progress.value;
     _setPending(
@@ -1141,22 +1361,31 @@ class BangumiService {
         value: value,
         attempts: attempts,
         nextAttemptAt: _now().add(const Duration(minutes: 5)),
+        subjectId: binding.subjectId,
+        username: username,
       ),
     );
   }
 
-  void _enqueueRetryPending(String key, BangumiProgress progress) {
-    final existing = _pendingFor(key, progress.field);
-    final attempts = (existing?.attempts ?? 0) + 1;
+  void _enqueueRetryPending(String key, _BangumiPendingProgress pending) {
+    final binding = _bindingForKey(key);
+    if (binding == null || !_isPendingCompatible(pending, binding)) {
+      _removePending(key, field: _apiField(pending.field));
+      return;
+    }
+    final existing = _pendingFor(key, pending.field);
+    final attempts = (existing?.attempts ?? pending.attempts) + 1;
     _setPending(
       key,
       _BangumiPendingProgress(
-        field: progress.field,
-        value: existing != null && existing.value > progress.value
+        field: pending.field,
+        value: existing != null && existing.value > pending.value
             ? existing.value
-            : progress.value,
+            : pending.value,
         attempts: attempts,
         nextAttemptAt: _now().add(_retryDelay(attempts)),
+        subjectId: pending.subjectId,
+        username: pending.username,
       ),
     );
   }
@@ -1164,6 +1393,11 @@ class BangumiService {
   void _mergePending(String key, BangumiProgress progress) {
     final existing = _pendingFor(key, progress.field);
     if (existing == null) return;
+    final binding = _bindingForKey(key);
+    if (binding == null || !_isPendingCompatible(existing, binding)) {
+      _removePending(key, field: _apiField(progress.field));
+      return;
+    }
     if (progress.value > existing.value) {
       _setPending(key, existing.copyWith(value: progress.value));
     }
@@ -1309,12 +1543,16 @@ class _BangumiPendingProgress {
     required this.value,
     required this.attempts,
     required this.nextAttemptAt,
+    required this.subjectId,
+    required this.username,
   });
 
   final BangumiProgressField field;
   final int value;
   final int attempts;
   final DateTime nextAttemptAt;
+  final int subjectId;
+  final String username;
 
   static _BangumiPendingProgress? fromJson(Map raw) {
     final field = switch (raw['field']) {
@@ -1325,12 +1563,18 @@ class _BangumiPendingProgress {
     final value = raw['value'];
     final attempts = raw['attempts'];
     final nextAttemptAt = raw['nextAttemptAt'];
+    final subjectId = raw['subjectId'];
+    final username = raw['username'];
     if (field == null ||
         value is! int ||
         value < 0 ||
         attempts is! int ||
         attempts < 0 ||
-        nextAttemptAt is! int) {
+        nextAttemptAt is! int ||
+        subjectId is! int ||
+        subjectId <= 0 ||
+        username is! String ||
+        username.isEmpty) {
       return null;
     }
     try {
@@ -1339,6 +1583,8 @@ class _BangumiPendingProgress {
         value: value,
         attempts: attempts,
         nextAttemptAt: DateTime.fromMillisecondsSinceEpoch(nextAttemptAt),
+        subjectId: subjectId,
+        username: username,
       );
     } catch (_) {
       return null;
@@ -1350,6 +1596,8 @@ class _BangumiPendingProgress {
     value: value ?? this.value,
     attempts: attempts,
     nextAttemptAt: nextAttemptAt,
+    subjectId: subjectId,
+    username: username,
   );
 
   Map<String, dynamic> toJson() => {
@@ -1357,5 +1605,7 @@ class _BangumiPendingProgress {
     'value': value,
     'attempts': attempts,
     'nextAttemptAt': nextAttemptAt.millisecondsSinceEpoch,
+    'subjectId': subjectId,
+    'username': username,
   };
 }

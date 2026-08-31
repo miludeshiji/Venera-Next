@@ -554,6 +554,39 @@ void main() {
     ]);
   });
 
+  test('manual rating-only update keeps pending automatic progress', () async {
+    connectSettings();
+    setBinding(binding(lastRemoteEpisode: 5));
+    final implicitData = <String, dynamic>{};
+    final automatic = BangumiService.forTesting(
+      gatewayFactory: (_) => gateway,
+      implicitData: implicitData,
+    );
+    gateway.collection = collection(epStatus: 5, rate: 6);
+    gateway.patchError = const BangumiApiException(503, 'offline');
+    await automatic.onChapterCompleted(
+      sourceKey: 'source',
+      comicId: 'comic',
+      chapterTitle: '第 10 话',
+    );
+    gateway.patchError = null;
+    gateway.patchFields.clear();
+
+    await automatic.updateManual(
+      sourceKey: 'source',
+      comicId: 'comic',
+      field: null,
+      progress: null,
+      rating: 8,
+      allowDecrease: false,
+    );
+
+    expect(gateway.patchFields, [
+      {'rate': 8},
+    ]);
+    expect(automatic.hasPendingProgress('source', 'comic'), isTrue);
+  });
+
   test(
     'manual update omits unchanged fields and validates input ranges',
     () async {
@@ -1066,6 +1099,8 @@ void main() {
         final pending = implicitData['bangumiPendingProgress'] as Map;
         expect(pending[bangumiBindingKey('source', 'comic')]['ep_status'], {
           'field': 'ep_status',
+          'subjectId': 42,
+          'username': 'alice',
           'value': 12,
           'attempts': 0,
           'nextAttemptAt': now
@@ -1073,6 +1108,86 @@ void main() {
               .millisecondsSinceEpoch,
         });
         expect(implicitWrites, 1);
+      },
+    );
+
+    test(
+      'pending progress is discarded after a synced subject replacement',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(503, 'offline');
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        gateway.patchError = null;
+        gateway.collectionCalls.clear();
+        gateway.patchFields.clear();
+        setBinding(binding().copyWith(subjectId: 99));
+
+        await automatic.retryPending();
+
+        expect(gateway.collectionCalls, isEmpty);
+        expect(gateway.patchFields, isEmpty);
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'pending progress is discarded after a synced account replacement',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(503, 'offline');
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        gateway.patchError = null;
+        gateway.collectionCalls.clear();
+        gateway.patchFields.clear();
+        appdata.settings['bangumiUsername'] = 'bob';
+
+        await automatic.retryPending();
+
+        expect(gateway.collectionCalls, isEmpty);
+        expect(gateway.patchFields, isEmpty);
+        expect(implicitData['bangumiPendingProgress'], isEmpty);
+      },
+    );
+
+    test(
+      'an in-flight upload cannot overwrite a synced binding replacement',
+      () async {
+        connectSettings();
+        final original = binding(lastRemoteEpisode: 1);
+        final synced = original.copyWith(subjectId: 99, lastRemoteEpisode: 20);
+        setBinding(original);
+        gateway.collection = collection(epStatus: 1);
+        gateway.getCollectionBlocker = Completer<void>();
+        final automatic = automaticService();
+
+        final upload = automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        await pumpEventQueue();
+        setBinding(synced);
+        gateway.getCollectionBlocker!.complete();
+        await upload;
+
+        expect(automatic.bindingFor('source', 'comic'), synced);
+        expect(implicitData['bangumiPendingProgress'], isNull);
       },
     );
 
@@ -1119,6 +1234,8 @@ void main() {
         final pending = implicitData['bangumiPendingProgress'] as Map;
         expect(pending[bangumiBindingKey('source', 'comic')]['ep_status'], {
           'field': 'ep_status',
+          'subjectId': 42,
+          'username': 'alice',
           'value': 15,
           'attempts': 1,
           'nextAttemptAt': now
@@ -1170,6 +1287,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           bangumiBindingKey('source', 'comic'): {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 1,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1194,6 +1313,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           bangumiBindingKey('source', 'comic'): {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 1,
             'nextAttemptAt': now
@@ -1225,6 +1346,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 1,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1242,6 +1365,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'vol_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 3,
             'attempts': 1,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1258,6 +1383,8 @@ void main() {
       implicitData['bangumiPendingProgress'] = {
         bangumiBindingKey('source', 'comic'): {
           'field': 'ep_status',
+          'subjectId': 42,
+          'username': 'alice',
           'value': 12,
           'attempts': 1,
           'nextAttemptAt': now
@@ -1280,6 +1407,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           bangumiBindingKey('source', 'comic'): {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 1,
             'nextAttemptAt': now
@@ -1301,6 +1430,42 @@ void main() {
       },
     );
 
+    test('observed synced auto switch restarts the pending timer', () async {
+      connectSettings();
+      setBinding(binding());
+      gateway.collection = collection(epStatus: 1);
+      gateway.patchError = const BangumiApiException(503, 'offline');
+      final automatic = BangumiService.forTesting(
+        gatewayFactory: (_) => gateway,
+        implicitData: implicitData,
+        writeImplicitData: () => implicitWrites++,
+        now: () => now,
+        timerFactory: (duration, callback) {
+          final timer = RecordingTimer(duration, callback);
+          timers.add(timer);
+          return timer;
+        },
+        observeSettings: true,
+      );
+      addTearDown(automatic.dispose);
+
+      await automatic.onChapterCompleted(
+        sourceKey: 'source',
+        comicId: 'comic',
+        chapterTitle: '第 12 话',
+      );
+      expect(timers.where((timer) => timer.isActive), hasLength(1));
+
+      appdata.settings['bangumiAutoSyncEnabled'] = false;
+      await pumpEventQueue();
+      expect(timers.where((timer) => timer.isActive), isEmpty);
+
+      gateway.patchError = null;
+      appdata.settings['bangumiAutoSyncEnabled'] = true;
+      await pumpEventQueue();
+      expect(timers.where((timer) => timer.isActive), hasLength(1));
+    });
+
     test(
       'automatic switch blocks initialization and timer retries but not explicit retry',
       () async {
@@ -1311,6 +1476,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           bangumiBindingKey('source', 'comic'): {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1337,6 +1504,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           bangumiBindingKey('source', 'comic'): {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1377,6 +1546,8 @@ void main() {
               as Map)['ep_status'],
           {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now
@@ -1406,6 +1577,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1429,6 +1602,8 @@ void main() {
       implicitData['bangumiPendingProgress'] = {
         key: {
           'field': 'ep_status',
+          'subjectId': 42,
+          'username': 'alice',
           'value': 12,
           'attempts': 0,
           'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1451,6 +1626,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 15,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1477,6 +1654,8 @@ void main() {
       implicitData['bangumiPendingProgress'] = {
         key: {
           'field': 'ep_status',
+          'subjectId': 42,
+          'username': 'alice',
           'value': 12,
           'attempts': 0,
           'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1500,6 +1679,8 @@ void main() {
           key: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 12,
               'attempts': 0,
               'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1530,6 +1711,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1559,6 +1742,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1595,6 +1780,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1651,6 +1838,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1685,6 +1874,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'vol_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 3,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1720,6 +1911,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1751,6 +1944,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1792,6 +1987,8 @@ void main() {
           implicitData['bangumiPendingProgress'] = {
             key: {
               'field': 'ep_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 12,
               'attempts': 1,
               'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1818,6 +2015,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1844,6 +2043,8 @@ void main() {
           key: {
             'vol_status': {
               'field': 'vol_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 3,
               'attempts': 0,
               'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1860,6 +2061,8 @@ void main() {
         expect((implicitData['bangumiPendingProgress'] as Map)[key], {
           'ep_status': {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now
@@ -1868,6 +2071,8 @@ void main() {
           },
           'vol_status': {
             'field': 'vol_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 3,
             'attempts': 1,
             'nextAttemptAt': now
@@ -1888,6 +2093,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1928,6 +2135,8 @@ void main() {
           firstKey: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 12,
               'attempts': 0,
               'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1936,6 +2145,8 @@ void main() {
           secondKey: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 2,
+              'username': 'alice',
               'value': 8,
               'attempts': 0,
               'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -1979,6 +2190,8 @@ void main() {
         expect((implicitData['bangumiPendingProgress'] as Map)[key], {
           'ep_status': {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now
@@ -2030,6 +2243,124 @@ void main() {
     );
 
     test(
+      'synced credentials resume an authentication-paused completion',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        gateway.collection = collection(epStatus: 1);
+        gateway.patchError = const BangumiApiException(401, 'expired token');
+        final automatic = automaticService();
+
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        gateway.patchError = null;
+        appdata.settings['bangumiAccessToken'] = 'synced-token';
+        appdata.settings['bangumiUsername'] = 'bob';
+        await automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 13 话',
+        );
+
+        expect(automatic.isAuthenticationPaused, isFalse);
+        expect(gateway.collectionCalls, [('alice', 42), ('bob', 42)]);
+        expect(gateway.patchFields, [
+          {'ep_status': 12},
+          {'ep_status': 13},
+        ]);
+      },
+    );
+
+    test('observed synced credentials clear an authentication pause', () async {
+      connectSettings();
+      setBinding(binding());
+      gateway.collection = collection(epStatus: 1);
+      gateway.patchError = const BangumiApiException(401, 'expired token');
+      final automatic = BangumiService.forTesting(
+        gatewayFactory: (_) => gateway,
+        implicitData: implicitData,
+        writeImplicitData: () => implicitWrites++,
+        now: () => now,
+        timerFactory: (duration, callback) {
+          final timer = RecordingTimer(duration, callback);
+          timers.add(timer);
+          return timer;
+        },
+        observeSettings: true,
+      );
+      addTearDown(automatic.dispose);
+
+      await automatic.onChapterCompleted(
+        sourceKey: 'source',
+        comicId: 'comic',
+        chapterTitle: '第 12 话',
+      );
+      expect(automatic.isAuthenticationPaused, isTrue);
+
+      gateway.patchError = null;
+      appdata.settings['bangumiAccessToken'] = 'synced-token';
+      appdata.settings['bangumiUsername'] = 'bob';
+      await pumpEventQueue();
+
+      expect(automatic.isAuthenticationPaused, isFalse);
+      expect(implicitData['bangumiPendingProgress'], isEmpty);
+      expect(gateway.collectionCalls, [('alice', 42)]);
+    });
+
+    test(
+      'stale authentication failure cannot pause synced credentials',
+      () async {
+        connectSettings();
+        setBinding(binding());
+        final oldGateway = FakeBangumiGateway()
+          ..collection = collection(epStatus: 1)
+          ..getCollectionBlocker = Completer<void>()
+          ..getCollectionError = const BangumiApiException(
+            401,
+            'expired token',
+          );
+        final newGateway = FakeBangumiGateway()
+          ..collection = collection(epStatus: 1);
+        final automatic = BangumiService.forTesting(
+          gatewayFactory: (token) =>
+              token == 'synced-token' ? newGateway : oldGateway,
+          implicitData: implicitData,
+          writeImplicitData: () => implicitWrites++,
+          now: () => now,
+          timerFactory: (duration, callback) {
+            final timer = RecordingTimer(duration, callback);
+            timers.add(timer);
+            return timer;
+          },
+          observeSettings: true,
+        );
+        addTearDown(automatic.dispose);
+
+        final upload = automatic.onChapterCompleted(
+          sourceKey: 'source',
+          comicId: 'comic',
+          chapterTitle: '第 12 话',
+        );
+        await pumpEventQueue();
+        appdata.settings['bangumiAccessToken'] = 'synced-token';
+        await pumpEventQueue();
+        oldGateway.getCollectionBlocker!.complete();
+        await upload;
+        await pumpEventQueue();
+
+        expect(automatic.isAuthenticationPaused, isFalse);
+        await automatic.retryPending();
+        expect(newGateway.collectionCalls, [('alice', 42)]);
+        expect(newGateway.patchFields, [
+          {'ep_status': 12},
+        ]);
+      },
+    );
+
+    test(
       'a successful explicit retry resumes due work and schedules future work',
       () async {
         connectSettings();
@@ -2061,6 +2392,8 @@ void main() {
           secondKey: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 2,
+              'username': 'alice',
               'value': 13,
               'attempts': 0,
               'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -2069,6 +2402,8 @@ void main() {
           futureKey: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 3,
+              'username': 'alice',
               'value': 6,
               'attempts': 0,
               'nextAttemptAt': now
@@ -2090,6 +2425,8 @@ void main() {
           futureKey: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 3,
+              'username': 'alice',
               'value': 6,
               'attempts': 0,
               'nextAttemptAt': now
@@ -2146,6 +2483,8 @@ void main() {
           futureKey: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 2,
+              'username': 'alice',
               'value': 6,
               'attempts': 0,
               'nextAttemptAt': now
@@ -2167,6 +2506,8 @@ void main() {
           futureKey: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 2,
+              'username': 'alice',
               'value': 6,
               'attempts': 0,
               'nextAttemptAt': now
@@ -2186,7 +2527,7 @@ void main() {
           ..collection = collection(epStatus: 1)
           ..patchError = const BangumiApiException(401, 'expired token');
         final newGateway = FakeBangumiGateway()
-          ..user = const BangumiUser('new-user', 'New User')
+          ..user = const BangumiUser('alice', 'Alice')
           ..collection = collection(epStatus: 1);
         connectSettings();
         setBinding(binding());
@@ -2230,6 +2571,8 @@ void main() {
           key: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 12,
               'attempts': 4,
               'nextAttemptAt': now
@@ -2260,6 +2603,8 @@ void main() {
           key: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 12,
               'attempts': 4,
               'nextAttemptAt': now
@@ -2268,6 +2613,8 @@ void main() {
             },
             'vol_status': {
               'field': 'vol_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 3,
               'attempts': 4,
               'nextAttemptAt': now
@@ -2300,6 +2647,8 @@ void main() {
           key: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 12,
               'attempts': 3,
               'nextAttemptAt': now
@@ -2324,6 +2673,8 @@ void main() {
         final key = bangumiBindingKey('source', 'comic');
         final valid = {
           'field': 'ep_status',
+          'subjectId': 42,
+          'username': 'alice',
           'value': 12,
           'attempts': 0,
           'nextAttemptAt': now
@@ -2335,6 +2686,8 @@ void main() {
             'ep_status': valid,
             'vol_status': {
               'field': 'ep_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 3,
               'attempts': 0,
               'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -2372,6 +2725,8 @@ void main() {
           exhaustedKey: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 12,
               'attempts': 3,
               'nextAttemptAt': now
@@ -2387,6 +2742,8 @@ void main() {
           exhaustedKey: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 12,
               'attempts': 4,
               'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -2395,6 +2752,8 @@ void main() {
           dueKey: {
             'ep_status': {
               'field': 'ep_status',
+              'subjectId': 2,
+              'username': 'alice',
               'value': 8,
               'attempts': 0,
               'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -2431,6 +2790,8 @@ void main() {
           key: {
             'vol_status': {
               'field': 'ep_status',
+              'subjectId': 42,
+              'username': 'alice',
               'value': 99,
               'attempts': 0,
               'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -2447,6 +2808,8 @@ void main() {
         expect((implicitData['bangumiPendingProgress'] as Map)[key], {
           'ep_status': {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now
@@ -2464,6 +2827,8 @@ void main() {
       final key = bangumiBindingKey('source', 'comic');
       final validEpisode = {
         'field': 'ep_status',
+        'subjectId': 42,
+        'username': 'alice',
         'value': 12,
         'attempts': 0,
         'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -2473,6 +2838,8 @@ void main() {
           'ep_status': validEpisode,
           'vol_status': {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 99,
             'attempts': 0,
             'nextAttemptAt': now.millisecondsSinceEpoch,
@@ -2494,38 +2861,27 @@ void main() {
       });
     });
 
-    test(
-      'legacy pending data is migrated before its future retry is skipped',
-      () async {
-        connectSettings();
-        setBinding(binding());
-        final key = bangumiBindingKey('source', 'comic');
-        implicitData['bangumiPendingProgress'] = {
-          key: {
-            'field': 'ep_status',
-            'value': 12,
-            'attempts': 0,
-            'nextAttemptAt': now
-                .add(const Duration(minutes: 5))
-                .millisecondsSinceEpoch,
-          },
-        };
+    test('legacy pending without target identity is discarded', () async {
+      connectSettings();
+      setBinding(binding());
+      final key = bangumiBindingKey('source', 'comic');
+      implicitData['bangumiPendingProgress'] = {
+        key: {
+          'field': 'ep_status',
+          'value': 12,
+          'attempts': 0,
+          'nextAttemptAt': now
+              .add(const Duration(minutes: 5))
+              .millisecondsSinceEpoch,
+        },
+      };
 
-        await automaticService().initialize();
+      await automaticService().initialize();
 
-        expect((implicitData['bangumiPendingProgress'] as Map)[key], {
-          'ep_status': {
-            'field': 'ep_status',
-            'value': 12,
-            'attempts': 0,
-            'nextAttemptAt': now
-                .add(const Duration(minutes: 5))
-                .millisecondsSinceEpoch,
-          },
-        });
-        expect(implicitWrites, greaterThanOrEqualTo(1));
-      },
-    );
+      expect(implicitData['bangumiPendingProgress'], isEmpty);
+      expect(gateway.collectionCalls, isEmpty);
+      expect(implicitWrites, greaterThanOrEqualTo(1));
+    });
 
     test('fired retry timer uploads an expired pending item', () async {
       connectSettings();
@@ -2535,6 +2891,8 @@ void main() {
       implicitData['bangumiPendingProgress'] = {
         key: {
           'field': 'ep_status',
+          'subjectId': 42,
+          'username': 'alice',
           'value': 12,
           'attempts': 0,
           'nextAttemptAt': now
@@ -2564,6 +2922,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now
@@ -2682,6 +3042,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now
@@ -2718,6 +3080,8 @@ void main() {
         implicitData['bangumiPendingProgress'] = {
           key: {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 12,
             'attempts': 0,
             'nextAttemptAt': now
@@ -2770,6 +3134,8 @@ void main() {
       implicitData['bangumiPendingProgress'] = {
         key: {
           'field': 'ep_status',
+          'subjectId': 42,
+          'username': 'alice',
           'value': 12,
           'attempts': 0,
           'nextAttemptAt': now
@@ -2877,6 +3243,7 @@ class FakeBangumiGateway implements BangumiGateway {
   Object? currentUserError;
   Object? createError;
   Object? patchError;
+  Object? getCollectionError;
   Completer<void>? getCollectionBlocker;
   var currentUserCalls = 0;
   final searchKeywords = <String>[];
@@ -2914,6 +3281,7 @@ class FakeBangumiGateway implements BangumiGateway {
     if (blocker != null) {
       await blocker.future;
     }
+    if (getCollectionError != null) throw getCollectionError!;
     return collection;
   }
 

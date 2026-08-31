@@ -209,7 +209,7 @@ void main() {
     expect(find.byKey(const Key('bangumi-progress-field')), findsNothing);
   });
 
-  testWidgets('auto mode with an ambiguous title disables manual save', (
+  testWidgets('auto mode with an ambiguous title still saves rating only', (
     tester,
   ) async {
     appdata.settings['bangumiBindings'] = {
@@ -231,9 +231,111 @@ void main() {
           .enabled,
       isFalse,
     );
+    await tester.enterText(find.byKey(const Key('bangumi-rating-field')), '8');
     await tester.tap(find.byKey(const Key('bangumi-save')));
-    await tester.pump();
-    expect(gateway.patches, isEmpty);
+    await tester.pumpAndSettle();
+    expect(gateway.patches, [
+      {'rate': 8},
+    ]);
+  });
+
+  testWidgets('explicit mode saves only an edited rating', (tester) async {
+    gateway.collection = const BangumiCollection(
+      type: 3,
+      rate: 6,
+      epStatus: 8,
+      volStatus: 0,
+    );
+    appdata.settings['bangumiBindings'] = {
+      bangumiBindingKey('source', 'comic'): _binding(
+        episode: 5,
+        rating: 6,
+      ).toJson(),
+    };
+    await tester.pumpWidget(_panel(gateway));
+
+    await tester.enterText(find.byKey(const Key('bangumi-rating-field')), '9');
+    await tester.tap(find.byKey(const Key('bangumi-save')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Lower Bangumi progress?'), findsNothing);
+    expect(gateway.patches, [
+      {'rate': 9},
+    ]);
+  });
+
+  testWidgets('rating-only save keeps pending progress in explicit mode', (
+    tester,
+  ) async {
+    appdata.settings['bangumiBindings'] = {
+      bangumiBindingKey('source', 'comic'): _binding(
+        episode: 5,
+        rating: 6,
+      ).toJson(),
+    };
+    gateway.collection = const BangumiCollection(
+      type: 3,
+      rate: 6,
+      epStatus: 5,
+      volStatus: 0,
+    );
+    final key = bangumiBindingKey('source', 'comic');
+    final service = BangumiService.forTesting(
+      gatewayFactory: (_) => gateway,
+      implicitData: {
+        'bangumiPendingProgress': {
+          key: {
+            'ep_status': {
+              'field': 'ep_status',
+              'subjectId': 42,
+              'username': 'alice',
+              'value': 10,
+              'attempts': 0,
+              'nextAttemptAt': DateTime.now().millisecondsSinceEpoch,
+            },
+          },
+        },
+      },
+    );
+    await tester.pumpWidget(_panelWithService(service));
+
+    await tester.enterText(find.byKey(const Key('bangumi-rating-field')), '8');
+    await tester.tap(find.byKey(const Key('bangumi-save')));
+    await tester.pumpAndSettle();
+
+    expect(gateway.patches, [
+      {'rate': 8},
+    ]);
+    expect(service.hasPendingProgress('source', 'comic'), isTrue);
+  });
+
+  testWidgets('progress-only save does not overwrite a newer remote rating', (
+    tester,
+  ) async {
+    gateway.collection = const BangumiCollection(
+      type: 3,
+      rate: 9,
+      epStatus: 5,
+      volStatus: 0,
+    );
+    appdata.settings['bangumiBindings'] = {
+      bangumiBindingKey('source', 'comic'): _binding(
+        episode: 5,
+        rating: 6,
+      ).toJson(),
+    };
+    await tester.pumpWidget(_panel(gateway));
+
+    await tester.enterText(
+      find.byKey(const Key('bangumi-progress-field')),
+      '7',
+    );
+    await tester.tap(find.byKey(const Key('bangumi-save')));
+    await tester.pumpAndSettle();
+
+    expect(gateway.patches, [
+      {'ep_status': 7},
+    ]);
   });
 
   testWidgets('unbinding deletes only the local binding', (tester) async {
@@ -341,6 +443,52 @@ void main() {
     expect(gateway.patches, isEmpty);
   });
 
+  testWidgets('binding ignores an empty chapter history at page zero', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BangumiProgressPanel(
+          service: BangumiService.forTesting(gatewayFactory: (_) => gateway),
+          sourceKey: 'source',
+          comicId: 'comic',
+          comicTitle: 'Title',
+          chapters: const ComicChapters({'1': '第 1 话'}),
+          history: _history(ep: 1, page: 0, maxPage: 0),
+        ),
+      ),
+    );
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('bangumi-bind')));
+    await tester.pumpAndSettle();
+
+    expect(gateway.patches, isEmpty);
+  });
+
+  testWidgets('binding ignores chapter history past its last page', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BangumiProgressPanel(
+          service: BangumiService.forTesting(gatewayFactory: (_) => gateway),
+          sourceKey: 'source',
+          comicId: 'comic',
+          comicTitle: 'Title',
+          chapters: const ComicChapters({'1': '第 1 话'}),
+          history: _history(ep: 1, page: 6, maxPage: 5),
+        ),
+      ),
+    );
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('bangumi-bind')));
+    await tester.pumpAndSettle();
+
+    expect(gateway.patches, isEmpty);
+  });
+
   testWidgets('bound panel displays a specific parser failure', (tester) async {
     appdata.settings['bangumiBindings'] = {
       bangumiBindingKey('source', 'comic'): _binding().toJson(),
@@ -409,6 +557,8 @@ void main() {
         bangumiBindingKey('source', 'comic'): {
           'ep_status': {
             'field': 'ep_status',
+            'subjectId': 42,
+            'username': 'alice',
             'value': 1,
             'attempts': 0,
             'nextAttemptAt': DateTime.now().millisecondsSinceEpoch,
@@ -531,6 +681,7 @@ BangumiBinding _binding({
   BangumiProgressMode mode = BangumiProgressMode.episode,
   int episode = 0,
   int volume = 0,
+  int rating = 0,
 }) => BangumiBinding(
   sourceKey: 'source',
   comicId: 'comic',
@@ -543,7 +694,7 @@ BangumiBinding _binding({
   totalVolumes: 2,
   lastRemoteEpisode: episode,
   lastRemoteVolume: volume,
-  rating: 0,
+  rating: rating,
 );
 
 class _Gateway implements BangumiGateway {

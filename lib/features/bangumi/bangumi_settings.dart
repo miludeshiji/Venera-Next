@@ -35,6 +35,7 @@ class _BangumiSettingsPageState extends State<BangumiSettingsPage> {
   late final TextEditingController _tokenController;
   late bool _autoSyncEnabled;
   bool _isConnecting = false;
+  bool _isSavingAutoSync = false;
   late bool _connectionInvalid;
   String? _errorMessage;
 
@@ -44,10 +45,9 @@ class _BangumiSettingsPageState extends State<BangumiSettingsPage> {
   void initState() {
     super.initState();
     _tokenController = TextEditingController(
-      text: appdata.settings['bangumiAccessToken'] as String? ?? '',
+      text: _settingString('bangumiAccessToken'),
     );
-    _autoSyncEnabled =
-        appdata.settings['bangumiAutoSyncEnabled'] as bool? ?? true;
+    _autoSyncEnabled = _settingBool('bangumiAutoSyncEnabled', true);
     _connectionInvalid = _service.isAuthenticationPaused;
   }
 
@@ -59,7 +59,7 @@ class _BangumiSettingsPageState extends State<BangumiSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final username = appdata.settings['bangumiUsername'] as String? ?? '';
+    final username = _settingString('bangumiUsername');
     return PopUpWidgetScaffold(
       title: 'Bangumi',
       body: SingleChildScrollView(
@@ -112,7 +112,7 @@ class _BangumiSettingsPageState extends State<BangumiSettingsPage> {
               contentPadding: EdgeInsets.zero,
               title: Text('Automatically sync after completing a chapter'.tl),
               value: _autoSyncEnabled,
-              onChanged: _setAutoSyncEnabled,
+              onChanged: _isSavingAutoSync ? null : _setAutoSyncEnabled,
             ),
             if (_connectionInvalid && _errorMessage == null) ...[
               const SizedBox(height: 4),
@@ -235,8 +235,12 @@ class _BangumiSettingsPageState extends State<BangumiSettingsPage> {
   }
 
   Future<void> _setAutoSyncEnabled(bool value) async {
+    if (_isSavingAutoSync) return;
     final previous = _autoSyncEnabled;
-    setState(() => _autoSyncEnabled = value);
+    setState(() {
+      _autoSyncEnabled = value;
+      _isSavingAutoSync = true;
+    });
     appdata.settings['bangumiAutoSyncEnabled'] = value;
     try {
       await widget.saveSettings();
@@ -249,7 +253,19 @@ class _BangumiSettingsPageState extends State<BangumiSettingsPage> {
           _errorMessage = '${'Failed to save Bangumi settings'.tl}: $error';
         });
       }
+    } finally {
+      if (mounted) setState(() => _isSavingAutoSync = false);
     }
+  }
+
+  String _settingString(String key) {
+    final value = appdata.settings[key];
+    return value is String ? value : '';
+  }
+
+  bool _settingBool(String key, bool fallback) {
+    final value = appdata.settings[key];
+    return value is bool ? value : fallback;
   }
 
   Future<void> _disconnect() async {

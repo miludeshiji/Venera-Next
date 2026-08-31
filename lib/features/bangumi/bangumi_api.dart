@@ -42,14 +42,18 @@ class BangumiApi implements BangumiGateway {
 
   @override
   Future<List<BangumiSubject>> searchSubjects(String keyword) async {
-    final response = await _post('/v0/search/subjects', {
-      'keyword': keyword,
-      'sort': 'match',
-      'filter': {
-        'type': [1],
-        'nsfw': true,
+    final response = await _post(
+      '/v0/search/subjects',
+      {
+        'keyword': keyword,
+        'sort': 'match',
+        'filter': {
+          'type': [1],
+          'nsfw': true,
+        },
       },
-    });
+      queryParameters: const {'limit': 20},
+    );
     final data = _decode<Map<String, dynamic>>(
       response,
       (json) => json,
@@ -117,13 +121,17 @@ class BangumiApi implements BangumiGateway {
 
   Future<Response<dynamic>> _get(String path) => _request('GET', path);
 
-  Future<Response<dynamic>> _post(String path, Object data) =>
-      _request('POST', path, data: data);
+  Future<Response<dynamic>> _post(
+    String path,
+    Object data, {
+    Map<String, dynamic>? queryParameters,
+  }) => _request('POST', path, data: data, queryParameters: queryParameters);
 
   Future<Response<dynamic>> _request(
     String method,
     String path, {
     Object? data,
+    Map<String, dynamic>? queryParameters,
     bool allowNotFound = false,
   }) async {
     final Response<dynamic> response;
@@ -131,6 +139,7 @@ class BangumiApi implements BangumiGateway {
       response = await _dio.request<dynamic>(
         path,
         data: data,
+        queryParameters: queryParameters,
         options: Options(
           method: method,
           headers: {
