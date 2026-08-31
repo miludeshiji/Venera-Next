@@ -47,6 +47,3 @@ app.*.map.json
 .opencode/
 .codex/
 .agents/
-.worktrees/
-docs/
-AGENTS.md
