@@ -28,6 +28,8 @@ import 'package:venera_next/routing/handle_text_share.dart';
 import 'package:venera_next/foundation/opencc.dart';
 import 'package:venera_next/foundation/translations.dart';
 import 'package:venera_next/foundation/appdata.dart';
+import 'package:venera_next/features/bangumi/bangumi.dart';
+import 'package:venera_next/features/reader/reader.dart';
 
 extension _FutureInit<T> on Future<T> {
   /// Prevent unhandled exception
@@ -46,6 +48,13 @@ Future<void> init() async {
   await App.init().wait();
   await SingleInstanceCookieJar.createInstance();
   configureComicTypeSourceKeyResolver();
+  configureReaderChapterCompletedHandler(
+    (event) => BangumiService().onChapterCompleted(
+      sourceKey: event.sourceKey,
+      comicId: event.comicId,
+      chapterTitle: event.chapterTitle,
+    ),
+  );
   configureComicSourceDataSavedHandler(() => DataSync().uploadData());
   configureRuntimeComicSourcesProvider(
     () => WebDavLibraryConfig.fromSettings().isValid
@@ -103,6 +112,7 @@ Future<void> init() async {
     Log.error("init", "$e\n$s");
   }
   DataSync();
+  await BangumiService().initialize().wait();
   WebDavLibrarySource.initializeAutoSync();
   CacheManager().setLimitSize(appdata.settings['cacheSize']);
   _checkOldConfigs();
