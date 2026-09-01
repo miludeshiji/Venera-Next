@@ -1,28 +1,146 @@
 name: 完整构建
 run-name: 完整构建
+
 on:
   workflow_dispatch: {}
   push:
     tags:
       - 'v*'
 
+# 默认最小权限；只有创建/上传/完成 Release 的 job 临时提升为 write。
 permissions:
-  contents: write
+  contents: read
+
+# 同一个 ref 同时只允许一个完整构建，避免两个运行交叉覆盖同一 Release。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   Release_Metadata:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: 校验发布元数据
         run: python3 .github/scripts/validate_release.py
 
+  Prepare_Release:
+    runs-on: ubuntu-22.04
+    needs: Release_Metadata
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 创建或恢复渐进式 Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          python3 .github/scripts/validate_release.py --write-notes release_notes.md
+
+          echo "::notice::渐进式 Release 要求仓库关闭 Immutable releases；开启后 GitHub 不允许发布后继续追加资产。"
+
+          # 使用 REST API 判断 Release 是否存在，并对网络/API 临时故障进行重试。
+          # 返回码 4 专门表示 HTTP 404（Release 不存在）；其他失败不得误判为“不存在”。
+          query_release() {
+            local attempt response rc tag_encoded
+            tag_encoded=$(jq -rn --arg value "${GITHUB_REF_NAME}" '$value | @uri')
+            for attempt in 1 2 3; do
+              set +e
+              response=$(gh api "repos/${GH_REPO}/releases/tags/${tag_encoded}" 2>&1)
+              rc=$?
+              set -e
+
+              if (( rc == 0 )); then
+                printf '%s' "$response"
+                return 0
+              fi
+
+              if grep -qE 'HTTP 404|\(HTTP 404\)' <<<"$response"; then
+                return 4
+              fi
+
+              if (( attempt < 3 )); then
+                echo "GitHub Release API 查询失败（第 ${attempt}/3 次），3 秒后重试：$response" >&2
+                sleep 3
+              else
+                echo "GitHub Release API 连续 3 次查询失败：$response" >&2
+                return 1
+              fi
+            done
+          }
+
+          set +e
+          state=$(query_release)
+          query_rc=$?
+          set -e
+
+          if (( query_rc == 0 )); then
+            is_draft=$(jq -r '.draft' <<<"$state")
+            is_prerelease=$(jq -r '.prerelease' <<<"$state")
+            is_immutable=$(jq -r '.immutable // false' <<<"$state")
+
+            if [[ "$is_immutable" == "true" ]]; then
+              echo "Release ${GITHUB_REF_NAME} 已不可变，不能继续追加构建资产。" >&2
+              exit 1
+            fi
+
+            # 已经正式发布的同名版本绝不允许由重跑工作流修改。
+            if [[ "$is_draft" == "false" && "$is_prerelease" == "false" ]]; then
+              echo "Release ${GITHUB_REF_NAME} 已是正式版本，拒绝覆盖或修改其资产。" >&2
+              exit 1
+            fi
+
+            echo "Release ${GITHUB_REF_NAME} 已存在，更新发布说明并恢复为构建中的 prerelease。"
+            gh release edit "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --notes-file release_notes.md \
+              --draft=false \
+              --prerelease
+          elif (( query_rc == 4 )); then
+            echo "创建构建中的 prerelease ${GITHUB_REF_NAME}。"
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --notes-file release_notes.md \
+              --prerelease \
+              --verify-tag
+          else
+            echo "无法可靠判断 Release ${GITHUB_REF_NAME} 是否存在，停止发布以避免误创建或误修改。" >&2
+            exit 1
+          fi
+
+          # 新建/恢复 prerelease 后再次通过 API 确认状态。
+          # 若仓库开启 Immutable releases，渐进式上传无法继续，尽早终止避免浪费构建资源。
+          state=$(query_release) || {
+            rc=$?
+            if (( rc == 4 )); then
+              echo "Release ${GITHUB_REF_NAME} 刚创建/恢复后却查询不到，停止发布。" >&2
+            fi
+            exit 1
+          }
+          is_immutable=$(jq -r '.immutable // false' <<<"$state")
+          if [[ "$is_immutable" == "true" ]]; then
+            echo "Release ${GITHUB_REF_NAME} 已被 Immutable releases 锁定。" >&2
+            echo "请在仓库设置中关闭 Immutable releases 后重新创建该版本；渐进式 Release 与不可变发布不能同时使用。" >&2
+            exit 1
+          fi
+
   Build_MacOS:
     runs-on: macos-15
-    needs: Release_Metadata
+    needs: Prepare_Release
     steps:
-      - uses: actions/checkout@v7
-      - uses: subosito/flutter-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: "stable"
           flutter-version-file: pubspec.yaml
@@ -42,41 +160,65 @@ jobs:
           echo "RUSTUP_REAL_BINARY=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
           echo "RUSTUP_LOCK_FILE=$RUNNER_TEMP/venera-rustup.lock" >> "$GITHUB_ENV"
       - run: flutter pub get --enforce-lockfile
-
       - name: 检查 rust-toolchain.toml
         run: rustup show
-
-      # 构建 Flutter macOS 应用
       - name: 构建 Flutter macOS 应用
         run: flutter build macos --release
-
-      # 创建 DMG 文件
       - name: 创建 DMG
         run: |
-          mkdir -p dist
           mkdir -p dist/dmg_contents
           cp -R build/macos/Build/Products/Release/VeneraNext.app dist/dmg_contents/
           ln -s /Applications dist/dmg_contents/Applications
           hdiutil create -volname "VeneraNext" -srcfolder dist/dmg_contents -ov -format UDZO "dist/VeneraNext.dmg"
-
       - name: 将版本号写入文件名
         run: |
           APP_VERSION=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | tr -d '\r\n')
           mkdir -p result
           mv dist/VeneraNext.dmg "result/VeneraNext-$APP_VERSION.dmg"
-
-      # 上传构建产物
-      - name: 上传 DMG
-        uses: actions/upload-artifact@v7
+      - name: 上传 macOS Workflow Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos_build
-          path: result/
+          path: result/*.dmg
+          if-no-files-found: error
+
+  Upload_MacOS:
+    runs-on: ubuntu-22.04
+    needs: Build_MacOS
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: 下载 macOS 构建产物
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos_build
+          path: outputs
+      - name: 上传 DMG 到 Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(outputs/*.dmg)
+          (( ${#files[@]} == 1 )) || { echo "应当恰好有一个 macOS DMG，实际 ${#files[@]} 个。" >&2; exit 1; }
+          existing=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
+          name=$(basename "${files[0]}")
+          if grep -Fxq "$name" <<<"$existing"; then
+            echo "Release 已存在 $name，为避免覆盖已发布二进制，本次跳过。"
+          else
+            gh release upload "${GITHUB_REF_NAME}" "${files[0]}"
+          fi
+
   Build_IOS:
     runs-on: macos-15
-    needs: Release_Metadata
+    needs: Prepare_Release
     steps:
-      - uses: actions/checkout@v7
-      - uses: subosito/flutter-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: "stable"
           flutter-version-file: pubspec.yaml
@@ -107,11 +249,13 @@ jobs:
           fi
           IOS_VERSION="${IOS_VERSION%%-*}"
           echo "正在根据 ${APP_VERSION} 构建 iOS 包版本 ${IOS_VERSION}+${IOS_BUILD}"
-          cp pubspec.yaml pubspec.yaml.release
-          trap 'mv pubspec.yaml.release pubspec.yaml' EXIT
-          perl -0pi -e "s/^version:.*/version: ${IOS_VERSION}+${IOS_BUILD}/m" pubspec.yaml
-          flutter build ios --release --no-codesign
-      - run: |
+          flutter build ios \
+            --release \
+            --no-codesign \
+            --build-name="$IOS_VERSION" \
+            --build-number="$IOS_BUILD"
+      - name: 打包 IPA
+        run: |
           mkdir -p build/ios/iphoneos/Payload
           mv build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload
           cd build/ios/iphoneos/
@@ -121,17 +265,51 @@ jobs:
           APP_VERSION=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | tr -d '\r\n')
           mkdir -p result
           mv build/ios/iphoneos/VeneraNext-ios.ipa "result/VeneraNext-ios-$APP_VERSION.ipa"
-      - uses: actions/upload-artifact@v7
+      - name: 上传 iOS Workflow Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ios_build
-          path: result/
+          path: result/*.ipa
+          if-no-files-found: error
+
+  Upload_IOS:
+    runs-on: ubuntu-22.04
+    needs: Build_IOS
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: 下载 iOS 构建产物
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ios_build
+          path: outputs
+      - name: 上传 IPA 到 Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(outputs/*.ipa)
+          (( ${#files[@]} == 1 )) || { echo "应当恰好有一个 iOS IPA，实际 ${#files[@]} 个。" >&2; exit 1; }
+          existing=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
+          name=$(basename "${files[0]}")
+          if grep -Fxq "$name" <<<"$existing"; then
+            echo "Release 已存在 $name，为避免覆盖已发布二进制，本次跳过。"
+          else
+            gh release upload "${GITHUB_REF_NAME}" "${files[0]}"
+          fi
+
   Build_Android:
     runs-on: ubuntu-22.04
-    needs: Release_Metadata
+    needs: Prepare_Release
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rm -rf /opt/hostedtoolcache
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: "stable"
           flutter-version-file: pubspec.yaml
@@ -141,9 +319,15 @@ jobs:
           STORE_FILE: ${{ secrets.ANDROID_KEYSTORE }}
           PROPERTY_FILE: ${{ secrets.ANDROID_KEY_PROPERTIES }}
         run: |
-            echo "$STORE_FILE" | base64 --decode > android/keystore.jks
-            echo "$PROPERTY_FILE" > android/key.properties
-      - uses: actions/setup-java@v5
+          set -euo pipefail
+          if [[ -z "$STORE_FILE" || -z "$PROPERTY_FILE" ]]; then
+            echo "ANDROID_KEYSTORE 或 ANDROID_KEY_PROPERTIES Secret 未配置。" >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$STORE_FILE" | base64 --decode > android/keystore.jks
+          printf '%s\n' "$PROPERTY_FILE" > android/key.properties
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: 'oracle'
           java-version: '17'
@@ -169,22 +353,61 @@ jobs:
         run: rustup show
       - run: flutter pub get --enforce-lockfile
       - run: flutter build apk --release
-      - uses: actions/upload-artifact@v7
+      - name: 清理 Android 签名文件
+        if: always()
+        run: |
+          rm -f android/keystore.jks
+          rm -f android/key.properties
+      - name: 上传 Android Workflow Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: apks
-          path: build/app/outputs/apk/release
+          path: build/app/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+  Upload_Android:
+    runs-on: ubuntu-22.04
+    needs: Build_Android
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: 下载 Android 构建产物
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: apks
+          path: outputs
+      - name: 上传 APK 到 Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(outputs/*.apk)
+          (( ${#files[@]} > 0 )) || { echo "没有找到 Android APK。" >&2; exit 1; }
+          existing=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
+          for file in "${files[@]}"; do
+            name=$(basename "$file")
+            if grep -Fxq "$name" <<<"$existing"; then
+              echo "Release 已存在 $name，为避免覆盖已发布二进制，本次跳过。"
+            else
+              gh release upload "${GITHUB_REF_NAME}" "$file"
+            fi
+          done
+
   Build_Windows:
     runs-on: windows-latest
-    needs: Release_Metadata
+    needs: Prepare_Release
     steps:
-      - uses: actions/checkout@v7
-      - name: 安装依赖
-        run: | 
-          choco install yq -y
-          pip install httpx
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 安装 Python 依赖
+        run: python -m pip install httpx
       - name: 安装 Inno Setup
         run: choco install innosetup --no-progress
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: "stable"
           flutter-version-file: pubspec.yaml
@@ -223,144 +446,310 @@ jobs:
             $archive.Dispose()
           }
           $artifacts | Sort-Object Name | ForEach-Object { "$($_.Name) $($_.Length) bytes" }
-      - uses: actions/upload-artifact@v7
+      - name: 上传 Windows Workflow Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows_build
           path: |
             build/windows/VeneraNext-*-windows.zip
             build/windows/VeneraNext-*-windows-installer.exe
           if-no-files-found: error
+
+  Upload_Windows:
+    runs-on: ubuntu-22.04
+    needs: Build_Windows
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: 下载 Windows 构建产物
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows_build
+          path: outputs
+      - name: 上传 Windows 构建产物到 Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          zips=(outputs/VeneraNext-*-windows.zip)
+          installers=(outputs/VeneraNext-*-windows-installer.exe)
+          (( ${#zips[@]} == 1 )) || { echo "Windows zip 数量异常：${#zips[@]}" >&2; exit 1; }
+          (( ${#installers[@]} == 1 )) || { echo "Windows installer 数量异常：${#installers[@]}" >&2; exit 1; }
+          files=("${zips[@]}" "${installers[@]}")
+          existing=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
+          for file in "${files[@]}"; do
+            name=$(basename "$file")
+            if grep -Fxq "$name" <<<"$existing"; then
+              echo "Release 已存在 $name，为避免覆盖已发布二进制，本次跳过。"
+            else
+              gh release upload "${GITHUB_REF_NAME}" "$file"
+            fi
+          done
+
   Build_Linux:
     runs-on: ubuntu-22.04
-    needs: Release_Metadata
+    needs: Prepare_Release
     steps:
-      - uses: actions/checkout@v7
-      - uses: subosito/flutter-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: 'stable'
           flutter-version-file: pubspec.yaml
           architecture: x64
       - name: 准备 Rust 工具链
         run: python3 .github/scripts/prepare_rust_toolchain.py
-      - run: |
+      - name: 安装 Linux 构建依赖
+        run: |
           flutter pub get --enforce-lockfile
           sudo apt-get update -y
           sudo apt-get install -y ninja-build libgtk-3-dev webkit2gtk-4.1
           dart pub global activate -s git --git-ref 3777c91b6b1cc0b7c03357c67ca216d4313c3db5 https://github.com/venera-app/flutter_to_debian.git
-      - run: python3 debian/build.py x64
+      - name: 构建 Debian x64 软件包
+        run: python3 debian/build.py x64
       - name: 构建 Arch 软件包
         run: python3 .github/scripts/build_arch_package.py
-      - run: |
+      - name: 清理 Arch 临时文件
+        run: |
           sudo rm -rf build/linux/arch/app.tar.gz
           sudo rm -rf build/linux/arch/pkg
           sudo rm -rf build/linux/arch/src
           sudo rm -rf build/linux/arch/PKGBUILD
           sudo rm -rf build/linux/arch/Dockerfile
           rm -f build/linux/arch/venera-next-debug-*.pkg.tar.zst
-      - uses: actions/upload-artifact@v7
+      - name: 校验 Linux x64 构建产物
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(build/linux/x64/release/debian/*.deb)
+          arch_assets=(build/linux/arch/*.zst build/linux/arch/*.AppImage)
+          (( ${#debs[@]} > 0 )) || { echo "没有找到 Linux x64 DEB。" >&2; exit 1; }
+          (( ${#arch_assets[@]} > 0 )) || { echo "没有找到 Arch/AppImage 构建产物。" >&2; exit 1; }
+          for file in "${debs[@]}" "${arch_assets[@]}"; do
+            [[ -s "$file" ]] || { echo "构建产物为空：$file" >&2; exit 1; }
+          done
+      - name: 上传 Debian x64 Workflow Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: deb_build
-          path: build/linux/x64/release/debian
-      - uses: actions/upload-artifact@v7
+          path: build/linux/x64/release/debian/*.deb
+          if-no-files-found: error
+      - name: 上传 Arch Workflow Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: arch_build
-          path: build/linux/arch/
+          path: |
+            build/linux/arch/*.zst
+            build/linux/arch/*.AppImage
+          if-no-files-found: error
+
+  Upload_Linux:
+    runs-on: ubuntu-22.04
+    needs: Build_Linux
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: 下载 Debian x64 构建产物
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: deb_build
+          path: outputs/deb
+      - name: 下载 Arch 构建产物
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: arch_build
+          path: outputs/arch
+      - name: 上传 Linux x64 构建产物到 Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(outputs/deb/*.deb)
+          arch_assets=(outputs/arch/*.zst outputs/arch/*.AppImage)
+          (( ${#debs[@]} > 0 )) || { echo "下载后没有找到 Linux x64 DEB。" >&2; exit 1; }
+          (( ${#arch_assets[@]} > 0 )) || { echo "下载后没有找到 Arch/AppImage。" >&2; exit 1; }
+          files=("${debs[@]}" "${arch_assets[@]}")
+          existing=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
+          for file in "${files[@]}"; do
+            name=$(basename "$file")
+            if grep -Fxq "$name" <<<"$existing"; then
+              echo "Release 已存在 $name，为避免覆盖已发布二进制，本次跳过。"
+            else
+              gh release upload "${GITHUB_REF_NAME}" "$file"
+            fi
+          done
+
   Build_Linux_ARM64:
     runs-on: ubuntu-22.04-arm
-    needs: Release_Metadata
+    needs: Prepare_Release
     steps:
-      - uses: actions/checkout@v7
-      - uses: subosito/flutter-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: 'master'
           flutter-version-file: pubspec.yaml
       - name: 准备 Rust 工具链
         run: python3 .github/scripts/prepare_rust_toolchain.py
-      - run: |
+      - name: 安装 Linux ARM64 构建依赖
+        run: |
           flutter pub get --enforce-lockfile
           sudo apt-get update -y
           sudo apt-get install -y ninja-build libgtk-3-dev webkit2gtk-4.1
           dart pub global activate -s git --git-ref 3777c91b6b1cc0b7c03357c67ca216d4313c3db5 https://github.com/venera-app/flutter_to_debian.git
-      - name: "修补字体"
+      - name: 修补字体
+        run: dart run patch/font.dart
+      - name: 构建 Debian ARM64 软件包
+        run: python3 debian/build.py arm64
+      - name: 校验 Linux ARM64 构建产物
         run: |
-          dart run patch/font.dart
-      - run: python3 debian/build.py arm64
-      - uses: actions/upload-artifact@v7
-        with:
-          name: deb_arm64_build
-          path: build/linux/x64/release/debian # 这是 flutter_to_debian 的路径问题，对当前构建结果没有影响。
-
-  Release:
-    runs-on: ubuntu-22.04
-    needs: [Release_Metadata, Build_MacOS, Build_IOS, Build_Android, Build_Windows, Build_Linux, Build_Linux_ARM64]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/checkout@v7
-      - name: 校验发布元数据
-        run: python3 .github/scripts/validate_release.py --write-notes release_notes.md
-      - uses: actions/download-artifact@v8
-        with:
-          name: macos_build
-          path: outputs
-      - uses: actions/download-artifact@v8
-        with:
-          name: ios_build
-          path: outputs
-      - uses: actions/download-artifact@v8
-        with:
-          name: apks
-          path: outputs
-      - uses: actions/download-artifact@v8
-        with:
-          name: windows_build
-          path: outputs
-      - uses: actions/download-artifact@v8
-        with:
-          name: deb_build
-          path: outputs
-      - uses: actions/download-artifact@v8
-        with:
-          name: arch_build
-          path: outputs
-      - uses: actions/download-artifact@v8
-        with:
-          name: deb_arm64_build
-          path: outputs
-      - name: 创建草稿 Release 并上传资产
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
+          set -euo pipefail
           shopt -s nullglob
-          files=(
-            outputs/*.ipa
-            outputs/*.dmg
-            outputs/*.apk
-            outputs/*.zip
-            outputs/*.exe
-            outputs/*.deb
-            outputs/*.zst
-            outputs/*.AppImage
-          )
-          if (( ${#files[@]} == 0 )); then
-            echo "没有找到可发布的构建产物。" >&2
-            exit 1
-          fi
+          # flutter_to_debian 当前会把 arm64 输出放在 x64 目录名下。
+          debs=(build/linux/x64/release/debian/*.deb)
+          (( ${#debs[@]} > 0 )) || { echo "没有找到 Linux ARM64 DEB。" >&2; exit 1; }
+          for file in "${debs[@]}"; do
+            [[ -s "$file" ]] || { echo "构建产物为空：$file" >&2; exit 1; }
+          done
+      - name: 上传 Debian ARM64 Workflow Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deb_arm64_build
+          path: build/linux/x64/release/debian/*.deb
+          if-no-files-found: error
 
-          args=(
-            --title "${GITHUB_REF_NAME}"
-            --notes-file release_notes.md
-            --draft
-          )
-          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
-            args+=(--prerelease)
-          fi
-          gh release create "${GITHUB_REF_NAME}" "${files[@]}" "${args[@]}"
-      - name: 发布草稿 Release
+  Upload_Linux_ARM64:
+    runs-on: ubuntu-22.04
+    needs: Build_Linux_ARM64
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: 下载 Linux ARM64 构建产物
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: deb_arm64_build
+          path: outputs
+      - name: 上传 Linux ARM64 构建产物到 Release
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh release edit "${GITHUB_REF_NAME}" --draft=false
+          set -euo pipefail
+          shopt -s nullglob
+          files=(outputs/*.deb)
+          (( ${#files[@]} > 0 )) || { echo "下载后没有找到 Linux ARM64 DEB。" >&2; exit 1; }
+          existing=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
+          for file in "${files[@]}"; do
+            name=$(basename "$file")
+            if grep -Fxq "$name" <<<"$existing"; then
+              echo "Release 已存在 $name，为避免覆盖已发布二进制，本次跳过。"
+            else
+              gh release upload "${GITHUB_REF_NAME}" "$file"
+            fi
+          done
+
+  Finalize_Release:
+    runs-on: ubuntu-22.04
+    needs:
+      - Upload_MacOS
+      - Upload_IOS
+      - Upload_Android
+      - Upload_Windows
+      - Upload_Linux
+      - Upload_Linux_ARM64
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: 完成 Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            echo "${GITHUB_REF_NAME} 是预发布版本，保持 prerelease 状态。"
+            gh release edit "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --draft=false \
+              --prerelease
+          else
+            echo "所有平台构建和上传完成，将 ${GITHUB_REF_NAME} 转为正式 Release。"
+            gh release edit "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --draft=false \
+              --prerelease=false \
+              --latest
+          fi
+
       - name: 清理 jsDelivr CDN 缓存
         run: |
-          curl -s "https://purge.jsdelivr.net/gh/miludeshiji/Venera-Next@main/pubspec.yaml" | jq '.status'
-          curl -s "https://purge.jsdelivr.net/gh/miludeshiji/Venera-Next@main/CHANGELOG.md" | jq '.status'
+          set -u
+          for path in pubspec.yaml CHANGELOG.md; do
+            if ! curl --fail --silent --show-error \
+              "https://purge.jsdelivr.net/gh/miludeshiji/Venera-Next@main/${path}" \
+              | jq '.status'; then
+              echo "::warning::清理 ${path} 的 jsDelivr 缓存失败，不影响 Release 已完成状态。"
+            fi
+          done
+
+  Mark_Release_Failed:
+    runs-on: ubuntu-22.04
+    needs:
+      - Prepare_Release
+      - Build_MacOS
+      - Upload_MacOS
+      - Build_IOS
+      - Upload_IOS
+      - Build_Android
+      - Upload_Android
+      - Build_Windows
+      - Upload_Windows
+      - Build_Linux
+      - Upload_Linux
+      - Build_Linux_ARM64
+      - Upload_Linux_ARM64
+    if: >-
+      ${{
+        always() &&
+        github.event_name == 'push' &&
+        startsWith(github.ref, 'refs/tags/v') &&
+        needs.Prepare_Release.result == 'success' &&
+        (
+          needs.Build_MacOS.result != 'success' || needs.Upload_MacOS.result != 'success' ||
+          needs.Build_IOS.result != 'success' || needs.Upload_IOS.result != 'success' ||
+          needs.Build_Android.result != 'success' || needs.Upload_Android.result != 'success' ||
+          needs.Build_Windows.result != 'success' || needs.Upload_Windows.result != 'success' ||
+          needs.Build_Linux.result != 'success' || needs.Upload_Linux.result != 'success' ||
+          needs.Build_Linux_ARM64.result != 'success' || needs.Upload_Linux_ARM64.result != 'success'
+        )
+      }}
+    permissions:
+      contents: write
+    steps:
+      - name: 标记 Release 构建未完成
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          state=$(gh release view "${GITHUB_REF_NAME}" --json isImmutable)
+          is_immutable=$(jq -r '.isImmutable // false' <<<"$state")
+          if [[ "$is_immutable" == "true" ]]; then
+            echo "Release 已不可变，无法修改标题；保持当前状态。"
+            exit 0
+          fi
+          gh release edit "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}（构建未完成）" \
+            --draft=false \
+            --prerelease
+          echo "部分平台构建或上传失败，Release 已保持 prerelease 并标记为构建未完成。"
