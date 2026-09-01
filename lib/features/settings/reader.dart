@@ -224,6 +224,17 @@ class _ReaderSettingsState extends State<ReaderSettings> {
           useDeviceSettings: useDeviceSpecificSettings,
         ).toSliver(),
         SwitchSetting(
+          title: "One-handed mode".tl,
+          subtitle: "Tap anywhere for next page".tl,
+          settingKey: "oneHandedMode",
+          onChanged: () {
+            widget.onChanged?.call("oneHandedMode");
+          },
+          comicId: isEnabledSpecificSettings ? widget.comicId : null,
+          comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
+          useDeviceSettings: useDeviceSpecificSettings,
+        ).toSliver(),
+        SwitchSetting(
           title: "Page animation".tl,
           settingKey: "enablePageAnimation",
           onChanged: () {

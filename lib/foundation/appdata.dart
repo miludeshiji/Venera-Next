@@ -359,6 +359,7 @@ class Settings with ChangeNotifier {
     'readerScreenPicNumberForPortrait': 1, // 1 - 5
     'enableTapToTurnPages': true,
     'reverseTapToTurnPages': false,
+    'oneHandedMode': false,
     'enablePageAnimation': true,
     'readerBrightnessEnabled': false,
     'readerBrightness': 50, // 20 - 100
