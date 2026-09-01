@@ -1,8 +1,8 @@
 name: venera_next
 description: "A comic app."
 publish_to: 'none'
-homepage: https://github.com/CyrilPeng/venera-next
-version: 1.15.0+223
+homepage: https://github.com/miludeshiji/Venera-Next
+version: 0.1.0+1
 
 environment:
   sdk: '>=3.8.0 <4.0.0'
@@ -120,7 +120,7 @@ flutter_to_arch:
   icon: debian/gui/venera-next.png
   categories: Utility
   keywords: Flutter;comic;images;
-  url: https://github.com/CyrilPeng/venera-next
+  url: https://github.com/miludeshiji/Venera-Next
   depends:
     - gtk3
     - webkit2gtk-4.1

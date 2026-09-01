@@ -302,7 +302,7 @@ class _ImportComicsWidgetState extends State<_ImportComicsWidget> {
           ),
           onPressed: () {
             launchUrlString(
-              "https://github.com/CyrilPeng/venera-next/blob/main/doc/user/import_comic.zh.md",
+              "https://github.com/miludeshiji/Venera-Next/blob/main/doc/user/import_comic.zh.md",
             );
           },
         ).fixWidth(90).paddingRight(8),

@@ -1,4 +1,4 @@
-package com.github.cyrilpeng.veneranext
+package com.github.miludeshiji.veneranext
 
 import android.Manifest
 import android.app.Activity

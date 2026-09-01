@@ -3,15 +3,15 @@
 
 #define MyAppName "VeneraNext"
 #define MyAppVersion "{{version}}"
-#define MyAppPublisher "CyrilPeng/venera-next"
-#define MyAppURL "https://github.com/CyrilPeng/venera-next"
+#define MyAppPublisher "miludeshiji/venera-next"
+#define MyAppURL "https://github.com/miludeshiji/Venera-Next"
 #define MyAppExeName "VeneraNext.exe"
 #define RootPath "{{root_path}}"
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
 ; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
-AppId={{C6B7E69A-0FD6-4F2A-AC64-7D1AE8A40FB8}
+AppId={{D1481C7B-AF51-470F-BDAA-DA23A7E73632}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 ;AppVerName={#MyAppName} {#MyAppVersion}

@@ -1,6 +1,5 @@
 # 文档索引
 
-English index: [README.en.md](README.en.md)
 
 本文档是 `doc/` 目录的默认中文入口。新增文档时优先按类型放入子目录，并使用 `topic.zh.md` / `topic.en.md` 维护语言版本。`experiments/` 目录例外，实验设计和任务跟踪文档只要求中文。
 
@@ -11,7 +10,6 @@ English index: [README.en.md](README.en.md)
 | `api/` | 开发 API、扩展接口、脚本接口 | 中英文双版本 |
 | `architecture/` | 仓库结构、模块边界、架构约定 | 中英文双版本，中文为默认维护入口 |
 | `development/` | 本地开发、构建、测试和开发故障排查 | 中英文双版本，中文为默认维护入口 |
-| `distribution/` | 发布、分发、包管理器和工作流维护 | 中英文双版本，中文为默认维护入口 |
 | `user/` | 用户使用说明、导入格式、命令行用法 | 中英文双版本 |
 | `experiments/` | 实验设计、任务跟踪、技术预研 | 中文即可，不作为正式路线图承诺 |
 
@@ -29,9 +27,6 @@ English index: [README.en.md](README.en.md)
 - [构建与开发](development/build.zh.md) / [Build and Development](development/build.en.md)
 - [依赖治理](development/dependencies.zh.md) / [Dependency Governance](development/dependencies.en.md)
 
-## 分发和发布
-
-- [Windows 分发](distribution/windows.zh.md) / [Windows Distribution](distribution/windows.en.md)
 
 ## 用户和命令行
 

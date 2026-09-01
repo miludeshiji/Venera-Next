@@ -58,9 +58,10 @@ class _App {
 
   final Appdata data = appdata;
 
-  static const _windowsCompanyDirectory = 'com.github.cyrilpeng';
+  static const _windowsCompanyDirectory = 'com.github.miludeshiji';
   static const _windowsProductDirectory = 'VeneraNext';
   static const _legacyWindowsDirectories = [
+    ('com.github.cyrilpeng', 'VeneraNext'),
     ('CyrilPeng_venera-next', 'VeneraNext'),
     ('CyrilPeng_venera-next', 'venera'),
     ('com.github.wgh136', 'venera'),

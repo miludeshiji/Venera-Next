@@ -326,22 +326,6 @@ jobs:
         with:
           name: deb_arm64_build
           path: outputs
-      - name: 生成 Winget Manifest
-        if: ${{ !contains(github.ref_name, '-') }}
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          python3 .github/scripts/generate_winget_manifest.py \
-            --version "$version" \
-            --installer "outputs/VeneraNext-${version}-windows-installer.exe" \
-            --release-date "$(date -u +%F)" \
-            --output outputs/winget \
-            --print-path
-      - uses: actions/upload-artifact@v7
-        if: ${{ !contains(github.ref_name, '-') }}
-        with:
-          name: winget_manifest
-          path: outputs/winget/manifests
-          if-no-files-found: error
       - name: 创建草稿 Release 并上传资产
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -378,5 +362,5 @@ jobs:
           gh release edit "${GITHUB_REF_NAME}" --draft=false
       - name: 清理 jsDelivr CDN 缓存
         run: |
-          curl -s "https://purge.jsdelivr.net/gh/CyrilPeng/venera-next@main/pubspec.yaml" | jq '.status'
-          curl -s "https://purge.jsdelivr.net/gh/CyrilPeng/venera-next@main/CHANGELOG.md" | jq '.status'
+          curl -s "https://purge.jsdelivr.net/gh/miludeshiji/Venera-Next@main/pubspec.yaml" | jq '.status'
+          curl -s "https://purge.jsdelivr.net/gh/miludeshiji/Venera-Next@main/CHANGELOG.md" | jq '.status'

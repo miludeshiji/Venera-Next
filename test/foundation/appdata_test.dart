@@ -307,7 +307,7 @@ void main() {
       ).writeAsStringSync('source');
 
       final currentDir = Directory(
-        p.join(baseDir.path, 'com.github.cyrilpeng', 'VeneraNext'),
+        p.join(baseDir.path, 'com.github.miludeshiji', 'VeneraNext'),
       )..createSync(recursive: true);
 
       await App.migrateLegacyWindowsPathForTesting(currentDir.path);
@@ -343,7 +343,7 @@ void main() {
       File(p.join(legacyDir.path, 'appdata.json')).writeAsStringSync('legacy');
 
       final currentDir = Directory(
-        p.join(baseDir.path, 'com.github.cyrilpeng', 'VeneraNext'),
+        p.join(baseDir.path, 'com.github.miludeshiji', 'VeneraNext'),
       )..createSync(recursive: true);
       File(
         p.join(currentDir.path, 'appdata.json'),
@@ -376,7 +376,7 @@ void main() {
       File(p.join(legacyDir.path, 'appdata.json')).writeAsStringSync('legacy');
 
       final currentDir = Directory(
-        p.join(baseDir.path, 'com.github.cyrilpeng', 'VeneraNext'),
+        p.join(baseDir.path, 'com.github.miludeshiji', 'VeneraNext'),
       )..createSync(recursive: true);
       File(p.join(currentDir.path, 'logs.txt')).writeAsStringSync('new log');
 
@@ -411,7 +411,7 @@ void main() {
       File(p.join(legacyDir.path, 'appdata.json')).writeAsStringSync('legacy');
 
       final currentDir = Directory(
-        p.join(baseDir.path, 'com.github.cyrilpeng', 'VeneraNext'),
+        p.join(baseDir.path, 'com.github.miludeshiji', 'VeneraNext'),
       )..createSync(recursive: true);
 
       await App.migrateLegacyWindowsPathForTesting(currentDir.path);

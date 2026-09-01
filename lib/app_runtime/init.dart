@@ -155,7 +155,7 @@ Future<void> init() async {
   };
   if (App.isWindows) {
     // Report to the monitor thread that the app is running
-    // https://github.com/CyrilPeng/venera-next/issues
+    // https://github.com/miludeshiji/Venera-Next/issues
     Timer.periodic(const Duration(seconds: 1), (_) {
       const methodChannel = MethodChannel('venera/method_channel');
       methodChannel.invokeMethod("heartBeat");

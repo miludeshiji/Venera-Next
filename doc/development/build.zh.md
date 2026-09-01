@@ -25,7 +25,7 @@ flutter --version
 克隆仓库后，使用仓库锁文件获取依赖：
 
 ```bash
-git clone https://github.com/CyrilPeng/venera-next.git
+git clone https://github.com/miludeshiji/Venera-Next.git
 cd venera-next
 flutter pub get --enforce-lockfile
 ```
@@ -122,7 +122,7 @@ flutter pub get --enforce-lockfile
 flutter build ios --release --no-codesign
 ```
 
-Windows 安装器、便携包和 winget manifest 的维护方法见 [Windows 分发](../distribution/windows.zh.md)。
+Windows 安装器与便携包由发布工作流生成；本仓库不维护 winget manifest 或公共包管理器条目。
 
 ## GitHub Actions 与发布版本
 
@@ -142,7 +142,7 @@ python .github/scripts/release_version.py --write
 python .github/scripts/release_version.py --check --tag v1.2.3
 ```
 
-`pubspec.yaml`、发布 tag 和 `CHANGELOG.md` 版本章节必须与 `release.json` 一致。`alt_store.json` 不是版本源；正式版 GitHub Release 成功后，工作流会根据发布资产更新它，RC 预发布不会更新 AltStore 源。
+`pubspec.yaml`、发布 tag 和 `CHANGELOG.md` 版本章节必须与 `release.json` 一致。
 
 Android release 工作流需要以下仓库 Secrets：
 

@@ -8,7 +8,6 @@ import 'package:venera_next/components/button.dart';
 import 'package:venera_next/components/message.dart';
 import 'package:venera_next/components/scroll.dart';
 import 'package:venera_next/features/settings/setting_components.dart';
-import 'package:venera_next/features/settings/sponsors.dart';
 import 'package:venera_next/foundation/app.dart';
 import 'package:venera_next/foundation/context.dart';
 import 'package:venera_next/foundation/log.dart';
@@ -91,14 +90,7 @@ class _AboutSettingsState extends State<AboutSettings> {
           title: const Text("Github"),
           trailing: const Icon(Icons.open_in_new),
           onTap: () {
-            launchUrlString("https://github.com/CyrilPeng/venera-next");
-          },
-        ).toSliver(),
-        ListTile(
-          title: Text("Sponsors".tl),
-          trailing: const Icon(Icons.keyboard_arrow_right),
-          onTap: () {
-            context.to(() => const SponsorsPage());
+            launchUrlString("https://github.com/miludeshiji/Venera-Next");
           },
         ).toSliver(),
       ],
@@ -316,8 +308,8 @@ Future<String?> _fetchLatestReleaseVersion({
 }) async {
   var res = await AppDio().get(
     includePrerelease
-        ? "https://api.github.com/repos/CyrilPeng/venera-next/releases?per_page=20"
-        : "https://api.github.com/repos/CyrilPeng/venera-next/releases/latest",
+        ? "https://api.github.com/repos/miludeshiji/Venera-Next/releases?per_page=20"
+        : "https://api.github.com/repos/miludeshiji/Venera-Next/releases/latest",
   );
   if (res.statusCode == 200) {
     var data = res.data is String ? jsonDecode(res.data) : res.data;
@@ -354,7 +346,7 @@ Future<void> checkUpdateUi([
                 onPressed: () {
                   Navigator.pop(context);
                   launchUrlString(
-                    "https://github.com/CyrilPeng/venera-next/releases",
+                    "https://github.com/miludeshiji/Venera-Next/releases",
                   );
                 },
                 child: Text("Update".tl),

@@ -29,9 +29,6 @@ This is the English companion index for `doc/`. Documents are grouped by type an
 - [构建与开发](development/build.zh.md) / [Build and Development](development/build.en.md)
 - [依赖治理](development/dependencies.zh.md) / [Dependency Governance](development/dependencies.en.md)
 
-## Distribution
-
-- [Windows 分发](distribution/windows.zh.md) / [Windows Distribution](distribution/windows.en.md)
 
 ## User And CLI
 

@@ -10,7 +10,7 @@ control:
   Architecture: {{Architecture}}
   Priority: optional
   Depends: libwebkit2gtk-4.1-0, libgtk-3-0
-  Maintainer: CyrilPeng/venera-next <https://github.com/CyrilPeng/venera-next>
+  Maintainer: miludeshiji/Venera-Next <https://github.com/miludeshiji/Venera-Next>
   Description: VeneraNext
   
 #options:

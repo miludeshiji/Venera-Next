@@ -25,7 +25,7 @@ flutter --version
 Clone the repository and resolve dependencies from its lock file:
 
 ```bash
-git clone https://github.com/CyrilPeng/venera-next.git
+git clone https://github.com/miludeshiji/Venera-Next.git
 cd venera-next
 flutter pub get --enforce-lockfile
 ```
@@ -122,7 +122,7 @@ flutter pub get --enforce-lockfile
 flutter build ios --release --no-codesign
 ```
 
-For Windows installer, portable package, and winget manifest maintenance, see [Windows Distribution](../distribution/windows.en.md).
+The release workflow builds the Windows installer and portable package; this repository does not maintain winget manifests or public package-manager entries.
 
 ## GitHub Actions and Release Versions
 
@@ -142,7 +142,7 @@ python .github/scripts/release_version.py --write
 python .github/scripts/release_version.py --check --tag v1.2.3
 ```
 
-`pubspec.yaml`, the release tag, and the version section in `CHANGELOG.md` must match `release.json`. `alt_store.json` is not a version source. After a stable GitHub Release succeeds, workflows update it from release assets; RC prereleases do not update the AltStore source.
+`pubspec.yaml`, the release tag, and the version section in `CHANGELOG.md` must match `release.json`.
 
 Android release workflows require these repository Secrets:
 
