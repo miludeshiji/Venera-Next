@@ -2,6 +2,13 @@
 
 本项目遵循语义化版本，记录 fork 后的主要变更。
 
+## 未发布
+
+### 维护
+
+- 更新 `html`、`yaml`、`archive`、`path_provider` 和 `mime` 依赖，纳入解析器安全修复、归档处理优化及平台路径与 MIME 类型表更新。
+- 将 GitHub Actions 的 `actions/setup-java` 更新到 v6，使用最新的 Java 环境配置实现并兼容 Node.js 24 运行时。
+
 ## v2.0.0
 
 ### 新增
