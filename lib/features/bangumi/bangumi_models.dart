@@ -331,6 +331,8 @@ class BangumiSubject {
   final int id;
   final String title;
   final String originalTitle;
+  final String nameCn;
+  final String summary;
   final String coverUrl;
   final int totalEpisodes;
   final int totalVolumes;
@@ -342,6 +344,8 @@ class BangumiSubject {
     required this.id,
     required this.title,
     required this.originalTitle,
+    this.nameCn = '',
+    this.summary = '',
     required this.coverUrl,
     required this.totalEpisodes,
     required this.totalVolumes,
@@ -350,17 +354,25 @@ class BangumiSubject {
     this.tags = const [],
   });
 
+  String get metadataTitle =>
+      nameCn.trim().isEmpty ? originalTitle.trim() : nameCn.trim();
+
   factory BangumiSubject.fromJson(Map<String, dynamic> json) {
     final originalTitle =
         (json['name'] ?? json['originalTitle']) as String? ?? '';
-    final chineseTitle = (json['name_cn'] ?? json['title']) as String? ?? '';
+    final nameCn = (json['name_cn'] ?? json['nameCn']) as String? ?? '';
+    final localTitle = json['title'] as String? ?? '';
     final images = json['images'];
     final apiCoverUrl = images is Map ? images['common'] as String? : null;
     final localAuthors = _stringValues(json['authors']);
     return BangumiSubject(
       id: (json['id'] as num?)?.toInt() ?? 0,
-      title: chineseTitle.isNotEmpty ? chineseTitle : originalTitle,
+      title: nameCn.isNotEmpty
+          ? nameCn
+          : (localTitle.isNotEmpty ? localTitle : originalTitle),
       originalTitle: originalTitle,
+      nameCn: nameCn,
+      summary: json['summary'] as String? ?? '',
       coverUrl: apiCoverUrl ?? json['coverUrl'] as String? ?? '',
       totalEpisodes:
           ((json['eps'] ?? json['totalEpisodes']) as num?)?.toInt() ?? 0,
@@ -378,6 +390,8 @@ class BangumiSubject {
     'id': id,
     'title': title,
     'originalTitle': originalTitle,
+    'nameCn': nameCn,
+    'summary': summary,
     'coverUrl': coverUrl,
     'totalEpisodes': totalEpisodes,
     'totalVolumes': totalVolumes,
@@ -405,15 +419,27 @@ class BangumiSubject {
     final result = <String>[];
     _addUnique(result, _stringValues(json['meta_tags']));
     final rawTags = json['tags'];
-    if (rawTags is List) {
-      for (final item in rawTags) {
-        if (item is String) {
-          _addUnique(result, [item]);
-        } else if (item is Map && item['name'] is String) {
-          _addUnique(result, [item['name'] as String]);
-        }
+    if (rawTags is! List) return result;
+
+    final ranked = <({String name, int count, int index})>[];
+    for (var index = 0; index < rawTags.length; index++) {
+      final item = rawTags[index];
+      if (item is! Map || item['name'] is! String || item['count'] is! num) {
+        continue;
       }
+      final count = (item['count'] as num).toInt();
+      if (count < 0) continue;
+      ranked.add((name: item['name'] as String, count: count, index: index));
     }
+    if (ranked.isEmpty) {
+      _addUnique(result, rawTags.whereType<String>());
+      return result;
+    }
+    ranked.sort((a, b) {
+      final countOrder = b.count.compareTo(a.count);
+      return countOrder != 0 ? countOrder : a.index.compareTo(b.index);
+    });
+    _addUnique(result, ranked.take(10).map((tag) => tag.name));
     return result;
   }
 
@@ -437,7 +463,9 @@ class BangumiSubject {
   static void _addUnique(List<String> target, Iterable<String> values) {
     for (final value in values) {
       final normalized = value.trim();
-      if (normalized.isNotEmpty && !target.contains(normalized)) {
+      final key = normalized.toLowerCase();
+      if (normalized.isNotEmpty &&
+          !target.any((existing) => existing.toLowerCase() == key)) {
         target.add(normalized);
       }
     }

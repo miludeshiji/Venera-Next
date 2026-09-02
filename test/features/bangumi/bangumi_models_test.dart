@@ -264,6 +264,7 @@ void main() {
       'id': 1,
       'name': 'Original',
       'name_cn': '中文',
+      'summary': '作品简介',
       'images': {'common': 'cover'},
       'eps': 24,
       'volumes': 4,
@@ -273,6 +274,8 @@ void main() {
       'id': 1,
       'title': '中文',
       'originalTitle': 'Original',
+      'nameCn': '中文',
+      'summary': '作品简介',
       'coverUrl': 'cover',
       'totalEpisodes': 24,
       'totalVolumes': 4,
@@ -295,6 +298,8 @@ void main() {
       id: 3,
       title: '中文标题',
       originalTitle: 'Original title',
+      nameCn: '中文标题',
+      summary: '本地简介',
       coverUrl: 'https://example.com/cover.jpg',
       totalEpisodes: 24,
       totalVolumes: 4,
@@ -304,6 +309,8 @@ void main() {
     expect(restoredSubject.id, localSubject.id);
     expect(restoredSubject.title, localSubject.title);
     expect(restoredSubject.originalTitle, localSubject.originalTitle);
+    expect(restoredSubject.nameCn, localSubject.nameCn);
+    expect(restoredSubject.summary, localSubject.summary);
     expect(restoredSubject.coverUrl, localSubject.coverUrl);
     expect(restoredSubject.totalEpisodes, localSubject.totalEpisodes);
     expect(restoredSubject.totalVolumes, localSubject.totalVolumes);
@@ -324,11 +331,12 @@ void main() {
     expect(restoredCollection.volStatus, localCollection.volStatus);
   });
 
-  test('Bangumi subject extracts authors and metadata tags', () {
+  test('Bangumi subject extracts ranked metadata and author fields', () {
     final subject = BangumiSubject.fromJson({
       'id': 42,
       'name': 'Original',
       'name_cn': '中文',
+      'summary': '详情简介',
       'infobox': [
         {
           'key': '原作',
@@ -339,18 +347,55 @@ void main() {
         {'key': '作画', 'value': '漫画家'},
         {'key': '出版社', 'value': '出版社名称'},
       ],
-      'meta_tags': ['漫画', '青年'],
+      'meta_tags': ['漫画', '青年', 'Action'],
       'tags': [
-        {'name': '青年', 'count': 10},
-        {'name': '动作', 'count': 8},
+        {'name': 'action', 'count': 100},
+        {'name': '青年', 'count': 90},
+        {'name': '用户1', 'count': 80},
+        {'name': '用户2', 'count': 80},
+        {'name': '用户3', 'count': 70},
+        {'name': '用户4', 'count': 60},
+        {'name': '用户5', 'count': 50},
+        {'name': '用户6', 'count': 40},
+        {'name': '用户7', 'count': 30},
+        {'name': '用户8', 'count': 20},
+        {'name': '用户9', 'count': 10},
+        {'name': '用户10', 'count': 0},
+        {'name': '损坏标签'},
       ],
     });
 
+    expect(subject.metadataTitle, '中文');
+    expect(subject.summary, '详情简介');
     expect(subject.authors, ['原作者', '漫画家']);
-    expect(subject.tags, ['漫画', '青年', '动作']);
+    expect(subject.tags, [
+      '漫画',
+      '青年',
+      'Action',
+      '用户1',
+      '用户2',
+      '用户3',
+      '用户4',
+      '用户5',
+      '用户6',
+      '用户7',
+      '用户8',
+    ]);
     final restored = BangumiSubject.fromJson(subject.toJson());
     expect(restored.authors, subject.authors);
     expect(restored.tags, subject.tags);
+    expect(restored.summary, subject.summary);
+  });
+
+  test('Bangumi metadata title falls back to the original name', () {
+    final subject = BangumiSubject.fromJson({
+      'id': 43,
+      'name': ' Original title ',
+      'name_cn': '',
+    });
+
+    expect(subject.title, ' Original title ');
+    expect(subject.metadataTitle, 'Original title');
   });
 
   test('Bangumi settings have defaults', () {

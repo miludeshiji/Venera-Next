@@ -143,6 +143,57 @@ void main() {
     },
   );
 
+  test('metadata matching removes known release annotations', () async {
+    connectSettings();
+    gateway.searchResults = [
+      const BangumiSubject(
+        id: 42,
+        title: 'Cat\'s Eye',
+        originalTitle: 'キャッツ・アイ',
+        coverUrl: 'cover',
+        totalEpisodes: 24,
+        totalVolumes: 4,
+      ),
+    ];
+    gateway.subjects[42] = const BangumiSubject(
+      id: 42,
+      title: 'Cat\'s Eye',
+      originalTitle: 'キャッツ・アイ',
+      coverUrl: 'cover',
+      totalEpisodes: 24,
+      totalVolumes: 4,
+    );
+
+    for (final directoryTitle in [
+      'Cats Eye[Author][Chinese]',
+      'Cats Eye 语言：[Chinese]',
+      'Cats Eye 版本[无修正]',
+      'Cats Eye[DL版]',
+      'Cats Eye 汉化者：[某汉化组]',
+      'Cats Eye[Author][Chinese][无修正][DL版] 汉化者：[某汉化组]',
+    ]) {
+      expect((await service.matchSubjectForMetadata(directoryTitle))?.id, 42);
+    }
+
+    expect(gateway.searchKeywords, List.filled(6, 'Cats Eye'));
+  });
+
+  test(
+    'metadata matching preserves unrecognized bracketed title content',
+    () async {
+      connectSettings();
+      gateway.searchResults = const [];
+
+      await service.matchSubjectForMetadata('Work[Special] Volume 1');
+      await service.matchSubjectForMetadata('Work[Special][Author]');
+
+      expect(gateway.searchKeywords, [
+        'Work[Special] Volume 1',
+        'Work[Special][Author]',
+      ]);
+    },
+  );
+
   test(
     'metadata matching uses an author hint to resolve duplicate titles',
     () async {
@@ -205,26 +256,55 @@ void main() {
     expect(gateway.subjectCalls, isEmpty);
   });
 
-  test('binding invokes the configured metadata writer first', () async {
+  test('binding does not wait for the metadata writer', () async {
     connectSettings();
-    final events = <String>[];
+    final started = Completer<void>();
+    final release = Completer<void>();
     configureBangumiBindingMetadataHandler(({
       required String sourceKey,
       required String comicId,
       required BangumiSubject subject,
     }) async {
-      events.add('metadata:$sourceKey:$comicId:${subject.id}');
+      started.complete();
+      await release.future;
     });
 
-    await service.bind(
+    final result = await service
+        .bind(
+          sourceKey: 'webdav_library',
+          comicId: 'comic',
+          subject: subject(),
+          mode: BangumiProgressMode.episode,
+        )
+        .timeout(const Duration(seconds: 1));
+
+    expect(result.subjectId, 42);
+    expect(service.bindingFor('webdav_library', 'comic'), result);
+    await started.future;
+    expect(release.isCompleted, isFalse);
+    release.complete();
+    await pumpEventQueue();
+  });
+
+  test('background metadata failure does not undo a binding', () async {
+    connectSettings();
+    configureBangumiBindingMetadataHandler(({
+      required String sourceKey,
+      required String comicId,
+      required BangumiSubject subject,
+    }) async {
+      throw StateError('WebDAV unavailable');
+    });
+
+    final result = await service.bind(
       sourceKey: 'webdav_library',
       comicId: 'comic',
       subject: subject(),
       mode: BangumiProgressMode.episode,
     );
+    await pumpEventQueue();
 
-    expect(events, ['metadata:webdav_library:comic:42']);
-    expect(gateway.collectionCalls, [('alice', 42)]);
+    expect(service.bindingFor('webdav_library', 'comic'), result);
   });
 
   test('connect rejects an empty username without changing settings', () async {

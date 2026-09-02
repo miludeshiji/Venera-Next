@@ -555,6 +555,7 @@ void main() {
         'title': '猫之眼',
         'author': '北条司',
         'tags': ['动作', '漫画'],
+        'description': '一位怪盗与刑警之间的故事。',
         'chapters': [
           {'title': '第01卷', 'start': 1, 'end': 2},
           {'title': '第02卷', 'start': 3, 'end': 4},
@@ -572,13 +573,17 @@ void main() {
 
       expect(comics.success, isTrue);
       expect(comics.data.single.title, '猫之眼');
-      expect(comics.data.single.subtitle, '北条司');
-      expect(comics.data.single.tags, ['WebDAV', '动作', '漫画']);
+      expect(comics.data.single.subtitle, isNull);
+      expect(comics.data.single.tags, ['动作', '漫画']);
       expect(comics.data.single.cover, '/manga/猫之眼[北条司]/cover.jpg');
       expect(details.success, isTrue);
       expect(details.data.title, '猫之眼');
-      expect(details.data.subTitle, '北条司');
-      expect(details.data.tags['Tags'], ['动作', '漫画']);
+      expect(details.data.subTitle, isNull);
+      expect(details.data.description, '一位怪盗与刑警之间的故事。');
+      expect(details.data.tags, {
+        '作者': ['北条司'],
+        '标签': ['动作', '漫画'],
+      });
       expect(details.data.chapters!.allChapters, {
         '__cbz_range_0': '第01卷',
         '__cbz_range_1': '第02卷',
@@ -716,6 +721,7 @@ void main() {
         title: 'Cat Eye',
         author: 'Tsukasa Hojo',
         tags: ['Action'],
+        description: 'A trio of sisters run a café by day.',
         bangumiSubjectId: 123,
       );
     });
@@ -732,11 +738,12 @@ void main() {
       'title': 'Cat Eye',
       'author': 'Tsukasa Hojo',
       'tags': ['Action'],
+      'description': 'A trio of sisters run a café by day.',
       'chapters': null,
       'bangumiSubjectId': 123,
     });
     expect(comics.data.single.title, 'Cat Eye');
-    expect(comics.data.single.subtitle, 'Tsukasa Hojo');
+    expect(comics.data.single.subtitle, isNull);
   });
 
   test(
@@ -810,6 +817,7 @@ void main() {
       'title': 'Old title',
       'author': 'Old author',
       'tags': ['Old tag'],
+      'description': 'Existing description',
       'chapters': [
         {'title': 'Volume 1', 'start': 1, 'end': 2},
       ],
@@ -832,6 +840,7 @@ void main() {
       'title': 'Bangumi title',
       'author': 'Bangumi author',
       'tags': ['Bangumi tag'],
+      'description': 'Existing description',
       'chapters': [
         {'title': 'Volume 1', 'start': 1, 'end': 2},
       ],
@@ -839,7 +848,12 @@ void main() {
     });
     final details = await WebDavLibrarySource.loadComicInfo('Flat Book');
     expect(details.data.title, 'Bangumi title');
-    expect(details.data.subTitle, 'Bangumi author');
+    expect(details.data.subTitle, isNull);
+    expect(details.data.description, 'Existing description');
+    expect(details.data.tags, {
+      '作者': ['Bangumi author'],
+      '标签': ['Bangumi tag'],
+    });
   });
 }
 

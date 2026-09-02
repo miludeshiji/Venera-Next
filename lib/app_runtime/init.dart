@@ -69,10 +69,9 @@ void startBangumiAfterDataSync({
 
 ComicMetaData _metadataFromBangumiSubject(BangumiSubject subject) =>
     ComicMetaData(
-      title: subject.title.trim().isEmpty
-          ? subject.originalTitle
-          : subject.title,
+      title: subject.metadataTitle,
       author: subject.authors.join(', '),
+      description: subject.summary,
       tags: subject.tags,
       bangumiSubjectId: subject.id,
     );
@@ -93,7 +92,10 @@ Future<void> init() async {
     required BangumiSubject subject,
   }) async {
     if (sourceKey != WebDavLibrarySource.sourceKey) return;
-    final detailed = await BangumiService().getSubject(subject.id);
+    final service = BangumiService();
+    if (service.bindingFor(sourceKey, comicId)?.subjectId != subject.id) return;
+    final detailed = await service.getSubject(subject.id);
+    if (service.bindingFor(sourceKey, comicId)?.subjectId != subject.id) return;
     await WebDavLibrarySource.writeMetadata(
       comicId,
       _metadataFromBangumiSubject(detailed),

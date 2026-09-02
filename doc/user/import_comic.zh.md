@@ -145,11 +145,11 @@ WebDAV 漫画库是在线阅读渠道，和本地导入导出、WebDAV CBZ 归�
 
 ### Bangumi 自动刮削
 
-连接 Bangumi 后，同步 WebDAV 漫画库时会为缺少 `metadata.json` 的漫画自动搜索条目。自动匹配采用保守规则：文件夹名去除末尾的 `[作者]` 或 `【作者】` 提示后，必须与 Bangumi 中文名或原名精确匹配；存在多个同名条目时，只有作者提示能唯一匹配 Bangumi 作者信息才会采用结果。模糊或有歧义的结果不会写入。
+连接 Bangumi 后，同步 WebDAV 漫画库时会为缺少 `metadata.json` 的漫画自动搜索条目。搜索前会清理文件夹名末尾的 `[作者]` / `【作者】`、`语言：[Chinese]`、`版本[无修正]`、`[DL版]` 和 `汉化者：[汉化名]` 等发布注记；作品名中间无法确认的括号内容会保留。清理后的标题必须与 Bangumi 中文名或原名精确匹配；存在多个同名条目时，只有作者提示能唯一匹配 Bangumi 作者信息才会采用结果。模糊或有歧义的结果不会写入。
 
-匹配成功后，应用通过 WebDAV PUT 创建 UTF-8 `metadata.json`，写入 Bangumi 书名、作者、标签和 `bangumiSubjectId`。WebDAV 账号必须拥有漫画目录写权限。自动刮削不会覆盖任何已经存在的 `metadata.json`，也不会下载 Bangumi 封面；搜索失败、无唯一匹配或写入失败时继续按普通目录模式显示。强制同步会重新尝试尚未匹配的目录。
+匹配成功后，应用通过 WebDAV PUT 创建 UTF-8 `metadata.json`。标题优先使用 Bangumi `name_cn`，为空时使用 `name`；简介使用条目详情的 `summary`；作者来自条目人物信息；标签由全部官方 `meta_tags` 与按 `count` 降序排列的前 10 个用户标签合并去重。WebDAV 账号必须拥有漫画目录写权限。自动刮削不会覆盖任何已经存在的 `metadata.json`，也不会下载 Bangumi 封面；搜索失败、无唯一匹配或写入失败时继续按普通目录模式显示。强制同步会重新尝试尚未匹配的目录。
 
-用户在漫画详情页手动绑定 Bangumi 条目时，该条目被视为明确选择：对于 WebDAV 漫画，应用会用条目详情更新 `title`、`author`、`tags` 和 `bangumiSubjectId`。已有的合法 `chapters` 页码范围会保留。
+用户在漫画详情页手动绑定 Bangumi 条目时，该条目被视为明确选择。Bangumi 绑定完成后会立即结束前台加载，应用再在后台读取条目详情并更新 WebDAV 漫画的 `title`、`author`、`description`、`tags` 和 `bangumiSubjectId`；后台写入失败不会撤销已经成功的进度绑定。已有的合法 `chapters` 页码范围会保留。WebDAV 漫画详情将作者和标签显示在“信息”栏，不再把作者放在书名下方，也不再显示 `Source WebDAV`。
 
 ### 元数据标记的分层目录模式
 
@@ -171,7 +171,7 @@ WebDAV 漫画库是在线阅读渠道，和本地导入导出、WebDAV CBZ 归�
 
 应用会在同步 WebDAV 漫画库时递归查找带有 `metadata.json` 的目录，并将该目录作为一本漫画；其直接子目录作为章节。找到漫画根目录后不会继续把章节或更深层目录单独识别为漫画。漫画 ID 使用相对于 WebDAV 漫画库路径的目录路径，因此不同分类下的同名漫画不会互相覆盖。
 
-在这种模式下，漫画标题、作者和标签来自 `metadata.json`，章节名称和章节路径来自直接子目录。根目录下的 `cover.*` 只作为封面；如果根目录还有普通图片，它们会作为 `Images` 章节保留。
+在这种模式下，漫画标题、作者、简介和标签来自 `metadata.json`，章节名称和章节路径来自直接子目录。根目录下的 `cover.*` 只作为封面；如果根目录还有普通图片，它们会作为 `Images` 章节保留。
 
 当目录同时存在真实章节文件夹和 `metadata.json` 中的 `chapters` 页码范围时，真实章节文件夹优先，页码范围不会被强行映射到文件夹。只有根目录图片、没有章节文件夹时，`chapters[].start` 和 `chapters[].end` 才用于扁平 CBZ 目录的虚拟分章。
 
@@ -199,6 +199,7 @@ VeneraNext 导出的单本 CBZ 解压后通常是扁平图片目录：
 {
   "title": "猫之眼",
   "author": "北条司",
+  "description": "三姐妹经营咖啡店并寻找父亲失踪真相的故事。",
   "tags": ["动作", "漫画"],
   "chapters": [
     {"title": "第01卷", "start": 1, "end": 2},
@@ -214,6 +215,7 @@ VeneraNext 导出的单本 CBZ 解压后通常是扁平图片目录：
 |---|---|---|
 | `title` | 字符串 | 漫画标题；空字符串会回退为文件夹名 |
 | `author` | 字符串 | 作者，可为空字符串 |
+| `description` | 字符串 | 漫画简介，可为空字符串；Bangumi 刮削时来自条目详情的 `summary` |
 | `tags` | 字符串数组 | 漫画标签，可为空数组 |
 | `bangumiSubjectId` | 正整数或 `null` | 对应的 Bangumi Subject ID；自动刮削或手动绑定时写入 |
 | `chapters` | 数组或 `null` | 章节范围；为 `null` 或空数组时，根目录图片作为单章节 |

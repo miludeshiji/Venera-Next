@@ -156,11 +156,11 @@ Plain directory rules:
 
 ### Automatic Bangumi Scraping
 
-After Bangumi is connected, WebDAV library synchronization searches Bangumi for comics that do not have `metadata.json`. Matching is deliberately conservative: after removing a trailing `[Author]` or `【Author】` hint from the directory name, the remaining title must exactly match the Bangumi Chinese or original title. If several subjects have the same title, the author hint must uniquely match the Bangumi author metadata. Fuzzy or ambiguous results are not written.
+After Bangumi is connected, WebDAV library synchronization searches Bangumi for comics that do not have `metadata.json`. Before searching, the app removes trailing release annotations such as `[Author]` / `【Author】`, `语言：[Chinese]`, `版本[无修正]`, `[DL版]`, and `汉化者：[Group]`; unrecognized bracketed content inside the work title is preserved. The cleaned title must exactly match the Bangumi Chinese or original title. If several subjects have the same title, the author hint must uniquely match the Bangumi author metadata. Fuzzy or ambiguous results are not written.
 
-On a successful match, the app creates a UTF-8 `metadata.json` through WebDAV PUT and writes the Bangumi title, authors, tags, and `bangumiSubjectId`. The WebDAV account must have write access to the comic directory. Automatic scraping never replaces an existing `metadata.json` and does not download the Bangumi cover. Search, matching, or write failures fall back to plain directory mode. A forced synchronization retries directories that remain unmatched.
+On a successful match, the app creates a UTF-8 `metadata.json` through WebDAV PUT. The title uses Bangumi `name_cn`, falling back to `name` when empty; the description uses the subject detail `summary`; authors come from the subject infobox; tags combine all official `meta_tags` with the top 10 user tags ordered by descending `count`, then deduplicate the result. The WebDAV account must have write access to the comic directory. Automatic scraping never replaces an existing `metadata.json` and does not download the Bangumi cover. Search, matching, or write failures fall back to plain directory mode. A forced synchronization retries directories that remain unmatched.
 
-When the user manually binds a Bangumi subject from the comic details page, that explicit selection is authoritative. For a WebDAV comic, the app updates `title`, `author`, `tags`, and `bangumiSubjectId` from the selected subject details while preserving valid existing `chapters` page ranges.
+When the user manually binds a Bangumi subject from the comic details page, that explicit selection is authoritative. Foreground loading ends as soon as the Bangumi binding succeeds; the app then reads the subject details and updates `title`, `author`, `description`, `tags`, and `bangumiSubjectId` in the background. A background WebDAV failure does not undo the successful progress binding. Valid existing `chapters` page ranges are preserved. WebDAV details show authors and tags in the Information section instead of placing the author below the title, and no longer show `Source WebDAV`.
 
 ### Metadata-Marked Nested Layout
 
@@ -182,7 +182,7 @@ For a deeply nested WebDAV library, place `metadata.json` in the comic root to e
 
 During WebDAV synchronization, the app recursively searches for directories containing `metadata.json` and treats each marked directory as one comic. Its direct child directories become chapters. Once a comic root is found, the app does not expose its chapters or deeper directories as separate comics. Comic IDs use paths relative to the configured WebDAV library path, so same-named comics in different categories do not overwrite one another.
 
-In this mode, the title, author, and tags come from `metadata.json`, while chapter names and paths come from direct child directories. A root-level `cover.*` file is used only as the cover. Other root-level images are preserved in an `Images` chapter.
+In this mode, the title, author, description, and tags come from `metadata.json`, while chapter names and paths come from direct child directories. A root-level `cover.*` file is used only as the cover. Other root-level images are preserved in an `Images` chapter.
 
 When real chapter directories and `metadata.json` page ranges coexist, the real directory layout takes precedence; page ranges are not matched to directories by position. `chapters[].start` and `chapters[].end` are used for virtual chapters only when the root contains flat images and no chapter directories, which preserves the extracted CBZ layout.
 
@@ -210,6 +210,7 @@ A single-comic CBZ exported by VeneraNext normally has a flat image layout after
 {
   "title": "Cat's Eye",
   "author": "Tsukasa Hojo",
+  "description": "Three sisters run a café while searching for the truth about their missing father.",
   "tags": ["Action", "Manga"],
   "chapters": [
     {"title": "Volume 01", "start": 1, "end": 2},
@@ -225,6 +226,7 @@ Field rules:
 |---|---|---|
 | `title` | string | Comic title; an empty string falls back to the folder name |
 | `author` | string | Author; may be empty |
+| `description` | string | Comic description; may be empty; Bangumi scraping reads it from subject detail `summary` |
 | `tags` | string array | Comic tags; may be empty |
 | `bangumiSubjectId` | positive integer or `null` | Bangumi Subject ID written by automatic scraping or manual binding |
 | `chapters` | array or `null` | Chapter ranges; root images form one chapter when this is `null` or empty |

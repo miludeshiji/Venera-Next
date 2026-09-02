@@ -419,8 +419,8 @@ class WebDavLibrarySource {
               comic.title,
               comic.cover,
               comic.id,
-              comic.author,
-              <String>{'WebDAV', ...comic.tags}.toList(),
+              null,
+              comic.tags,
               '',
               sourceKey,
               null,
@@ -629,9 +629,9 @@ class WebDavLibrarySource {
       return Res(
         ComicDetails.fromJson({
           'title': snapshot.title,
-          'subtitle': snapshot.author,
+          'subtitle': null,
           'cover': snapshot.cover,
-          'description': '',
+          'description': snapshot.description,
           'tags': snapshot.detailTags,
           'chapters':
               snapshot.chapters.length == 1 &&
@@ -869,6 +869,7 @@ class WebDavLibrarySource {
       title: metadataTitle.isEmpty ? _directoryName(id) : metadataTitle,
       author: metadata?.author ?? '',
       tags: metadata?.tags ?? const [],
+      description: metadata?.description ?? '',
       cover: coverPath ?? '',
       chapters: chapterMap,
       metadataChapters: metadataChapters,
@@ -904,6 +905,9 @@ class WebDavLibrarySource {
         tags: metadata.tags.isEmpty
             ? existing?.tags ?? const []
             : metadata.tags,
+        description: metadata.description.trim().isEmpty
+            ? existing?.description ?? ''
+            : metadata.description,
         chapters: existing?.chapters ?? metadata.chapters,
         bangumiSubjectId:
             metadata.bangumiSubjectId ?? existing?.bangumiSubjectId,
@@ -1282,6 +1286,7 @@ class _WebDavComicSnapshot {
   const _WebDavComicSnapshot({
     required this.title,
     required this.author,
+    required this.description,
     required this.tags,
     required this.cover,
     required this.chapters,
@@ -1293,6 +1298,7 @@ class _WebDavComicSnapshot {
 
   final String title;
   final String author;
+  final String description;
   final List<String> tags;
   final String cover;
   final Map<String, String> chapters;
@@ -1308,6 +1314,7 @@ class _WebDavComicSnapshot {
     return _WebDavComicSnapshot(
       title: json['title'] as String,
       author: json['author'] as String? ?? '',
+      description: json['description'] as String? ?? '',
       tags: (json['tags'] as List?)?.whereType<String>().toList() ?? const [],
       cover: json['cover'] as String? ?? '',
       chapters: chapters is Map
@@ -1345,6 +1352,7 @@ class _WebDavComicSnapshot {
     'formatVersion': webDavLibrarySnapshotFormatVersion,
     'title': title,
     'author': author,
+    'description': description,
     'tags': tags,
     'cover': cover,
     'chapters': chapters,
@@ -1363,10 +1371,8 @@ class _WebDavComicSnapshot {
     ],
   };
 
-  List<String> get listTags => <String>{'WebDAV', ...tags}.toList();
-
   Map<String, List<String>> get detailTags => {
-    'Source': const ['WebDAV'],
-    if (tags.isNotEmpty) 'Tags': tags,
+    if (author.trim().isNotEmpty) '作者': [author],
+    if (tags.isNotEmpty) '标签': tags,
   };
 }

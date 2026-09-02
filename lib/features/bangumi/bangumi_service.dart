@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:venera_next/features/bangumi/bangumi_api.dart';
 import 'package:venera_next/features/bangumi/bangumi_models.dart';
 import 'package:venera_next/foundation/appdata.dart';
+import 'package:venera_next/foundation/log.dart';
 
 typedef BangumiGatewayFactory = BangumiGateway Function(String token);
 typedef BangumiSettingsSaver = Future<void> Function();
@@ -246,20 +247,48 @@ class BangumiService {
     return matched.length == 1 ? matched.single : null;
   }
 
+  static final _metadataLabeledSuffix = RegExp(
+    r'\s*(?:语言|language|版本|version|汉化者|汉化组)\s*[:：]?\s*'
+    r'(?:\[([^\[\]]+)\]|【([^【】]+)】)\s*$',
+    caseSensitive: false,
+  );
+  static final _metadataBracketSuffix = RegExp(
+    r'^(.*?)(?:\[([^\[\]]+)\]|【([^【】]+)】)\s*$',
+  );
+  static const _metadataNoiseMarkers = {'chinese', '中文', '无修正', 'dl版'};
+
   static ({String title, String? author}) _metadataTitleHints(String value) {
-    final trimmed = value.trim();
-    for (final pattern in [
-      RegExp(r'^(.*?)\s*\[([^\[\]]+)\]\s*$'),
-      RegExp(r'^(.*?)\s*【([^【】]+)】\s*$'),
-    ]) {
-      final match = pattern.firstMatch(trimmed);
-      final title = match?.group(1)?.trim() ?? '';
-      final author = match?.group(2)?.trim() ?? '';
-      if (title.isNotEmpty && author.isNotEmpty) {
-        return (title: title, author: author);
+    var remaining = value.trim();
+    while (true) {
+      final match = _metadataLabeledSuffix.firstMatch(remaining);
+      if (match == null) break;
+      remaining = remaining.substring(0, match.start).trimRight();
+    }
+    while (true) {
+      final match = _metadataBracketSuffix.firstMatch(remaining);
+      if (match == null) break;
+      final marker = (match.group(2) ?? match.group(3) ?? '').trim();
+      if (!_metadataNoiseMarkers.contains(marker.toLowerCase())) break;
+      remaining = match.group(1)!.trimRight();
+    }
+
+    String? author;
+    final authorMatch = _metadataBracketSuffix.firstMatch(remaining);
+    if (authorMatch != null) {
+      final prefix = authorMatch.group(1)!.trimRight();
+      final candidate = (authorMatch.group(2) ?? authorMatch.group(3) ?? '')
+          .trim();
+      if (candidate.isNotEmpty &&
+          _metadataBracketSuffix.firstMatch(prefix) == null) {
+        author = candidate;
+        remaining = prefix;
       }
     }
-    return (title: trimmed, author: null);
+    final title = remaining
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .replaceFirst(RegExp(r'[\s\-—_·|｜,，;；]+$'), '')
+        .trim();
+    return (title: title, author: author);
   }
 
   static String _normalizeMetadataMatchValue(String value) => value
@@ -302,16 +331,7 @@ class BangumiService {
     required BangumiProgressMode mode,
     BangumiProgress? reliableLocalProgress,
   }) => _runBinding(sourceKey, comicId, () async {
-    if (subject.id > 0 &&
-        subject.totalEpisodes >= 0 &&
-        subject.totalVolumes >= 0) {
-      await _bindingMetadataHandler?.call(
-        sourceKey: sourceKey,
-        comicId: comicId,
-        subject: subject,
-      );
-    }
-    return _runConnection(
+    final binding = await _runConnection(
       () => _bind(
         sourceKey: sourceKey,
         comicId: comicId,
@@ -320,7 +340,29 @@ class BangumiService {
         reliableLocalProgress: reliableLocalProgress,
       ),
     );
+    _scheduleBindingMetadataWrite(
+      sourceKey: sourceKey,
+      comicId: comicId,
+      subject: subject,
+    );
+    return binding;
   });
+
+  void _scheduleBindingMetadataWrite({
+    required String sourceKey,
+    required String comicId,
+    required BangumiSubject subject,
+  }) {
+    final handler = _bindingMetadataHandler;
+    if (handler == null) return;
+    unawaited(
+      Future.sync(
+        () => handler(sourceKey: sourceKey, comicId: comicId, subject: subject),
+      ).catchError((Object error, StackTrace stackTrace) {
+        Log.error('Bangumi metadata write', error, stackTrace);
+      }),
+    );
+  }
 
   Future<BangumiBinding> _bind({
     required String sourceKey,

@@ -3,6 +3,7 @@ class ComicMetaData {
     required this.title,
     required this.author,
     required this.tags,
+    this.description = '',
     this.chapters,
     this.bangumiSubjectId,
   });
@@ -11,6 +12,7 @@ class ComicMetaData {
     final title = json['title'];
     final author = json['author'];
     final tags = json['tags'];
+    final description = json['description'] ?? '';
     final chapters = json['chapters'];
     final bangumiSubjectId = json['bangumiSubjectId'];
 
@@ -22,6 +24,9 @@ class ComicMetaData {
     }
     if (tags is! List || tags.any((tag) => tag is! String)) {
       throw const FormatException('metadata.tags must be a string array');
+    }
+    if (description is! String) {
+      throw const FormatException('metadata.description must be a string');
     }
     if (chapters != null && chapters is! List) {
       throw const FormatException('metadata.chapters must be an array or null');
@@ -37,6 +42,7 @@ class ComicMetaData {
       title: title,
       author: author,
       tags: List<String>.from(tags),
+      description: description,
       chapters: chapters?.map<ComicChapter>((chapter) {
         if (chapter is! Map) {
           throw const FormatException(
@@ -54,6 +60,7 @@ class ComicMetaData {
   final String title;
   final String author;
   final List<String> tags;
+  final String description;
   final List<ComicChapter>? chapters;
   final int? bangumiSubjectId;
 
@@ -61,6 +68,7 @@ class ComicMetaData {
     'title': title,
     'author': author,
     'tags': tags,
+    'description': description,
     'chapters': chapters?.map((chapter) => chapter.toJson()).toList(),
     if (bangumiSubjectId != null) 'bangumiSubjectId': bangumiSubjectId,
   };

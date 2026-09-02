@@ -42,11 +42,13 @@ void main() {
         title: 'Title',
         author: 'Author',
         tags: ['Tag'],
+        description: 'Summary',
         bangumiSubjectId: 42,
       );
 
       final restored = ComicMetaData.fromJson(metadata.toJson());
 
+      expect(restored.description, 'Summary');
       expect(restored.bangumiSubjectId, 42);
       expect(restored.toJson()['bangumiSubjectId'], 42);
     });
@@ -59,6 +61,26 @@ void main() {
           'tags': <String>[],
           'chapters': null,
           'bangumiSubjectId': 0,
+        }),
+        throwsFormatException,
+      );
+    });
+
+    test('defaults a missing description and rejects invalid types', () {
+      final legacy = ComicMetaData.fromJson({
+        'title': 'Title',
+        'author': '',
+        'tags': <String>[],
+        'chapters': null,
+      });
+      expect(legacy.description, isEmpty);
+      expect(
+        () => ComicMetaData.fromJson({
+          'title': 'Title',
+          'author': '',
+          'tags': <String>[],
+          'description': 1,
+          'chapters': null,
         }),
         throwsFormatException,
       );

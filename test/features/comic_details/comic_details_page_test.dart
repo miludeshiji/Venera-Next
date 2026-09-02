@@ -21,6 +21,8 @@ void main() {
       expect(isReadOnlyComicInfoNamespaceForTesting('views'), isTrue);
       expect(isReadOnlyComicInfoNamespaceForTesting('浏览量'), isTrue);
       expect(isReadOnlyComicInfoNamespaceForTesting('last update'), isTrue);
+      expect(isReadOnlyComicInfoNamespaceForTesting('作者'), isTrue);
+      expect(isReadOnlyComicInfoNamespaceForTesting('标签'), isTrue);
 
       expect(isReadOnlyComicInfoNamespaceForTesting('artist'), isFalse);
       expect(isReadOnlyComicInfoNamespaceForTesting('language'), isFalse);

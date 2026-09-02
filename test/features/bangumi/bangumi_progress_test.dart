@@ -17,6 +17,7 @@ void main() {
     appdata.settings['bangumiAccessToken'] = 'token';
     appdata.settings['bangumiUsername'] = 'alice';
     appdata.settings['bangumiBindings'] = <String, dynamic>{};
+    configureBangumiBindingMetadataHandler(null);
     gateway = _Gateway();
   });
 
@@ -145,6 +146,32 @@ void main() {
     expect(find.byKey(const Key('bangumi-progress-field')), findsOneWidget);
     expect(find.byKey(const Key('bangumi-rating-field')), findsOneWidget);
     expect(find.byKey(const Key('bangumi-status')), findsOneWidget);
+  });
+
+  testWidgets('binding stops loading while metadata writing continues', (
+    tester,
+  ) async {
+    final metadataWrite = Completer<void>();
+    configureBangumiBindingMetadataHandler(
+      ({
+        required String sourceKey,
+        required String comicId,
+        required BangumiSubject subject,
+      }) => metadataWrite.future,
+    );
+    addTearDown(() {
+      configureBangumiBindingMetadataHandler(null);
+      if (!metadataWrite.isCompleted) metadataWrite.complete();
+    });
+
+    await tester.pumpWidget(_panel(gateway));
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('bangumi-bind')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('bangumi-progress-field')), findsOneWidget);
+    expect(metadataWrite.isCompleted, isFalse);
   });
 
   testWidgets('bound panel exposes all Bangumi book statuses', (tester) async {
