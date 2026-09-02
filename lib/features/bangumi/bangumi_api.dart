@@ -49,7 +49,6 @@ class BangumiApi implements BangumiGateway {
         'sort': 'match',
         'filter': {
           'type': [1],
-          'nsfw': true,
         },
       },
       queryParameters: const {'limit': 20},

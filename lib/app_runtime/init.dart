@@ -11,6 +11,7 @@ import 'package:venera_next/foundation/cache_manager.dart';
 import 'package:venera_next/foundation/comic_type.dart';
 import 'package:venera_next/features/comic_details/comic_details.dart';
 import 'package:venera_next/features/comic_source/comic_source.dart';
+import 'package:venera_next/features/comic_storage/comic_storage.dart';
 import 'package:venera_next/features/comic_widgets/comic_widgets.dart';
 import 'package:venera_next/features/favorites/favorites.dart';
 import 'package:venera_next/features/history/history.dart';
@@ -66,10 +67,38 @@ void startBangumiAfterDataSync({
   );
 }
 
+ComicMetaData _metadataFromBangumiSubject(BangumiSubject subject) =>
+    ComicMetaData(
+      title: subject.title.trim().isEmpty
+          ? subject.originalTitle
+          : subject.title,
+      author: subject.authors.join(', '),
+      tags: subject.tags,
+      bangumiSubjectId: subject.id,
+    );
+
 Future<void> init() async {
   await App.init().wait();
   await SingleInstanceCookieJar.createInstance();
   configureComicTypeSourceKeyResolver();
+  WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+    final service = BangumiService();
+    if (!service.isConnected) return null;
+    final subject = await service.matchSubjectForMetadata(directoryTitle);
+    return subject == null ? null : _metadataFromBangumiSubject(subject);
+  }, isEnabled: () => BangumiService().isConnected);
+  configureBangumiBindingMetadataHandler(({
+    required String sourceKey,
+    required String comicId,
+    required BangumiSubject subject,
+  }) async {
+    if (sourceKey != WebDavLibrarySource.sourceKey) return;
+    final detailed = await BangumiService().getSubject(subject.id);
+    await WebDavLibrarySource.writeMetadata(
+      comicId,
+      _metadataFromBangumiSubject(detailed),
+    );
+  });
   configureReaderChapterCompletedHandler(
     (event) => BangumiService().onChapterCompleted(
       sourceKey: event.sourceKey,
@@ -136,7 +165,12 @@ Future<void> init() async {
   final dataSync = DataSync();
   startBangumiAfterDataSync(
     waitForDownload: dataSync.waitForDownload,
-    createInitializer: () => BangumiService().initialize,
+    createInitializer: () => () async {
+      await BangumiService().initialize();
+      if (BangumiService().isConnected) {
+        unawaited(WebDavLibrarySource.synchronize());
+      }
+    },
   );
   WebDavLibrarySource.initializeAutoSync();
   CacheManager().setLimitSize(appdata.settings['cacheSize']);

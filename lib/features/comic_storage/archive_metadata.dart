@@ -4,6 +4,7 @@ class ComicMetaData {
     required this.author,
     required this.tags,
     this.chapters,
+    this.bangumiSubjectId,
   });
 
   factory ComicMetaData.fromJson(Map<String, dynamic> json) {
@@ -11,6 +12,7 @@ class ComicMetaData {
     final author = json['author'];
     final tags = json['tags'];
     final chapters = json['chapters'];
+    final bangumiSubjectId = json['bangumiSubjectId'];
 
     if (title is! String) {
       throw const FormatException('metadata.title must be a string');
@@ -23,6 +25,12 @@ class ComicMetaData {
     }
     if (chapters != null && chapters is! List) {
       throw const FormatException('metadata.chapters must be an array or null');
+    }
+    if (bangumiSubjectId != null &&
+        (bangumiSubjectId is! int || bangumiSubjectId <= 0)) {
+      throw const FormatException(
+        'metadata.bangumiSubjectId must be a positive integer or null',
+      );
     }
 
     final result = ComicMetaData(
@@ -37,6 +45,7 @@ class ComicMetaData {
         }
         return ComicChapter.fromJson(Map<String, dynamic>.from(chapter));
       }).toList(),
+      bangumiSubjectId: bangumiSubjectId as int?,
     );
     result.validateChapterRanges();
     return result;
@@ -46,12 +55,14 @@ class ComicMetaData {
   final String author;
   final List<String> tags;
   final List<ComicChapter>? chapters;
+  final int? bangumiSubjectId;
 
   Map<String, dynamic> toJson() => {
     'title': title,
     'author': author,
     'tags': tags,
     'chapters': chapters?.map((chapter) => chapter.toJson()).toList(),
+    if (bangumiSubjectId != null) 'bangumiSubjectId': bangumiSubjectId,
   };
 
   void validateChapterRanges({int? pageCount}) {

@@ -154,6 +154,14 @@ Plain directory rules:
 - The preferred cover is a root image whose base name is `cover`. Supported extensions are `jpg`, `jpeg`, `png`, `webp`, `gif`, `jpe`, and `avif`. Without one, the app tries the first root page, then `cover.*` or the first page in the first readable chapter.
 - Neither `metadata.json` nor `ComicInfo.xml` is required.
 
+### Automatic Bangumi Scraping
+
+After Bangumi is connected, WebDAV library synchronization searches Bangumi for comics that do not have `metadata.json`. Matching is deliberately conservative: after removing a trailing `[Author]` or `【Author】` hint from the directory name, the remaining title must exactly match the Bangumi Chinese or original title. If several subjects have the same title, the author hint must uniquely match the Bangumi author metadata. Fuzzy or ambiguous results are not written.
+
+On a successful match, the app creates a UTF-8 `metadata.json` through WebDAV PUT and writes the Bangumi title, authors, tags, and `bangumiSubjectId`. The WebDAV account must have write access to the comic directory. Automatic scraping never replaces an existing `metadata.json` and does not download the Bangumi cover. Search, matching, or write failures fall back to plain directory mode. A forced synchronization retries directories that remain unmatched.
+
+When the user manually binds a Bangumi subject from the comic details page, that explicit selection is authoritative. For a WebDAV comic, the app updates `title`, `author`, `tags`, and `bangumiSubjectId` from the selected subject details while preserving valid existing `chapters` page ranges.
+
 ### Metadata-Marked Nested Layout
 
 For a deeply nested WebDAV library, place `metadata.json` in the comic root to explicitly mark that directory as one comic:
@@ -206,7 +214,8 @@ A single-comic CBZ exported by VeneraNext normally has a flat image layout after
   "chapters": [
     {"title": "Volume 01", "start": 1, "end": 2},
     {"title": "Volume 02", "start": 3, "end": 4}
-  ]
+  ],
+  "bangumiSubjectId": 123456
 }
 ```
 
@@ -217,6 +226,7 @@ Field rules:
 | `title` | string | Comic title; an empty string falls back to the folder name |
 | `author` | string | Author; may be empty |
 | `tags` | string array | Comic tags; may be empty |
+| `bangumiSubjectId` | positive integer or `null` | Bangumi Subject ID written by automatic scraping or manual binding |
 | `chapters` | array or `null` | Chapter ranges; root images form one chapter when this is `null` or empty |
 | `chapters[].title` | string | Non-empty chapter display name |
 | `chapters[].start` | integer | Inclusive first page, starting at 1 |
@@ -226,7 +236,7 @@ Chapter ranges must be ordered, non-overlapping, non-reversed, and within the ac
 
 `metadata.json` must use UTF-8; its file name is matched case-insensitively. `ComicInfo.xml` remains in the exported CBZ for compatibility with other readers, while the VeneraNext WebDAV library currently uses `metadata.json` as its enhanced metadata source.
 
-If metadata is missing or unreadable, JSON is malformed, field types are invalid, or chapter ranges fail validation, the app logs a warning and falls back to plain directory mode. The comic remains visible under its folder name, and directory images and chapter folders remain readable.
+When metadata is missing and Bangumi is connected, the app first attempts the conservative automatic match described above and otherwise falls back to plain directory mode. If a metadata file already exists but is unreadable, malformed, has invalid field types, or contains invalid chapter ranges, the app logs a warning and falls back without automatically replacing that file. The comic remains visible under its folder name, and directory images and chapter folders remain readable.
 
 This `metadata.json` is the single-comic CBZ metadata format. It is not the comic-list format inside a `.venera-comics` batch export, and the two formats are not interchangeable.
 

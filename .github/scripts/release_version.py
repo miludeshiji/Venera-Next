@@ -9,7 +9,7 @@ CONFIG_PATH = ROOT / "release.json"
 PUBSPEC_PATH = ROOT / "pubspec.yaml"
 CHANGELOG_PATH = ROOT / "CHANGELOG.md"
 
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-rc\.\d+)?$")
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-(?:rc\.\d+|beta\d+))?$")
 
 
 class ReleaseVersionError(RuntimeError):
@@ -41,7 +41,7 @@ def load_release_config() -> dict:
     build = config.get("build")
     if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
         raise ReleaseVersionError(
-            "release.json version must look like 1.2.3 or 1.2.3-rc.1"
+            "release.json version must look like 1.2.3, 1.2.3-rc.1, or 1.2.3-beta1"
         )
     if not isinstance(build, int) or build <= 0:
         raise ReleaseVersionError("release.json build must be a positive integer")

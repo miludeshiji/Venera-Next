@@ -313,6 +313,21 @@ class BangumiUser {
 }
 
 class BangumiSubject {
+  static const _authorInfoboxKeys = {
+    '作者',
+    '著者',
+    '原作',
+    '作画',
+    '漫画',
+    '脚本',
+    '剧本',
+    '繪者',
+    '绘者',
+    'author',
+    'writer',
+    'artist',
+  };
+
   final int id;
   final String title;
   final String originalTitle;
@@ -320,6 +335,8 @@ class BangumiSubject {
   final int totalEpisodes;
   final int totalVolumes;
   final String? platform;
+  final List<String> authors;
+  final List<String> tags;
 
   const BangumiSubject({
     required this.id,
@@ -329,6 +346,8 @@ class BangumiSubject {
     required this.totalEpisodes,
     required this.totalVolumes,
     this.platform,
+    this.authors = const [],
+    this.tags = const [],
   });
 
   factory BangumiSubject.fromJson(Map<String, dynamic> json) {
@@ -337,6 +356,7 @@ class BangumiSubject {
     final chineseTitle = (json['name_cn'] ?? json['title']) as String? ?? '';
     final images = json['images'];
     final apiCoverUrl = images is Map ? images['common'] as String? : null;
+    final localAuthors = _stringValues(json['authors']);
     return BangumiSubject(
       id: (json['id'] as num?)?.toInt() ?? 0,
       title: chineseTitle.isNotEmpty ? chineseTitle : originalTitle,
@@ -347,6 +367,10 @@ class BangumiSubject {
       totalVolumes:
           ((json['volumes'] ?? json['totalVolumes']) as num?)?.toInt() ?? 0,
       platform: json['platform'] as String?,
+      authors: localAuthors.isNotEmpty
+          ? localAuthors
+          : _authorsFromInfobox(json['infobox']),
+      tags: _tagsFromJson(json),
     );
   }
 
@@ -358,7 +382,66 @@ class BangumiSubject {
     'totalEpisodes': totalEpisodes,
     'totalVolumes': totalVolumes,
     'platform': platform,
+    'authors': authors,
+    'tags': tags,
   };
+
+  static List<String> _authorsFromInfobox(Object? raw) {
+    if (raw is! List) return const [];
+    final result = <String>[];
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final key = item['key'];
+      if (key is! String ||
+          !_authorInfoboxKeys.contains(key.trim().toLowerCase())) {
+        continue;
+      }
+      _addUnique(result, _wikiValues(item['value']));
+    }
+    return result;
+  }
+
+  static List<String> _tagsFromJson(Map<String, dynamic> json) {
+    final result = <String>[];
+    _addUnique(result, _stringValues(json['meta_tags']));
+    final rawTags = json['tags'];
+    if (rawTags is List) {
+      for (final item in rawTags) {
+        if (item is String) {
+          _addUnique(result, [item]);
+        } else if (item is Map && item['name'] is String) {
+          _addUnique(result, [item['name'] as String]);
+        }
+      }
+    }
+    return result;
+  }
+
+  static List<String> _wikiValues(Object? value) {
+    if (value is String) return [value];
+    if (value is! List) return const [];
+    final result = <String>[];
+    for (final item in value) {
+      if (item is String) {
+        result.add(item);
+      } else if (item is Map && item['v'] is String) {
+        result.add(item['v'] as String);
+      }
+    }
+    return result;
+  }
+
+  static List<String> _stringValues(Object? value) =>
+      value is List ? value.whereType<String>().toList() : const [];
+
+  static void _addUnique(List<String> target, Iterable<String> values) {
+    for (final value in values) {
+      final normalized = value.trim();
+      if (normalized.isNotEmpty && !target.contains(normalized)) {
+        target.add(normalized);
+      }
+    }
+  }
 }
 
 class BangumiCollection {

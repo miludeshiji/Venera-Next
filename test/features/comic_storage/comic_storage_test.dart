@@ -36,6 +36,35 @@ void main() {
     });
   });
 
+  group('archive metadata', () {
+    test('round-trips an optional Bangumi subject id', () {
+      const metadata = ComicMetaData(
+        title: 'Title',
+        author: 'Author',
+        tags: ['Tag'],
+        bangumiSubjectId: 42,
+      );
+
+      final restored = ComicMetaData.fromJson(metadata.toJson());
+
+      expect(restored.bangumiSubjectId, 42);
+      expect(restored.toJson()['bangumiSubjectId'], 42);
+    });
+
+    test('rejects an invalid Bangumi subject id', () {
+      expect(
+        () => ComicMetaData.fromJson({
+          'title': 'Title',
+          'author': '',
+          'tags': <String>[],
+          'chapters': null,
+          'bangumiSubjectId': 0,
+        }),
+        throwsFormatException,
+      );
+    });
+  });
+
   group('comic file system layout', () {
     test('uses root pages for a mixed flat and chapter layout', () {
       final temp = Directory.systemTemp.createTempSync('comic_layout_');

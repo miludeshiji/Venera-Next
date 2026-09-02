@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:venera_next/features/webdav_library/webdav_library.dart';
+import 'package:venera_next/features/comic_storage/comic_storage.dart';
 import 'package:venera_next/features/webdav_library/webdav_library_cache.dart';
 import 'package:venera_next/foundation/app.dart';
 import 'package:venera_next/foundation/appdata.dart';
@@ -16,6 +17,7 @@ void main() {
     dataDir = Directory.systemTemp.createTempSync('venera-webdav-library-');
     App.dataPath = dataDir.path;
     WebDavLibrarySource.resetCacheForTesting();
+    WebDavLibrarySource.configureMetadataScraper(null);
     ops = _FakeWebDavLibraryOps();
     WebDavLibrarySource.ops = ops;
     appdata.settings['webdavComicLibrary'] = [
@@ -33,6 +35,7 @@ void main() {
     }
     WebDavLibrarySource.resetOps();
     WebDavLibrarySource.resetCacheForTesting();
+    WebDavLibrarySource.configureMetadataScraper(null);
     appdata.settings['webdavComicLibrary'] = [];
     appdata.settings['webdavComicLibraryPath'] = '/venera_comics/';
     appdata.settings['webdavComicLibraryAutoSync'] = true;
@@ -699,6 +702,145 @@ void main() {
       expect(config['headers'], {'authorization': 'Basic dXNlcjpwYXNz'});
     },
   );
+  test('missing metadata is scraped and written back to WebDAV', () async {
+    ops.dirs['/manga/'] = const [
+      WebDavLibraryEntry(name: 'Cat Eye[Tsukasa Hojo]', isDirectory: true),
+    ];
+    ops.dirs['/manga/Cat Eye[Tsukasa Hojo]/'] = const [
+      WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+    ];
+    final scrapedTitles = <String>[];
+    WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+      scrapedTitles.add(directoryTitle);
+      return const ComicMetaData(
+        title: 'Cat Eye',
+        author: 'Tsukasa Hojo',
+        tags: ['Action'],
+        bangumiSubjectId: 123,
+      );
+    });
+
+    final sync = await WebDavLibrarySource.synchronize();
+    final comics = await WebDavLibrarySource.loadComics(1);
+    final written = jsonDecode(
+      ops.writtenTexts['/manga/Cat Eye[Tsukasa Hojo]/metadata.json']!,
+    );
+
+    expect(sync.success, isTrue);
+    expect(scrapedTitles, ['Cat Eye[Tsukasa Hojo]']);
+    expect(written, {
+      'title': 'Cat Eye',
+      'author': 'Tsukasa Hojo',
+      'tags': ['Action'],
+      'chapters': null,
+      'bangumiSubjectId': 123,
+    });
+    expect(comics.data.single.title, 'Cat Eye');
+    expect(comics.data.single.subtitle, 'Tsukasa Hojo');
+  });
+
+  test(
+    'a later Bangumi connection scrapes an unchanged cached comic',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Book', isDirectory: true, eTag: 'v1'),
+      ];
+      ops.dirs['/manga/Book/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      var enabled = false;
+      var scrapeCalls = 0;
+      WebDavLibrarySource.configureMetadataScraper((_) async {
+        scrapeCalls++;
+        return const ComicMetaData(
+          title: 'Matched book',
+          author: 'Author',
+          tags: [],
+          bangumiSubjectId: 321,
+        );
+      }, isEnabled: () => enabled);
+      await WebDavLibrarySource.synchronize();
+      enabled = true;
+
+      final sync = await WebDavLibrarySource.synchronize();
+
+      expect(sync.success, isTrue);
+      expect(scrapeCalls, 1);
+      expect(ops.writtenTexts, contains('/manga/Book/metadata.json'));
+    },
+  );
+
+  test('existing metadata is never replaced by automatic scraping', () async {
+    ops.dirs['/manga/Book/'] = const [
+      WebDavLibraryEntry(name: 'metadata.json', isDirectory: false),
+      WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+    ];
+    ops.textFiles['/manga/Book/metadata.json'] = jsonEncode({
+      'title': 'Existing title',
+      'author': 'Existing author',
+      'tags': ['Existing tag'],
+      'chapters': null,
+    });
+    var scrapeCalls = 0;
+    WebDavLibrarySource.configureMetadataScraper((_) async {
+      scrapeCalls++;
+      return const ComicMetaData(
+        title: 'Replacement',
+        author: 'Replacement',
+        tags: [],
+        bangumiSubjectId: 456,
+      );
+    });
+
+    final details = await WebDavLibrarySource.loadComicInfo('Book');
+
+    expect(details.success, isTrue);
+    expect(details.data.title, 'Existing title');
+    expect(scrapeCalls, 0);
+    expect(ops.writtenTexts, isEmpty);
+  });
+
+  test('manual metadata writes preserve existing chapter ranges', () async {
+    ops.dirs['/manga/Flat Book/'] = const [
+      WebDavLibraryEntry(name: 'metadata.JSON', isDirectory: false),
+      WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      WebDavLibraryEntry(name: '002.jpg', isDirectory: false),
+    ];
+    ops.textFiles['/manga/Flat Book/metadata.JSON'] = jsonEncode({
+      'title': 'Old title',
+      'author': 'Old author',
+      'tags': ['Old tag'],
+      'chapters': [
+        {'title': 'Volume 1', 'start': 1, 'end': 2},
+      ],
+    });
+
+    await WebDavLibrarySource.writeMetadata(
+      'Flat Book',
+      const ComicMetaData(
+        title: 'Bangumi title',
+        author: 'Bangumi author',
+        tags: ['Bangumi tag'],
+        bangumiSubjectId: 789,
+      ),
+    );
+    final written = jsonDecode(
+      ops.writtenTexts['/manga/Flat Book/metadata.JSON']!,
+    );
+
+    expect(written, {
+      'title': 'Bangumi title',
+      'author': 'Bangumi author',
+      'tags': ['Bangumi tag'],
+      'chapters': [
+        {'title': 'Volume 1', 'start': 1, 'end': 2},
+      ],
+      'bangumiSubjectId': 789,
+    });
+    final details = await WebDavLibrarySource.loadComicInfo('Flat Book');
+    expect(details.data.title, 'Bangumi title');
+    expect(details.data.subTitle, 'Bangumi author');
+  });
 }
 
 class _FakeWebDavLibraryOps implements WebDavLibraryOps {
@@ -707,6 +849,7 @@ class _FakeWebDavLibraryOps implements WebDavLibraryOps {
   final textFiles = <String, String>{};
   final readPaths = <String>[];
   final textReadPaths = <String>[];
+  final writtenTexts = <String, String>{};
   final blockers = <String, Completer<void>>{};
 
   @override
@@ -727,6 +870,30 @@ class _FakeWebDavLibraryOps implements WebDavLibraryOps {
     final value = textFiles[remotePath];
     if (value == null) throw StateError('Missing text file: $remotePath');
     return value;
+  }
+
+  @override
+  Future<void> writeText(
+    WebDavLibraryConfig config,
+    String remotePath,
+    String content,
+  ) async {
+    writtenTexts[remotePath] = content;
+    textFiles[remotePath] = content;
+    final separator = remotePath.lastIndexOf('/');
+    final directoryPath = remotePath.substring(0, separator + 1);
+    final fileName = remotePath.substring(separator + 1);
+    final entries = List<WebDavLibraryEntry>.from(
+      dirs[directoryPath] ?? const [],
+    );
+    if (!entries.any(
+      (entry) =>
+          !entry.isDirectory &&
+          entry.name.toLowerCase() == fileName.toLowerCase(),
+    )) {
+      entries.add(WebDavLibraryEntry(name: fileName, isDirectory: false));
+      dirs[directoryPath] = entries;
+    }
   }
 
   @override

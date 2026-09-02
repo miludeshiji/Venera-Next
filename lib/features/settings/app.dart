@@ -184,6 +184,9 @@ class _AppSettingsState extends State<AppSettings> {
               context,
               BangumiSettingsPage(
                 onConnectionChanged: () {
+                  if (BangumiService().isConnected) {
+                    unawaited(WebDavLibrarySource.synchronize());
+                  }
                   if (mounted) setState(() {});
                 },
               ),

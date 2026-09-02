@@ -9,6 +9,20 @@ typedef BangumiGatewayFactory = BangumiGateway Function(String token);
 typedef BangumiSettingsSaver = Future<void> Function();
 typedef BangumiRetryTimerFactory =
     Timer Function(Duration duration, void Function() callback);
+typedef BangumiBindingMetadataHandler =
+    Future<void> Function({
+      required String sourceKey,
+      required String comicId,
+      required BangumiSubject subject,
+    });
+
+BangumiBindingMetadataHandler? _bindingMetadataHandler;
+
+void configureBangumiBindingMetadataHandler(
+  BangumiBindingMetadataHandler? handler,
+) {
+  _bindingMetadataHandler = handler;
+}
 
 class BangumiProgressDecreaseRequired implements Exception {
   const BangumiProgressDecreaseRequired({
@@ -193,6 +207,68 @@ class BangumiService {
 
   Future<BangumiSubject> getSubject(int subjectId) =>
       _runConnection(() => _gateway().getSubject(subjectId));
+  Future<BangumiSubject?> matchSubjectForMetadata(String directoryTitle) =>
+      _runConnection(() => _matchSubjectForMetadata(directoryTitle));
+
+  Future<BangumiSubject?> _matchSubjectForMetadata(
+    String directoryTitle,
+  ) async {
+    final hints = _metadataTitleHints(directoryTitle);
+    if (hints.title.isEmpty) return null;
+    final gateway = _gateway();
+    final results = await gateway.searchSubjects(hints.title);
+    final normalizedTitle = _normalizeMetadataMatchValue(hints.title);
+    final exact = <BangumiSubject>[];
+    final ids = <int>{};
+    for (final subject in results) {
+      if (subject.id <= 0 || !ids.add(subject.id)) continue;
+      if (_normalizeMetadataMatchValue(subject.title) == normalizedTitle ||
+          _normalizeMetadataMatchValue(subject.originalTitle) ==
+              normalizedTitle) {
+        exact.add(subject);
+      }
+    }
+    if (exact.length == 1) {
+      return gateway.getSubject(exact.single.id);
+    }
+    final authorHint = hints.author;
+    if (exact.isEmpty || authorHint == null) return null;
+    final normalizedAuthor = _normalizeMetadataMatchValue(authorHint);
+    final matched = <BangumiSubject>[];
+    for (final candidate in exact) {
+      final detailed = await gateway.getSubject(candidate.id);
+      if (detailed.authors.any(
+        (author) => _normalizeMetadataMatchValue(author) == normalizedAuthor,
+      )) {
+        matched.add(detailed);
+      }
+    }
+    return matched.length == 1 ? matched.single : null;
+  }
+
+  static ({String title, String? author}) _metadataTitleHints(String value) {
+    final trimmed = value.trim();
+    for (final pattern in [
+      RegExp(r'^(.*?)\s*\[([^\[\]]+)\]\s*$'),
+      RegExp(r'^(.*?)\s*【([^【】]+)】\s*$'),
+    ]) {
+      final match = pattern.firstMatch(trimmed);
+      final title = match?.group(1)?.trim() ?? '';
+      final author = match?.group(2)?.trim() ?? '';
+      if (title.isNotEmpty && author.isNotEmpty) {
+        return (title: title, author: author);
+      }
+    }
+    return (title: trimmed, author: null);
+  }
+
+  static String _normalizeMetadataMatchValue(String value) => value
+      .toLowerCase()
+      .replaceAll(
+        RegExp(r'[\s\u3000·・:：!！?？,，.。\-—_~～/／\\|｜「」『』【】\[\]()（）]+'),
+        '',
+      )
+      .replaceAll(RegExp('[\'"“”‘’]'), '');
 
   BangumiBinding? bindingFor(String sourceKey, String comicId) {
     final rawBindings = appdata.settings['bangumiBindings'];
@@ -225,10 +301,17 @@ class BangumiService {
     required BangumiSubject subject,
     required BangumiProgressMode mode,
     BangumiProgress? reliableLocalProgress,
-  }) => _runBinding(
-    sourceKey,
-    comicId,
-    () => _runConnection(
+  }) => _runBinding(sourceKey, comicId, () async {
+    if (subject.id > 0 &&
+        subject.totalEpisodes >= 0 &&
+        subject.totalVolumes >= 0) {
+      await _bindingMetadataHandler?.call(
+        sourceKey: sourceKey,
+        comicId: comicId,
+        subject: subject,
+      );
+    }
+    return _runConnection(
       () => _bind(
         sourceKey: sourceKey,
         comicId: comicId,
@@ -236,8 +319,8 @@ class BangumiService {
         mode: mode,
         reliableLocalProgress: reliableLocalProgress,
       ),
-    ),
-  );
+    );
+  });
 
   Future<BangumiBinding> _bind({
     required String sourceKey,

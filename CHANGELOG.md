@@ -2,7 +2,11 @@
 
 本项目遵循语义化版本，记录 fork 后的主要变更。
 
-## 未发布
+## v2.0.1-beta1
+
+### 新增
+
+- WebDAV 在线漫画库可在缺少 `metadata.json` 时保守匹配 Bangumi 条目并回写书名、作者、标签和 Subject ID；手动绑定 Bangumi 条目也会更新对应 WebDAV 漫画元数据，同时保留已有章节范围。
 
 ### 维护
 

@@ -143,6 +143,14 @@ WebDAV 漫画库是在线阅读渠道，和本地导入导出、WebDAV CBZ 归�
 - 封面优先使用根目录下文件名为 `cover` 的图片；支持 `jpg`、`jpeg`、`png`、`webp`、`gif`、`jpe`、`avif`。没有独立封面时，依次使用根目录首图、首个可读章节的 `cover.*` 或首图。
 - 不要求 `metadata.json` 或 `ComicInfo.xml`。
 
+### Bangumi 自动刮削
+
+连接 Bangumi 后，同步 WebDAV 漫画库时会为缺少 `metadata.json` 的漫画自动搜索条目。自动匹配采用保守规则：文件夹名去除末尾的 `[作者]` 或 `【作者】` 提示后，必须与 Bangumi 中文名或原名精确匹配；存在多个同名条目时，只有作者提示能唯一匹配 Bangumi 作者信息才会采用结果。模糊或有歧义的结果不会写入。
+
+匹配成功后，应用通过 WebDAV PUT 创建 UTF-8 `metadata.json`，写入 Bangumi 书名、作者、标签和 `bangumiSubjectId`。WebDAV 账号必须拥有漫画目录写权限。自动刮削不会覆盖任何已经存在的 `metadata.json`，也不会下载 Bangumi 封面；搜索失败、无唯一匹配或写入失败时继续按普通目录模式显示。强制同步会重新尝试尚未匹配的目录。
+
+用户在漫画详情页手动绑定 Bangumi 条目时，该条目被视为明确选择：对于 WebDAV 漫画，应用会用条目详情更新 `title`、`author`、`tags` 和 `bangumiSubjectId`。已有的合法 `chapters` 页码范围会保留。
+
 ### 元数据标记的分层目录模式
 
 如果 WebDAV 目录层级较深，建议在漫画根目录放置 `metadata.json`，将该文件夹明确标记为一本漫画：
@@ -195,7 +203,8 @@ VeneraNext 导出的单本 CBZ 解压后通常是扁平图片目录：
   "chapters": [
     {"title": "第01卷", "start": 1, "end": 2},
     {"title": "第02卷", "start": 3, "end": 4}
-  ]
+  ],
+  "bangumiSubjectId": 123456
 }
 ```
 
@@ -206,6 +215,7 @@ VeneraNext 导出的单本 CBZ 解压后通常是扁平图片目录：
 | `title` | 字符串 | 漫画标题；空字符串会回退为文件夹名 |
 | `author` | 字符串 | 作者，可为空字符串 |
 | `tags` | 字符串数组 | 漫画标签，可为空数组 |
+| `bangumiSubjectId` | 正整数或 `null` | 对应的 Bangumi Subject ID；自动刮削或手动绑定时写入 |
 | `chapters` | 数组或 `null` | 章节范围；为 `null` 或空数组时，根目录图片作为单章节 |
 | `chapters[].title` | 字符串 | 章节显示名称，不可为空 |
 | `chapters[].start` | 整数 | 章节起始页，从 1 开始，包含该页 |
@@ -215,7 +225,7 @@ VeneraNext 导出的单本 CBZ 解压后通常是扁平图片目录：
 
 `metadata.json` 使用 UTF-8 编码，文件名匹配不区分大小写。`ComicInfo.xml` 会随 CBZ 导出保留，用于其他漫画阅读器兼容；VeneraNext WebDAV 漫画库当前以 `metadata.json` 为增强信息来源。
 
-如果元数据文件缺失、无法读取、JSON 损坏、字段类型错误或章节范围不合法，应用会记录警告并回退普通目录模式。漫画仍以文件夹名显示，目录中的图片和章节子目录仍可阅读。
+如果元数据文件缺失，连接 Bangumi 后会先按上述保守规则尝试自动刮削；无法匹配时回退普通目录模式。如果文件已经存在但无法读取、JSON 损坏、字段类型错误或章节范围不合法，应用会记录警告并回退普通目录模式，不会自动覆盖该文件。漫画仍以文件夹名显示，目录中的图片和章节子目录仍可阅读。
 
 这里的 `metadata.json` 是单本 CBZ 的元数据格式，不是 `.venera-comics` 批量导出包中的漫画列表格式，两者不可混用。
 

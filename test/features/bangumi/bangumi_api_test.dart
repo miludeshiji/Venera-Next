@@ -38,7 +38,6 @@ void main() {
           'sort': 'match',
           'filter': {
             'type': [1],
-            'nsfw': true,
           },
         });
         expect(request.headers['Authorization'], 'Bearer secret-token');

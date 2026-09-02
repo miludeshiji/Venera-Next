@@ -277,6 +277,8 @@ void main() {
       'totalEpisodes': 24,
       'totalVolumes': 4,
       'platform': 'TV',
+      'authors': <String>[],
+      'tags': <String>[],
     });
     expect(BangumiCollection.fromJson({}).toJson(), {
       'type': 0,
@@ -320,6 +322,35 @@ void main() {
     expect(restoredCollection.rate, localCollection.rate);
     expect(restoredCollection.epStatus, localCollection.epStatus);
     expect(restoredCollection.volStatus, localCollection.volStatus);
+  });
+
+  test('Bangumi subject extracts authors and metadata tags', () {
+    final subject = BangumiSubject.fromJson({
+      'id': 42,
+      'name': 'Original',
+      'name_cn': '中文',
+      'infobox': [
+        {
+          'key': '原作',
+          'value': [
+            {'v': '原作者'},
+          ],
+        },
+        {'key': '作画', 'value': '漫画家'},
+        {'key': '出版社', 'value': '出版社名称'},
+      ],
+      'meta_tags': ['漫画', '青年'],
+      'tags': [
+        {'name': '青年', 'count': 10},
+        {'name': '动作', 'count': 8},
+      ],
+    });
+
+    expect(subject.authors, ['原作者', '漫画家']);
+    expect(subject.tags, ['漫画', '青年', '动作']);
+    final restored = BangumiSubject.fromJson(subject.toJson());
+    expect(restored.authors, subject.authors);
+    expect(restored.tags, subject.tags);
   });
 
   test('Bangumi settings have defaults', () {

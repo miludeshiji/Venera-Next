@@ -13,6 +13,9 @@ import 'package:venera_next/foundation/throttled_task_runner.dart';
 import 'package:venera_next/network/webdav.dart';
 import 'package:webdav_client/webdav_client.dart' hide File;
 
+typedef WebDavLibraryMetadataScraper =
+    Future<ComicMetaData?> Function(String directoryTitle);
+
 class WebDavLibraryConfig {
   WebDavLibraryConfig({
     required String url,
@@ -118,6 +121,12 @@ abstract class WebDavLibraryOps {
   );
 
   Future<String> readText(WebDavLibraryConfig config, String remotePath);
+
+  Future<void> writeText(
+    WebDavLibraryConfig config,
+    String remotePath,
+    String content,
+  );
 }
 
 class _WebDavLibraryOps implements WebDavLibraryOps {
@@ -158,6 +167,17 @@ class _WebDavLibraryOps implements WebDavLibraryOps {
   Future<String> readText(WebDavLibraryConfig config, String remotePath) async {
     final bytes = await _client(config).read(remotePath);
     return utf8.decode(bytes, allowMalformed: false);
+  }
+
+  @override
+  Future<void> writeText(
+    WebDavLibraryConfig config,
+    String remotePath,
+    String content,
+  ) async {
+    await _client(
+      config,
+    ).write(remotePath, Uint8List.fromList(utf8.encode(content)));
   }
 }
 
@@ -221,6 +241,21 @@ class WebDavLibrarySource {
   static WebDavLibraryOps _ops = _WebDavLibraryOps();
   static _WebDavLibrarySyncRun? _syncRun;
   static Timer? _autoSyncTimer;
+  static final _metadataWriteTails = <String, Future<void>>{};
+  static WebDavLibraryMetadataScraper? _metadataScraper;
+  static bool Function()? _metadataScrapingEnabled;
+
+  static void configureMetadataScraper(
+    WebDavLibraryMetadataScraper? scraper, {
+    bool Function()? isEnabled,
+  }) {
+    _metadataScraper = scraper;
+    _metadataScrapingEnabled = isEnabled;
+  }
+
+  static bool get _canScrapeMetadata =>
+      _metadataScraper != null &&
+      (_metadataScrapingEnabled == null || _metadataScrapingEnabled!());
 
   static WebDavLibraryOps get ops => _ops;
 
@@ -502,6 +537,7 @@ class WebDavLibrarySource {
             !hadDirectoryIndex ||
             cached == null ||
             !cached.isReady ||
+            (_canScrapeMetadata && cached.metadataScrapePending) ||
             !cached.hasSameRemoteVersion(
               eTag: directory.eTag,
               modifiedAt: directory.modifiedAt,
@@ -531,7 +567,9 @@ class WebDavLibrarySource {
               directory.id,
               forceRefresh: true,
               remoteDirectory: directory,
-              rootEntries: discoveredDirectory.entries,
+              rootEntries: discoveredDirectory.entries.isEmpty
+                  ? null
+                  : discoveredDirectory.entries,
             );
           } catch (e) {
             failed++;
@@ -746,12 +784,25 @@ class WebDavLibrarySource {
             .where((entry) => !_isIgnoredEntry(entry.name))
             .toList()
           ..sort((a, b) => compareComicFileNames(a.name, b.name));
-    final metadata = await _readMetadata(
+    var metadataFilePresent = _hasMetadataFile(entries);
+    var metadataScrapeAttempted = false;
+    var metadata = await _readMetadata(
       config,
       comicPath,
       entries,
       pageCount: directories.isEmpty ? rootImages.length : null,
     );
+    if (!metadataFilePresent && _canScrapeMetadata) {
+      final scraped = await _scrapeMissingMetadata(
+        config,
+        id,
+        comicPath,
+        pageCount: directories.isEmpty ? rootImages.length : null,
+      );
+      metadata = scraped.metadata;
+      metadataFilePresent = scraped.filePresent;
+      metadataScrapeAttempted = scraped.attempted;
+    }
 
     final metadataChapters = <String, ComicChapter>{};
     final chapterMap = <String, String>{};
@@ -822,8 +873,151 @@ class WebDavLibrarySource {
       chapters: chapterMap,
       metadataChapters: metadataChapters,
       rootImages: rootImages,
+      metadataFilePresent: metadataFilePresent,
+      metadataScrapeAttempted: metadataScrapeAttempted,
     );
   }
+
+  static Future<void> writeMetadata(String id, ComicMetaData metadata) async {
+    final config = WebDavLibraryConfig.fromSettings();
+    if (!config.isValid) {
+      throw StateError('Invalid WebDAV comic library configuration');
+    }
+    final comicPath = config.childDirectoryPath(id);
+    await _runMetadataWrite(config, id, () async {
+      final entries = List<WebDavLibraryEntry>.from(
+        await ops.readDir(config, comicPath),
+      );
+      final existing = await _readMetadata(
+        config,
+        comicPath,
+        entries,
+        pageCount: _metadataPageCount(entries),
+      );
+      final merged = ComicMetaData(
+        title: metadata.title.trim().isEmpty
+            ? existing?.title ?? _directoryName(id)
+            : metadata.title,
+        author: metadata.author.trim().isEmpty
+            ? existing?.author ?? ''
+            : metadata.author,
+        tags: metadata.tags.isEmpty
+            ? existing?.tags ?? const []
+            : metadata.tags,
+        chapters: existing?.chapters ?? metadata.chapters,
+        bangumiSubjectId:
+            metadata.bangumiSubjectId ?? existing?.bangumiSubjectId,
+      );
+      merged.validateChapterRanges(pageCount: _metadataPageCount(entries));
+      final metadataEntry = entries.firstWhereOrNull(
+        (entry) =>
+            !entry.isDirectory && entry.name.toLowerCase() == _metadataFileName,
+      );
+      await ops.writeText(
+        config,
+        config.childFilePath(
+          comicPath,
+          metadataEntry?.name ?? _metadataFileName,
+        ),
+        _encodeMetadata(merged),
+      );
+    });
+
+    final memoryKey = jsonEncode([config.cacheKey, id]);
+    final inFlight = _snapshotInFlight[memoryKey];
+    if (inFlight != null) {
+      try {
+        await inFlight;
+      } catch (_) {}
+    }
+    _snapshotCache.remove(memoryKey);
+    await _loadSnapshot(config, id, forceRefresh: true);
+    contentVersion.value++;
+  }
+
+  static Future<({ComicMetaData? metadata, bool filePresent, bool attempted})>
+  _scrapeMissingMetadata(
+    WebDavLibraryConfig config,
+    String id,
+    String comicPath, {
+    required int? pageCount,
+  }) async {
+    final scraper = _metadataScraper;
+    if (scraper == null) {
+      return (metadata: null, filePresent: false, attempted: false);
+    }
+    try {
+      final scraped = await scraper(_directoryName(id));
+      if (scraped == null) {
+        return (metadata: null, filePresent: false, attempted: true);
+      }
+      scraped.validateChapterRanges(pageCount: pageCount);
+      return await _runMetadataWrite(config, id, () async {
+        final latestEntries = List<WebDavLibraryEntry>.from(
+          await ops.readDir(config, comicPath),
+        );
+        if (_hasMetadataFile(latestEntries)) {
+          return (
+            metadata: await _readMetadata(
+              config,
+              comicPath,
+              latestEntries,
+              pageCount: _metadataPageCount(latestEntries),
+            ),
+            filePresent: true,
+            attempted: true,
+          );
+        }
+        await ops.writeText(
+          config,
+          config.childFilePath(comicPath, _metadataFileName),
+          _encodeMetadata(scraped),
+        );
+        return (metadata: scraped, filePresent: true, attempted: true);
+      });
+    } catch (e) {
+      Log.warning('WebDAV Library', 'Failed to scrape metadata for $id: $e');
+      return (metadata: null, filePresent: false, attempted: false);
+    }
+  }
+
+  static Future<T> _runMetadataWrite<T>(
+    WebDavLibraryConfig config,
+    String id,
+    Future<T> Function() action,
+  ) async {
+    final key = jsonEncode([config.cacheKey, id]);
+    final previous = _metadataWriteTails[key];
+    final done = Completer<void>();
+    _metadataWriteTails[key] = done.future;
+    try {
+      if (previous != null) {
+        try {
+          await previous;
+        } catch (_) {}
+      }
+      return await action();
+    } finally {
+      done.complete();
+      if (identical(_metadataWriteTails[key], done.future)) {
+        _metadataWriteTails.remove(key);
+      }
+    }
+  }
+
+  static int? _metadataPageCount(List<WebDavLibraryEntry> entries) {
+    if (entries.any(
+      (entry) => entry.isDirectory && !_isIgnoredEntry(entry.name),
+    )) {
+      return null;
+    }
+    return _imageEntries(
+      entries,
+    ).where((entry) => !isNamedComicCover(entry.name)).length;
+  }
+
+  static String _encodeMetadata(ComicMetaData metadata) =>
+      '${const JsonEncoder.withIndent('  ').convert(metadata.toJson())}\n';
 
   static Future<ComicMetaData?> _readMetadata(
     WebDavLibraryConfig config,
@@ -1093,6 +1287,8 @@ class _WebDavComicSnapshot {
     required this.chapters,
     required this.metadataChapters,
     required this.rootImages,
+    required this.metadataFilePresent,
+    required this.metadataScrapeAttempted,
   });
 
   final String title;
@@ -1102,6 +1298,8 @@ class _WebDavComicSnapshot {
   final Map<String, String> chapters;
   final Map<String, ComicChapter> metadataChapters;
   final List<WebDavLibraryEntry> rootImages;
+  final bool metadataFilePresent;
+  final bool metadataScrapeAttempted;
 
   factory _WebDavComicSnapshot.fromJson(Map<String, dynamic> json) {
     final chapters = json['chapters'];
@@ -1138,6 +1336,8 @@ class _WebDavComicSnapshot {
                 )
                 .toList()
           : const [],
+      metadataFilePresent: json['metadataFilePresent'] == true,
+      metadataScrapeAttempted: json['metadataScrapeAttempted'] == true,
     );
   }
 
@@ -1151,6 +1351,8 @@ class _WebDavComicSnapshot {
     'metadataChapters': metadataChapters.map(
       (key, value) => MapEntry(key, value.toJson()),
     ),
+    'metadataFilePresent': metadataFilePresent,
+    'metadataScrapeAttempted': metadataScrapeAttempted,
     'rootImages': [
       for (final entry in rootImages)
         {

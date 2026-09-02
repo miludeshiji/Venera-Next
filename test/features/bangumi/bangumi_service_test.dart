@@ -14,6 +14,7 @@ void main() {
     appdata.settings['bangumiUsername'] = '';
     appdata.settings['bangumiAutoSyncEnabled'] = true;
     appdata.settings['bangumiBindings'] = <String, dynamic>{};
+    configureBangumiBindingMetadataHandler(null);
     gateway = FakeBangumiGateway();
     service = BangumiService.forTesting(
       gatewayFactory: (_) => gateway,
@@ -107,6 +108,124 @@ void main() {
       expect(gateway.subjectCalls, [42]);
     },
   );
+
+  test(
+    'metadata matching strips author suffix and requires an exact title',
+    () async {
+      connectSettings();
+      gateway.searchResults = [
+        const BangumiSubject(
+          id: 42,
+          title: 'Cat\'s Eye',
+          originalTitle: 'キャッツ・アイ',
+          coverUrl: 'cover',
+          totalEpisodes: 24,
+          totalVolumes: 4,
+        ),
+      ];
+      gateway.subjects[42] = const BangumiSubject(
+        id: 42,
+        title: 'Cat\'s Eye',
+        originalTitle: 'キャッツ・アイ',
+        coverUrl: 'cover',
+        totalEpisodes: 24,
+        totalVolumes: 4,
+        authors: ['Author'],
+        tags: ['Manga'],
+      );
+
+      final result = await service.matchSubjectForMetadata('Cats Eye[Author]');
+
+      expect(result?.id, 42);
+      expect(result?.authors, ['Author']);
+      expect(gateway.searchKeywords, ['Cats Eye']);
+      expect(gateway.subjectCalls, [42]);
+    },
+  );
+
+  test(
+    'metadata matching uses an author hint to resolve duplicate titles',
+    () async {
+      connectSettings();
+      gateway.searchResults = [
+        subject(),
+        const BangumiSubject(
+          id: 43,
+          title: 'Title',
+          originalTitle: 'Other original',
+          coverUrl: 'other',
+          totalEpisodes: 12,
+          totalVolumes: 2,
+        ),
+      ];
+      gateway.subjects[42] = const BangumiSubject(
+        id: 42,
+        title: 'Title',
+        originalTitle: 'Original',
+        coverUrl: 'cover',
+        totalEpisodes: 24,
+        totalVolumes: 4,
+        authors: ['First author'],
+      );
+      gateway.subjects[43] = const BangumiSubject(
+        id: 43,
+        title: 'Title',
+        originalTitle: 'Other original',
+        coverUrl: 'other',
+        totalEpisodes: 12,
+        totalVolumes: 2,
+        authors: ['Correct author'],
+      );
+
+      final result = await service.matchSubjectForMetadata(
+        'Title【Correct author】',
+      );
+
+      expect(result?.id, 43);
+      expect(gateway.subjectCalls, [42, 43]);
+    },
+  );
+
+  test('metadata matching rejects a non-exact search result', () async {
+    connectSettings();
+    gateway.searchResults = [
+      const BangumiSubject(
+        id: 43,
+        title: 'Similar title',
+        originalTitle: 'Similar original',
+        coverUrl: '',
+        totalEpisodes: 0,
+        totalVolumes: 0,
+      ),
+    ];
+
+    final result = await service.matchSubjectForMetadata('Title');
+
+    expect(result, isNull);
+    expect(gateway.subjectCalls, isEmpty);
+  });
+
+  test('binding invokes the configured metadata writer first', () async {
+    connectSettings();
+    final events = <String>[];
+    configureBangumiBindingMetadataHandler(({
+      required String sourceKey,
+      required String comicId,
+      required BangumiSubject subject,
+    }) async {
+      events.add('metadata:$sourceKey:$comicId:${subject.id}');
+    });
+
+    await service.bind(
+      sourceKey: 'webdav_library',
+      comicId: 'comic',
+      subject: subject(),
+      mode: BangumiProgressMode.episode,
+    );
+
+    expect(events, ['metadata:webdav_library:comic:42']);
+    expect(gateway.collectionCalls, [('alice', 42)]);
+  });
 
   test('connect rejects an empty username without changing settings', () async {
     appdata.settings['bangumiAccessToken'] = 'old-token';
