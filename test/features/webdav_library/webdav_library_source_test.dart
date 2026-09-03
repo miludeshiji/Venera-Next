@@ -565,6 +565,11 @@ void main() {
         WebDavLibraryEntry(name: 'Chapter 04', isDirectory: true),
         WebDavLibraryEntry(name: 'Chapter 05', isDirectory: true),
       ];
+      for (var i = 1; i <= 5; i++) {
+        ops.dirs['/manga/Cached Book/Chapter 0$i/'] = const [
+          WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+        ];
+      }
 
       final sync = await WebDavLibrarySource.synchronize();
       final details = await WebDavLibrarySource.loadComicInfo(comicId);
@@ -572,7 +577,15 @@ void main() {
       expect(sync.success, isTrue);
       expect(details.success, isTrue);
       expect(details.data.chapters!.allChapters, hasLength(5));
-      expect(ops.readPaths, ['/manga/', '/manga/Cached Book/']);
+      expect(ops.readPaths, [
+        '/manga/',
+        '/manga/Cached Book/',
+        '/manga/Cached Book/Chapter 01/',
+        '/manga/Cached Book/Chapter 02/',
+        '/manga/Cached Book/Chapter 03/',
+        '/manga/Cached Book/Chapter 04/',
+        '/manga/Cached Book/Chapter 05/',
+      ]);
     },
   );
 
@@ -1247,6 +1260,530 @@ void main() {
       final comics = await WebDavLibrarySource.loadComics(1);
 
       expect(comics.data.map((comic) => comic.id), ['Category/Author/Book']);
+    },
+  );
+
+  test(
+    'chapters with non-standard or Chinese volume names are treated as chapters instead of individual comics',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: '猫之眼', isDirectory: true),
+      ];
+      ops.dirs['/manga/猫之眼/'] = const [
+        WebDavLibraryEntry(name: '第一卷', isDirectory: true),
+        WebDavLibraryEntry(name: '第二卷', isDirectory: true),
+        WebDavLibraryEntry(name: '番外合集', isDirectory: true),
+      ];
+      ops.dirs['/manga/猫之眼/第一卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+        WebDavLibraryEntry(name: '002.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/猫之眼/第二卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/猫之眼/番外合集/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+
+      await WebDavLibrarySource.synchronize();
+      final comics = await WebDavLibrarySource.loadComics(1);
+      final details = await WebDavLibrarySource.loadComicInfo('猫之眼');
+
+      expect(comics.data.map((comic) => comic.id), ['猫之眼']);
+      expect(details.data.chapters!.allChapters, {
+        '第一卷': '第一卷',
+        '第二卷': '第二卷',
+        '番外合集': '番外合集',
+      });
+    },
+  );
+
+  test(
+    'multi-level category directory discovers child comics without classifying category as comic',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: '少年漫画', isDirectory: true),
+      ];
+      ops.dirs['/manga/少年漫画/'] = const [
+        WebDavLibraryEntry(name: '猫之眼', isDirectory: true),
+        WebDavLibraryEntry(name: '城市猎人', isDirectory: true),
+      ];
+      ops.dirs['/manga/少年漫画/猫之眼/'] = const [
+        WebDavLibraryEntry(name: '第一卷', isDirectory: true),
+        WebDavLibraryEntry(name: '第二卷', isDirectory: true),
+      ];
+      ops.dirs['/manga/少年漫画/猫之眼/第一卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/少年漫画/猫之眼/第二卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/少年漫画/城市猎人/'] = const [
+        WebDavLibraryEntry(name: '第一卷', isDirectory: true),
+        WebDavLibraryEntry(name: '第二卷', isDirectory: true),
+      ];
+      ops.dirs['/manga/少年漫画/城市猎人/第一卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/少年漫画/城市猎人/第二卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+
+      await WebDavLibrarySource.synchronize();
+      final comics = await WebDavLibrarySource.loadComics(1);
+      expect(comics.data.map((comic) => comic.id), [
+        '少年漫画/城市猎人',
+        '少年漫画/猫之眼',
+      ]);
+    },
+  );
+
+  test(
+    'empty child directories do not prevent parent comic from being discovered',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: '猫之眼', isDirectory: true),
+      ];
+      ops.dirs['/manga/猫之眼/'] = const [
+        WebDavLibraryEntry(name: '第一卷', isDirectory: true),
+        WebDavLibraryEntry(name: '第二卷', isDirectory: true),
+        WebDavLibraryEntry(name: '临时文件', isDirectory: true),
+      ];
+      ops.dirs['/manga/猫之眼/第一卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/猫之眼/第二卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/猫之眼/临时文件/'] = const [];
+
+      await WebDavLibrarySource.synchronize();
+      final comics = await WebDavLibrarySource.loadComics(1);
+      expect(comics.data.map((comic) => comic.id), ['猫之眼']);
+    },
+  );
+
+  test(
+    'flat category containing multiple leaf comic books is not merged into one comic',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: '少年漫画', isDirectory: true),
+      ];
+      ops.dirs['/manga/少年漫画/'] = const [
+        WebDavLibraryEntry(name: '猫之眼', isDirectory: true),
+        WebDavLibraryEntry(name: '城市猎人', isDirectory: true),
+      ];
+      ops.dirs['/manga/少年漫画/猫之眼/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+        WebDavLibraryEntry(name: '002.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/少年漫画/城市猎人/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+        WebDavLibraryEntry(name: '002.jpg', isDirectory: false),
+      ];
+
+      await WebDavLibrarySource.synchronize();
+      final comics = await WebDavLibrarySource.loadComics(1);
+      expect(comics.data.map((comic) => comic.id), [
+        '少年漫画/城市猎人',
+        '少年漫画/猫之眼',
+      ]);
+    },
+  );
+
+  test(
+    'child metadata takes precedence over chapter-like directory names',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Category', isDirectory: true),
+      ];
+      ops.dirs['/manga/Category/'] = const [
+        WebDavLibraryEntry(name: '01', isDirectory: true),
+        WebDavLibraryEntry(name: '02', isDirectory: true),
+      ];
+      ops.dirs['/manga/Category/01/'] = const [
+        WebDavLibraryEntry(name: 'metadata.json', isDirectory: false),
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/Category/02/'] = const [
+        WebDavLibraryEntry(name: 'metadata.json', isDirectory: false),
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+
+      await WebDavLibrarySource.synchronize();
+      final comics = await WebDavLibrarySource.loadComics(1);
+      expect(comics.data.map((comic) => comic.id), [
+        'Category/01',
+        'Category/02',
+      ]);
+    },
+  );
+
+  test(
+    'empty child directory is excluded from chapter list and details',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: '猫之眼', isDirectory: true),
+      ];
+      ops.dirs['/manga/猫之眼/'] = const [
+        WebDavLibraryEntry(name: '第一卷', isDirectory: true),
+        WebDavLibraryEntry(name: '第二卷', isDirectory: true),
+        WebDavLibraryEntry(name: '临时文件', isDirectory: true),
+      ];
+      ops.dirs['/manga/猫之眼/第一卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/猫之眼/第二卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/猫之眼/临时文件/'] = const [];
+
+      await WebDavLibrarySource.synchronize();
+      final details = await WebDavLibrarySource.loadComicInfo('猫之眼');
+      expect(details.data.chapters!.allChapters.keys, [
+        '第一卷',
+        '第二卷',
+      ]);
+    },
+  );
+
+  test(
+    'transient child directory read failure does not guess category as comic',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Category', isDirectory: true),
+      ];
+      ops.dirs['/manga/Category/'] = const [
+        WebDavLibraryEntry(name: 'Book A', isDirectory: true),
+        WebDavLibraryEntry(name: 'Book B', isDirectory: true),
+      ];
+      ops.dirs['/manga/Category/Book A/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.errors['/manga/Category/Book B/'] = StateError(
+        'transient network failure',
+      );
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isFalse);
+    },
+  );
+
+  test(
+    'discovery depth limit fails closed without classifying ancestor as comic',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'L1', isDirectory: true),
+      ];
+      var current = '/manga/L1/';
+      for (var index = 2; index <= 9; index++) {
+        ops.dirs[current] = [
+          WebDavLibraryEntry(name: 'L$index', isDirectory: true),
+        ];
+        current = '${current}L$index/';
+      }
+      ops.dirs[current] = const [
+        WebDavLibraryEntry(name: 'Book', isDirectory: true),
+      ];
+      ops.dirs['${current}Book/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isFalse);
+
+      final comics = await WebDavLibrarySource.loadComics(1);
+      expect(comics.data.map((c) => c.id), isNot(contains('L1')));
+    },
+  );
+
+  test(
+    'discovery directory limit fails without committing a partial index',
+    () async {
+      WebDavLibrarySource.discoveryDirectoryLimitOverride = 3;
+      addTearDown(() {
+        WebDavLibrarySource.discoveryDirectoryLimitOverride = null;
+      });
+
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'A', isDirectory: true),
+        WebDavLibraryEntry(name: 'B', isDirectory: true),
+        WebDavLibraryEntry(name: 'C', isDirectory: true),
+        WebDavLibraryEntry(name: 'D', isDirectory: true),
+      ];
+      ops.dirs['/manga/A/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/B/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/C/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/D/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isFalse);
+
+      final comics = await WebDavLibrarySource.loadComics(1);
+      expect(comics.data, isEmpty);
+    },
+  );
+
+  test(
+    'top-level directory read failure preserves the previous successful index',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Category', isDirectory: true),
+      ];
+      ops.dirs['/manga/Category/'] = const [
+        WebDavLibraryEntry(name: 'Book A', isDirectory: true),
+        WebDavLibraryEntry(name: 'Book B', isDirectory: true),
+      ];
+      ops.dirs['/manga/Category/Book A/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/Category/Book B/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+
+      final firstSync = await WebDavLibrarySource.synchronize();
+      expect(firstSync.success, isTrue);
+      final firstComics = await WebDavLibrarySource.loadComics(1);
+      expect(firstComics.data.map((c) => c.id), [
+        'Category/Book A',
+        'Category/Book B',
+      ]);
+
+      ops.errors['/manga/Category/'] = StateError('temporary connection error');
+      final secondSync = await WebDavLibrarySource.synchronize(force: true);
+      expect(secondSync.success, isFalse);
+
+      final secondComics = await WebDavLibrarySource.loadComics(1);
+      expect(secondComics.data.map((c) => c.id), [
+        'Category/Book A',
+        'Category/Book B',
+      ]);
+    },
+  );
+
+  test(
+    'metadata comic excludes empty child directories from chapters',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Comic', isDirectory: true),
+      ];
+      ops.dirs['/manga/Comic/'] = const [
+        WebDavLibraryEntry(name: 'metadata.json', isDirectory: false),
+        WebDavLibraryEntry(name: '第一卷', isDirectory: true),
+        WebDavLibraryEntry(name: '临时文件', isDirectory: true),
+      ];
+      ops.dirs['/manga/Comic/第一卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/Comic/临时文件/'] = const [];
+      ops.textFiles['/manga/Comic/metadata.json'] = jsonEncode({
+        'title': 'Comic',
+      });
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isTrue);
+
+      final details = await WebDavLibrarySource.loadComicInfo('Comic');
+      expect(details.data.chapters!.allChapters.keys, ['第一卷']);
+    },
+  );
+
+  test(
+    'root-image comic excludes empty child directories from chapters',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Comic', isDirectory: true),
+      ];
+      ops.dirs['/manga/Comic/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+        WebDavLibraryEntry(name: 'Chapter 1', isDirectory: true),
+        WebDavLibraryEntry(name: 'temp', isDirectory: true),
+      ];
+      ops.dirs['/manga/Comic/Chapter 1/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/Comic/temp/'] = const [];
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isTrue);
+
+      final details = await WebDavLibrarySource.loadComicInfo('Comic');
+      expect(details.data.chapters!.allChapters.keys, [
+        'Chapter 1',
+        '__root__',
+      ]);
+    },
+  );
+
+  test(
+    'empty child cover is not used as comic cover',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Comic', isDirectory: true),
+      ];
+      ops.dirs['/manga/Comic/'] = const [
+        WebDavLibraryEntry(name: '第一卷', isDirectory: true),
+        WebDavLibraryEntry(name: '临时文件', isDirectory: true),
+      ];
+      ops.dirs['/manga/Comic/第一卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/Comic/临时文件/'] = const [
+        WebDavLibraryEntry(name: 'cover.jpg', isDirectory: false),
+      ];
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isTrue);
+
+      final details = await WebDavLibrarySource.loadComicInfo('Comic');
+      expect(details.data.cover, '/manga/Comic/第一卷/001.jpg');
+      expect(details.data.chapters!.allChapters.keys, ['第一卷']);
+    },
+  );
+
+  test(
+    'flat category scraping targets leaf comics instead of category',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Category', isDirectory: true),
+      ];
+      ops.dirs['/manga/Category/'] = const [
+        WebDavLibraryEntry(name: 'Book A', isDirectory: true),
+        WebDavLibraryEntry(name: 'Book B', isDirectory: true),
+      ];
+      ops.dirs['/manga/Category/Book A/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/Category/Book B/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+
+      final scrapedTitles = <String>[];
+      WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+        scrapedTitles.add(directoryTitle);
+        return ComicMetaData(
+          title: directoryTitle,
+          author: 'Author',
+          tags: const ['Action'],
+          description: '',
+        );
+      });
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isTrue);
+      expect(scrapedTitles, ['Book A', 'Book B']);
+      expect(scrapedTitles, isNot(contains('Category')));
+    },
+  );
+
+  test(
+    'automatic scraping targets only comic root and does not scrape or write to chapter folders',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Cat Eye[Tsukasa Hojo]', isDirectory: true),
+      ];
+      ops.dirs['/manga/Cat Eye[Tsukasa Hojo]/'] = const [
+        WebDavLibraryEntry(name: '第一卷', isDirectory: true),
+        WebDavLibraryEntry(name: '第二卷', isDirectory: true),
+      ];
+      ops.dirs['/manga/Cat Eye[Tsukasa Hojo]/第一卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/Cat Eye[Tsukasa Hojo]/第二卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      final scrapedTitles = <String>[];
+      WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+        scrapedTitles.add(directoryTitle);
+        return const ComicMetaData(
+          title: 'Cat Eye',
+          author: 'Tsukasa Hojo',
+          tags: ['Action'],
+          description: 'A trio of sisters run a café by day.',
+          bangumiSubjectId: 123,
+        );
+      });
+
+      final sync = await WebDavLibrarySource.synchronize();
+      final comics = await WebDavLibrarySource.loadComics(1);
+
+      expect(sync.success, isTrue);
+      expect(scrapedTitles, ['Cat Eye[Tsukasa Hojo]']);
+      expect(
+        ops.writtenTexts.keys,
+        ['/manga/Cat Eye[Tsukasa Hojo]/metadata.json'],
+      );
+      expect(comics.data.single.title, 'Cat Eye');
+    },
+  );
+
+  test(
+    'synchronization evicts stale chapter comics cached by previous buggy versions',
+    () async {
+      final config = WebDavLibraryConfig.fromSettings();
+      final cache = WebDavLibraryCache.instance;
+      cache.replaceDirectoryIndex(config.cacheKey, const [
+        WebDavLibraryRemoteDirectory(
+          id: 'Cat Eye/第一卷',
+          sortIndex: 0,
+        ),
+        WebDavLibraryRemoteDirectory(
+          id: 'Cat Eye/第二卷',
+          sortIndex: 1,
+        ),
+      ]);
+      cache.upsertSnapshot(
+        config.cacheKey,
+        const WebDavLibraryCachedComic(
+          id: 'Cat Eye/第一卷',
+          sortIndex: 0,
+          title: '第一卷',
+          author: '',
+          tags: [],
+          cover: '',
+          snapshot: {
+            'title': '第一卷',
+            'author': '',
+            'tags': [],
+            'cover': '',
+            'chapters': {'root': 'root'},
+            'metadataChapters': {},
+            'rootImages': ['001.jpg'],
+          },
+          remoteETag: 'v1',
+          remoteModifiedAt: null,
+        ),
+      );
+
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Cat Eye', isDirectory: true),
+      ];
+      ops.dirs['/manga/Cat Eye/'] = const [
+        WebDavLibraryEntry(name: '第一卷', isDirectory: true),
+        WebDavLibraryEntry(name: '第二卷', isDirectory: true),
+      ];
+      ops.dirs['/manga/Cat Eye/第一卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/Cat Eye/第二卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+
+      final sync = await WebDavLibrarySource.synchronize();
+      final comics = await WebDavLibrarySource.loadComics(1);
+
+      expect(sync.success, isTrue);
+      expect(comics.data.map((c) => c.id), ['Cat Eye']);
+      expect(cache.find(config.cacheKey, 'Cat Eye/第一卷'), isNull);
+      expect(cache.find(config.cacheKey, 'Cat Eye/第二卷'), isNull);
     },
   );
 
