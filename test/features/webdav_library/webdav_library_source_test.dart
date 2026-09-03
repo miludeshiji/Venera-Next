@@ -1331,10 +1331,7 @@ void main() {
 
       await WebDavLibrarySource.synchronize();
       final comics = await WebDavLibrarySource.loadComics(1);
-      expect(comics.data.map((comic) => comic.id), [
-        '少年漫画/城市猎人',
-        '少年漫画/猫之眼',
-      ]);
+      expect(comics.data.map((comic) => comic.id), ['少年漫画/城市猎人', '少年漫画/猫之眼']);
     },
   );
 
@@ -1384,10 +1381,7 @@ void main() {
 
       await WebDavLibrarySource.synchronize();
       final comics = await WebDavLibrarySource.loadComics(1);
-      expect(comics.data.map((comic) => comic.id), [
-        '少年漫画/城市猎人',
-        '少年漫画/猫之眼',
-      ]);
+      expect(comics.data.map((comic) => comic.id), ['少年漫画/城市猎人', '少年漫画/猫之眼']);
     },
   );
 
@@ -1440,10 +1434,7 @@ void main() {
 
       await WebDavLibrarySource.synchronize();
       final details = await WebDavLibrarySource.loadComicInfo('猫之眼');
-      expect(details.data.chapters!.allChapters.keys, [
-        '第一卷',
-        '第二卷',
-      ]);
+      expect(details.data.chapters!.allChapters.keys, ['第一卷', '第二卷']);
     },
   );
 
@@ -1623,31 +1614,28 @@ void main() {
     },
   );
 
-  test(
-    'empty child cover is not used as comic cover',
-    () async {
-      ops.dirs['/manga/'] = const [
-        WebDavLibraryEntry(name: 'Comic', isDirectory: true),
-      ];
-      ops.dirs['/manga/Comic/'] = const [
-        WebDavLibraryEntry(name: '第一卷', isDirectory: true),
-        WebDavLibraryEntry(name: '临时文件', isDirectory: true),
-      ];
-      ops.dirs['/manga/Comic/第一卷/'] = const [
-        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
-      ];
-      ops.dirs['/manga/Comic/临时文件/'] = const [
-        WebDavLibraryEntry(name: 'cover.jpg', isDirectory: false),
-      ];
+  test('empty child cover is not used as comic cover', () async {
+    ops.dirs['/manga/'] = const [
+      WebDavLibraryEntry(name: 'Comic', isDirectory: true),
+    ];
+    ops.dirs['/manga/Comic/'] = const [
+      WebDavLibraryEntry(name: '第一卷', isDirectory: true),
+      WebDavLibraryEntry(name: '临时文件', isDirectory: true),
+    ];
+    ops.dirs['/manga/Comic/第一卷/'] = const [
+      WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+    ];
+    ops.dirs['/manga/Comic/临时文件/'] = const [
+      WebDavLibraryEntry(name: 'cover.jpg', isDirectory: false),
+    ];
 
-      final sync = await WebDavLibrarySource.synchronize();
-      expect(sync.success, isTrue);
+    final sync = await WebDavLibrarySource.synchronize();
+    expect(sync.success, isTrue);
 
-      final details = await WebDavLibrarySource.loadComicInfo('Comic');
-      expect(details.data.cover, '/manga/Comic/第一卷/001.jpg');
-      expect(details.data.chapters!.allChapters.keys, ['第一卷']);
-    },
-  );
+    final details = await WebDavLibrarySource.loadComicInfo('Comic');
+    expect(details.data.cover, '/manga/Comic/第一卷/001.jpg');
+    expect(details.data.chapters!.allChapters.keys, ['第一卷']);
+  });
 
   test(
     'flat category scraping targets leaf comics instead of category',
@@ -1717,10 +1705,9 @@ void main() {
 
       expect(sync.success, isTrue);
       expect(scrapedTitles, ['Cat Eye[Tsukasa Hojo]']);
-      expect(
-        ops.writtenTexts.keys,
-        ['/manga/Cat Eye[Tsukasa Hojo]/metadata.json'],
-      );
+      expect(ops.writtenTexts.keys, [
+        '/manga/Cat Eye[Tsukasa Hojo]/metadata.json',
+      ]);
       expect(comics.data.single.title, 'Cat Eye');
     },
   );
@@ -1731,14 +1718,8 @@ void main() {
       final config = WebDavLibraryConfig.fromSettings();
       final cache = WebDavLibraryCache.instance;
       cache.replaceDirectoryIndex(config.cacheKey, const [
-        WebDavLibraryRemoteDirectory(
-          id: 'Cat Eye/第一卷',
-          sortIndex: 0,
-        ),
-        WebDavLibraryRemoteDirectory(
-          id: 'Cat Eye/第二卷',
-          sortIndex: 1,
-        ),
+        WebDavLibraryRemoteDirectory(id: 'Cat Eye/第一卷', sortIndex: 0),
+        WebDavLibraryRemoteDirectory(id: 'Cat Eye/第二卷', sortIndex: 1),
       ]);
       cache.upsertSnapshot(
         config.cacheKey,

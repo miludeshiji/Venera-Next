@@ -1994,7 +1994,6 @@ class WebDavLibrarySource {
     final maxDirectories =
         discoveryDirectoryLimitOverride ?? _maxDiscoveryDirectories;
 
-
     Future<List<_WebDavDiscoveredDirectory>> scan({
       required WebDavLibraryEntry directory,
       required String id,
@@ -2070,11 +2069,7 @@ class WebDavLibrarySource {
           await ops.readDir(config, childPath),
         );
         _throwIfSynchronizationObsolete(syncRun);
-        children.add((
-          directory: child,
-          id: childId,
-          entries: childEntries,
-        ));
+        children.add((directory: child, id: childId, entries: childEntries));
         childEntriesMap[child.name] = childEntries;
       }
 
