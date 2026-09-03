@@ -63,39 +63,237 @@ bool isMalformedExpectedJsonResponse(Response<dynamic> response) {
 }
 
 class MyLogInterceptor extends Interceptor {
-  @override
-  void onError(DioException err, ErrorInterceptorHandler handler) {
-    Log.error("Network",
-        "${err.requestOptions.method} ${err.requestOptions.path}\n$err\n${err.response?.data.toString()}");
-    switch (err.type) {
-      case DioExceptionType.badResponse:
-        var statusCode = err.response?.statusCode;
-        if (statusCode != null) {
-          err = err.copyWith(
-              message: "Invalid Status Code: $statusCode. "
-                  "${_getStatusCodeInfo(statusCode)}");
-        }
-      case DioExceptionType.connectionTimeout:
-        err = err.copyWith(message: "Connection Timeout");
-      case DioExceptionType.receiveTimeout:
-        err = err.copyWith(
-            message: "Receive Timeout: "
-                "This indicates that the server is too busy to respond");
-      case DioExceptionType.unknown:
-        if (err.toString().contains("Connection terminated during handshake")) {
-          err = err.copyWith(
-              message: "Connection terminated during handshake: "
-                  "This may be caused by the firewall blocking the connection "
-                  "or your requests are too frequent.");
-        } else if (err.toString().contains("Connection reset by peer")) {
-          err = err.copyWith(
-              message: "Connection reset by peer: "
-                  "The error is unrelated to app, please check your network.");
-        }
-      default:
-        {}
+  static const String _redacted = '<redacted>';
+
+  static const Set<String> _sensitiveHeaderNames = {
+    'authorization',
+    'proxyauthorization',
+    'cookie',
+    'setcookie',
+    'xapikey',
+    'apikey',
+    'xauthtoken',
+    'xaccesstoken',
+    'xid',
+  };
+
+  static const Set<String> _sensitiveFieldNames = {
+    'token',
+    'accesstoken',
+    'refreshtoken',
+    'idtoken',
+    'password',
+    'passwd',
+    'pwd',
+    'secret',
+    'clientsecret',
+    'authorization',
+    'cookie',
+    'session',
+    'sessionid',
+    'deviceid',
+    'apikey',
+    'xapikey',
+  };
+
+  static const Set<String> _sensitiveQueryNames = {
+    'token',
+    'accesstoken',
+    'refreshtoken',
+    'idtoken',
+    'apikey',
+    'xapikey',
+    'key',
+    'auth',
+    'signature',
+    'sig',
+    'password',
+    'passwd',
+    'pwd',
+    'secret',
+    'clientsecret',
+    'session',
+    'sessionid',
+  };
+
+  static final RegExp _jwtCandidatePattern = RegExp(
+    r'[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+',
+  );
+
+  static String _normalizeSensitiveName(String name) {
+    return name.toLowerCase().replaceAll('_', '').replaceAll('-', '');
+  }
+
+  static Iterable<String> _getExtraMaskedHeaders(RequestOptions options) {
+    final value = options.extra['maskHeadersInLog'];
+    if (value is String) {
+      return [value];
     }
-    handler.next(err);
+    if (value is Iterable) {
+      return value.map((e) => e.toString());
+    }
+    return const <String>[];
+  }
+
+  static bool _shouldMaskData(RequestOptions options) {
+    return options.extra['maskDataInLog'] == true;
+  }
+
+  static bool _looksLikeJwt(String value) {
+    final trimmed = value.trim();
+    final parts = trimmed.split('.');
+    if (parts.length != 3 || parts.any((part) => part.isEmpty)) {
+      return false;
+    }
+
+    final base64UrlRegex = RegExp(r'^[A-Za-z0-9_-]+$');
+    if (!parts.every((part) => base64UrlRegex.hasMatch(part))) {
+      return false;
+    }
+
+    try {
+      final headerBytes = base64Url.decode(base64Url.normalize(parts[0]));
+      final headerJson = jsonDecode(utf8.decode(headerBytes));
+      if (headerJson is! Map) {
+        return false;
+      }
+      return headerJson.containsKey('alg') || headerJson['typ'] == 'JWT';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String _sanitizeString(String value) {
+    if (_looksLikeJwt(value)) {
+      return _redacted;
+    }
+    var result = value;
+    result = result.replaceAll(
+      RegExp(r'Bearer\s+[A-Za-z0-9._~+/=-]+', caseSensitive: false),
+      'Bearer $_redacted',
+    );
+    result = result.replaceAllMapped(_jwtCandidatePattern, (match) {
+      final candidate = match.group(0)!;
+      return _looksLikeJwt(candidate) ? _redacted : candidate;
+    });
+    return result;
+  }
+
+  static Uri _sanitizeUri(Uri uri) {
+    if (uri.queryParameters.isEmpty) {
+      return uri;
+    }
+    final sanitized = <String, dynamic>{};
+    uri.queryParametersAll.forEach((key, values) {
+      if (_sensitiveQueryNames.contains(_normalizeSensitiveName(key))) {
+        sanitized[key] = values.map((_) => _redacted).toList();
+      } else {
+        sanitized[key] = values.map((v) => _sanitizeString(v)).toList();
+      }
+    });
+    return uri.replace(queryParameters: sanitized);
+  }
+
+  static Map<String, dynamic> _sanitizeHeaders(
+    Map<dynamic, dynamic> headers, {
+    Iterable<String> extraMaskedHeaders = const [],
+  }) {
+    final maskedNames = <String>{
+      ..._sensitiveHeaderNames,
+      ...extraMaskedHeaders.map(_normalizeSensitiveName),
+    };
+
+    final result = <String, dynamic>{};
+    headers.forEach((rawKey, rawValue) {
+      final key = rawKey.toString();
+      final normalizedKey = _normalizeSensitiveName(key);
+      if (maskedNames.contains(normalizedKey)) {
+        result[key] = _redacted;
+      } else if (rawValue is List) {
+        result[key] = rawValue
+            .map((item) => _sanitizeString(item.toString()))
+            .toList();
+      } else if (rawValue is String) {
+        result[key] = _sanitizeString(rawValue);
+      } else {
+        result[key] = rawValue;
+      }
+    });
+    return result;
+  }
+
+  static Object? _sanitizeData(Object? data) {
+    if (data == null) {
+      return null;
+    }
+
+    if (data is FormData) {
+      return {
+        'fields': [
+          for (final field in data.fields)
+            {
+              'name': field.key,
+              'value':
+                  _sensitiveFieldNames.contains(
+                    _normalizeSensitiveName(field.key),
+                  )
+                  ? _redacted
+                  : _sanitizeData(field.value),
+            },
+        ],
+        'files': [
+          for (final file in data.files)
+            {
+              'field': file.key,
+              'filename': file.value.filename,
+              'length': file.value.length,
+              'contentType': file.value.contentType?.toString(),
+            },
+        ],
+      };
+    }
+
+    if (data is List<int>) {
+      try {
+        final decoded = utf8.decode(data, allowMalformed: false);
+        return _sanitizeData(decoded);
+      } catch (_) {
+        return '<Bytes: length=${data.length}>';
+      }
+    }
+
+    if (data is Map) {
+      final result = <Object?, Object?>{};
+      for (final entry in data.entries) {
+        final key = entry.key;
+        final normalizedKey = _normalizeSensitiveName(key.toString());
+
+        if (_sensitiveFieldNames.contains(normalizedKey)) {
+          result[key] = _redacted;
+        } else {
+          result[key] = _sanitizeData(entry.value);
+        }
+      }
+      return result;
+    }
+
+    if (data is List) {
+      return data.map(_sanitizeData).toList();
+    }
+
+    if (data is String) {
+      try {
+        final decoded = jsonDecode(data);
+        if (decoded is Map || decoded is List) {
+          return jsonEncode(_sanitizeData(decoded));
+        }
+      } catch (_) {
+        // Not JSON string, fall through to sanitize string
+      }
+      return _sanitizeString(data);
+    }
+
+    return data;
   }
 
   static const errorMessages = <int, String>{
@@ -116,55 +314,142 @@ class MyLogInterceptor extends Interceptor {
   }
 
   @override
-  void onResponse(
-      Response<dynamic> response, ResponseInterceptorHandler handler) {
-    var headers = response.headers.map.map((key, value) => MapEntry(
-        key.toLowerCase(), value.length == 1 ? value.first : value.toString()));
-    headers.remove("cookie");
-    String content;
-    if (response.data is List<int>) {
-      try {
-        content = utf8.decode(response.data, allowMalformed: false);
-      } catch (e) {
-        content = "<Bytes>\nlength:${response.data.length}";
-      }
-    } else {
-      content = response.data.toString();
+  void onError(DioException err, ErrorInterceptorHandler handler) {
+    final request = err.requestOptions;
+
+    final safeRequestHeaders = _sanitizeHeaders(
+      request.headers,
+      extraMaskedHeaders: _getExtraMaskedHeaders(request),
+    );
+
+    final safeRequestData = _shouldMaskData(request)
+        ? _redacted
+        : _sanitizeData(request.data);
+
+    final safeResponseHeaders = err.response == null
+        ? null
+        : _sanitizeHeaders(
+            err.response!.headers.map.map(
+              (key, value) => MapEntry(
+                key.toLowerCase(),
+                value.length == 1 ? value.first : value.toString(),
+              ),
+            ),
+            extraMaskedHeaders: _getExtraMaskedHeaders(request),
+          );
+
+    final safeResponseData = err.response == null
+        ? null
+        : _shouldMaskData(request)
+        ? _redacted
+        : _sanitizeData(err.response?.data);
+
+    Log.error(
+      'Network',
+      '${request.method} ${_sanitizeUri(request.uri)}\n'
+          'status: ${err.response?.statusCode}\n'
+          'type: ${err.type}\n'
+          'message: ${_sanitizeString(err.message ?? '')}\n'
+          'request headers:\n$safeRequestHeaders\n'
+          'request data:\n$safeRequestData\n'
+          'response headers:\n$safeResponseHeaders\n'
+          'response data:\n$safeResponseData',
+    );
+
+    switch (err.type) {
+      case DioExceptionType.badResponse:
+        var statusCode = err.response?.statusCode;
+        if (statusCode != null) {
+          err = err.copyWith(
+            message:
+                "Invalid Status Code: $statusCode. "
+                "${_getStatusCodeInfo(statusCode)}",
+          );
+        }
+      case DioExceptionType.connectionTimeout:
+        err = err.copyWith(message: "Connection Timeout");
+      case DioExceptionType.receiveTimeout:
+        err = err.copyWith(
+          message:
+              "Receive Timeout: "
+              "This indicates that the server is too busy to respond",
+        );
+      case DioExceptionType.unknown:
+        if (err.toString().contains("Connection terminated during handshake")) {
+          err = err.copyWith(
+            message:
+                "Connection terminated during handshake: "
+                "This may be caused by the firewall blocking the connection "
+                "or your requests are too frequent.",
+          );
+        } else if (err.toString().contains("Connection reset by peer")) {
+          err = err.copyWith(
+            message:
+                "Connection reset by peer: "
+                "The error is unrelated to app, please check your network.",
+          );
+        }
+      default:
+        {}
     }
+    handler.next(err);
+  }
+
+  @override
+  void onResponse(
+    Response<dynamic> response,
+    ResponseInterceptorHandler handler,
+  ) {
+    final requestOptions = response.requestOptions;
+
+    final safeHeaders = _sanitizeHeaders(
+      response.headers.map.map(
+        (key, value) => MapEntry(
+          key.toLowerCase(),
+          value.length == 1 ? value.first : value.toString(),
+        ),
+      ),
+      extraMaskedHeaders: _getExtraMaskedHeaders(requestOptions),
+    );
+
+    final safeData = _shouldMaskData(requestOptions)
+        ? _redacted
+        : _sanitizeData(response.data);
+
     Log.addLog(
-        (response.statusCode != null && response.statusCode! < 400)
-            ? LogLevel.info
-            : LogLevel.error,
-        "Network",
-        "Response ${response.realUri.toString()} ${response.statusCode}\n"
-            "headers:\n$headers\n$content");
+      (response.statusCode != null && response.statusCode! < 400)
+          ? LogLevel.info
+          : LogLevel.error,
+      'Network',
+      'Response ${_sanitizeUri(response.realUri)} ${response.statusCode}\n'
+          'headers:\n$safeHeaders\n$safeData',
+    );
     handler.next(response);
   }
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    const String headerMask = "********";
-    const String dataMask = "****** DATA_PROTECTED ******";
-    Log.info(
-        "Network",
-        "${options.method} ${options.uri}\n"
-            "headers:\n${
-              options.extra.containsKey("maskHeadersInLog")
-                ? options.headers.map((key, value) =>
-                  MapEntry(
-                    key,
-                    options.extra["maskHeadersInLog"].contains(key)
-                      ? headerMask
-                      : value
-                  ))
-                : options.headers
-            }\n"
-            "data:\n${
-              options.extra["maskDataInLog"] == true
-                ? dataMask
-                : options.data
-            }"
+    final extraMaskedHeaders = _getExtraMaskedHeaders(options);
+
+    final safeHeaders = _sanitizeHeaders(
+      options.headers,
+      extraMaskedHeaders: extraMaskedHeaders,
     );
+
+    final Object? safeData;
+    if (_shouldMaskData(options)) {
+      safeData = _redacted;
+    } else {
+      safeData = _sanitizeData(options.data);
+    }
+
+    Log.info(
+      'Network',
+      '${options.method} ${_sanitizeUri(options.uri)}\n'
+          'headers:\n$safeHeaders\n'
+          'data:\n$safeData',
+    );
+
     options.connectTimeout = const Duration(seconds: 15);
     options.receiveTimeout = const Duration(seconds: 15);
     options.sendTimeout = const Duration(seconds: 15);
