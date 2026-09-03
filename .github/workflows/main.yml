@@ -134,84 +134,6 @@ jobs:
             exit 1
           fi
 
-  Build_MacOS:
-    runs-on: macos-15
-    needs: Prepare_Release
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
-        with:
-          channel: "stable"
-          flutter-version-file: pubspec.yaml
-          architecture: x64
-      - run: sudo xcode-select --switch /Applications/Xcode_16.4.app
-      - name: 准备 Rust 工具链
-        run: |
-          python3 .github/scripts/prepare_rust_toolchain.py \
-            --target aarch64-apple-darwin \
-            --target x86_64-apple-darwin
-      - name: 串行化 Rustup 安装操作
-        run: |
-          install "$(command -v rustup)" "$RUNNER_TEMP/rustup"
-          rm -f "$HOME/.cargo/bin/rustup"
-          install .github/scripts/serialized_rustup.py "$HOME/.cargo/bin/rustup"
-          chmod +x "$HOME/.cargo/bin/rustup"
-          echo "RUSTUP_REAL_BINARY=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
-          echo "RUSTUP_LOCK_FILE=$RUNNER_TEMP/venera-rustup.lock" >> "$GITHUB_ENV"
-      - run: flutter pub get --enforce-lockfile
-      - name: 检查 rust-toolchain.toml
-        run: rustup show
-      - name: 构建 Flutter macOS 应用
-        run: flutter build macos --release
-      - name: 创建 DMG
-        run: |
-          mkdir -p dist/dmg_contents
-          cp -R build/macos/Build/Products/Release/VeneraNext.app dist/dmg_contents/
-          ln -s /Applications dist/dmg_contents/Applications
-          hdiutil create -volname "VeneraNext" -srcfolder dist/dmg_contents -ov -format UDZO "dist/VeneraNext.dmg"
-      - name: 将版本号写入文件名
-        run: |
-          APP_VERSION=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | tr -d '\r\n')
-          mkdir -p result
-          mv dist/VeneraNext.dmg "result/VeneraNext-$APP_VERSION.dmg"
-      - name: 上传 macOS Workflow Artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: macos_build
-          path: result/*.dmg
-          if-no-files-found: error
-
-  Upload_MacOS:
-    runs-on: ubuntu-22.04
-    needs: Build_MacOS
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-    steps:
-      - name: 下载 macOS 构建产物
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: macos_build
-          path: outputs
-      - name: 上传 DMG 到 Release
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          files=(outputs/*.dmg)
-          (( ${#files[@]} == 1 )) || { echo "应当恰好有一个 macOS DMG，实际 ${#files[@]} 个。" >&2; exit 1; }
-          existing=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
-          name=$(basename "${files[0]}")
-          if grep -Fxq "$name" <<<"$existing"; then
-            echo "Release 已存在 $name，为避免覆盖已发布二进制，本次跳过。"
-          else
-            gh release upload "${GITHUB_REF_NAME}" "${files[0]}"
-          fi
-
   Build_IOS:
     runs-on: macos-15
     needs: Prepare_Release
@@ -666,7 +588,6 @@ jobs:
   Finalize_Release:
     runs-on: ubuntu-22.04
     needs:
-      - Upload_MacOS
       - Upload_IOS
       - Upload_Android
       - Upload_Windows
@@ -712,8 +633,6 @@ jobs:
     runs-on: ubuntu-22.04
     needs:
       - Prepare_Release
-      - Build_MacOS
-      - Upload_MacOS
       - Build_IOS
       - Upload_IOS
       - Build_Android
@@ -731,7 +650,6 @@ jobs:
         startsWith(github.ref, 'refs/tags/v') &&
         needs.Prepare_Release.result == 'success' &&
         (
-          needs.Build_MacOS.result != 'success' || needs.Upload_MacOS.result != 'success' ||
           needs.Build_IOS.result != 'success' || needs.Upload_IOS.result != 'success' ||
           needs.Build_Android.result != 'success' || needs.Upload_Android.result != 'success' ||
           needs.Build_Windows.result != 'success' || needs.Upload_Windows.result != 'success' ||

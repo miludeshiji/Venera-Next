@@ -11,6 +11,7 @@ void main() {
     appdata.settings['bangumiAccessToken'] = '';
     appdata.settings['bangumiUsername'] = '';
     appdata.settings['bangumiAutoSyncEnabled'] = true;
+    appdata.settings['bangumiAutoMetadataScrapeEnabled'] = false;
     appdata.settings['bangumiBindings'] = <String, dynamic>{};
   });
 
@@ -208,7 +209,11 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byType(Switch));
+    final autoSyncFinder = find.descendant(
+      of: find.byKey(const Key('bangumi-auto-sync')),
+      matching: find.byType(Switch),
+    );
+    await tester.tap(autoSyncFinder);
     await tester.pumpAndSettle();
 
     expect(appdata.settings['bangumiAutoSyncEnabled'], isFalse);
@@ -232,10 +237,14 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byType(Switch));
+    final autoSyncFinder = find.descendant(
+      of: find.byKey(const Key('bangumi-auto-sync')),
+      matching: find.byType(Switch),
+    );
+    await tester.tap(autoSyncFinder);
     await tester.pump();
-    expect(tester.widget<Switch>(find.byType(Switch)).onChanged, isNull);
-    await tester.tap(find.byType(Switch));
+    expect(tester.widget<Switch>(autoSyncFinder).onChanged, isNull);
+    await tester.tap(autoSyncFinder);
     await tester.pump();
     expect(saves, 1);
     save.complete();
@@ -263,7 +272,11 @@ void main() {
           .text,
       isEmpty,
     );
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+    final autoSyncFinder = find.descendant(
+      of: find.byKey(const Key('bangumi-auto-sync')),
+      matching: find.byType(Switch),
+    );
+    expect(tester.widget<Switch>(autoSyncFinder).value, isTrue);
   });
 
   testWidgets('failed automatic sync save restores the switch and setting', (
@@ -278,11 +291,15 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byType(Switch));
+    final autoSyncFinder = find.descendant(
+      of: find.byKey(const Key('bangumi-auto-sync')),
+      matching: find.byType(Switch),
+    );
+    await tester.tap(autoSyncFinder);
     await tester.pumpAndSettle();
 
     expect(appdata.settings['bangumiAutoSyncEnabled'], isTrue);
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+    expect(tester.widget<Switch>(autoSyncFinder).value, isTrue);
     expect(
       find.textContaining('Failed to save Bangumi settings:'),
       findsOneWidget,
@@ -304,7 +321,11 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byType(Switch));
+    final autoSyncFinder = find.descendant(
+      of: find.byKey(const Key('bangumi-auto-sync')),
+      matching: find.byType(Switch),
+    );
+    await tester.tap(autoSyncFinder);
     await tester.pumpAndSettle();
     expect(
       find.textContaining('Failed to save Bangumi settings:'),
@@ -312,12 +333,89 @@ void main() {
     );
 
     fails = false;
-    await tester.tap(find.byType(Switch));
+    await tester.tap(autoSyncFinder);
     await tester.pumpAndSettle();
     expect(appdata.settings['bangumiAutoSyncEnabled'], isFalse);
     expect(
       find.textContaining('Failed to save Bangumi settings:'),
       findsNothing,
+    );
+  });
+
+  testWidgets('automatic metadata scraping switch defaults to false', (
+    tester,
+  ) async {
+    appdata.settings['bangumiAutoMetadataScrapeEnabled'] = null;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BangumiSettingsPage(
+          service: BangumiService.forTesting(gatewayFactory: (_) => _Gateway()),
+        ),
+      ),
+    );
+
+    final scrapeSwitch = tester.widget<SwitchListTile>(
+      find.byKey(const Key('bangumi-auto-metadata-scrape')),
+    );
+    expect(scrapeSwitch.value, isFalse);
+    expect(scrapeSwitch.title, isA<Text>());
+  });
+
+  testWidgets(
+    'toggling automatic metadata scraping saves setting and updates state',
+    (tester) async {
+      appdata.settings['bangumiAutoMetadataScrapeEnabled'] = false;
+      var saved = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BangumiSettingsPage(
+            service: BangumiService.forTesting(
+              gatewayFactory: (_) => _Gateway(),
+            ),
+            saveSettings: () async {
+              saved = true;
+            },
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('bangumi-auto-metadata-scrape')));
+      await tester.pumpAndSettle();
+
+      expect(saved, isTrue);
+      expect(appdata.settings['bangumiAutoMetadataScrapeEnabled'], isTrue);
+
+      final scrapeSwitch = tester.widget<SwitchListTile>(
+        find.byKey(const Key('bangumi-auto-metadata-scrape')),
+      );
+      expect(scrapeSwitch.value, isTrue);
+    },
+  );
+
+  testWidgets('failing to save automatic metadata scraping rolls back switch', (
+    tester,
+  ) async {
+    appdata.settings['bangumiAutoMetadataScrapeEnabled'] = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BangumiSettingsPage(
+          service: BangumiService.forTesting(gatewayFactory: (_) => _Gateway()),
+          saveSettings: () async => throw StateError('disk full'),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('bangumi-auto-metadata-scrape')));
+    await tester.pumpAndSettle();
+
+    expect(appdata.settings['bangumiAutoMetadataScrapeEnabled'], isFalse);
+    expect(
+      find.textContaining(
+        'Failed to save Bangumi settings: Bad state: disk full',
+      ),
+      findsOneWidget,
     );
   });
 

@@ -527,6 +527,9 @@ class WebDavLibrarySource {
   static const _maxDiscoveryDirectories = 2000;
   @visibleForTesting
   static int? discoveryDirectoryLimitOverride;
+  @visibleForTesting
+  static int Function() metadataNowProvider = () =>
+      DateTime.now().millisecondsSinceEpoch;
   static const _maxMetadataMergeAttempts = 3;
   static const _maxMetadataRetryAttempts = 4;
   static const _defaultScraperVersion = '1';
@@ -692,6 +695,8 @@ class WebDavLibrarySource {
     _metadataWriteTails.clear();
     _metadataPayloadSequence = 0;
     _metadataWriteGuard = null;
+    discoveryDirectoryLimitOverride = null;
+    metadataNowProvider = () => DateTime.now().millisecondsSinceEpoch;
     _clearMemoryCaches();
     _cache.resetForTesting();
     appdata.implicitData.remove(_metadataPendingKey);
@@ -936,7 +941,7 @@ class WebDavLibrarySource {
       _cache.replaceDirectoryIndex(configKey, remoteDirectories);
       contentVersion.value++;
 
-      final scrapeCheckTime = DateTime.now().millisecondsSinceEpoch;
+      final scrapeCheckTime = metadataNowProvider();
       final toRefresh = <WebDavLibraryRemoteDirectory>[];
       for (final directory in remoteDirectories) {
         final cached = previous[directory.id];
@@ -1165,15 +1170,19 @@ class WebDavLibrarySource {
     final inFlight = _snapshotInFlight[memoryKey];
     if (inFlight != null) return inFlight;
     final future = () async {
+      final existing = _cache.find(config.cacheKey, id);
+      final previousSnapshot = existing?.snapshot == null
+          ? null
+          : _WebDavComicSnapshot.fromJson(existing!.snapshot!);
       final snapshot = await _buildSnapshot(
         config,
         id,
         rootEntries: rootEntries,
         childEntries: childEntries,
+        previousSnapshot: previousSnapshot,
         syncRun: syncRun,
       );
       if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
-      final existing = _cache.find(config.cacheKey, id);
       _cache.upsertSnapshot(
         config.cacheKey,
         WebDavLibraryCachedComic(
@@ -1207,6 +1216,7 @@ class WebDavLibrarySource {
     String id, {
     List<WebDavLibraryEntry>? rootEntries,
     Map<String, List<WebDavLibraryEntry>>? childEntries,
+    _WebDavComicSnapshot? previousSnapshot,
     _WebDavLibrarySyncRun? syncRun,
   }) async {
     final comicPath = config.childDirectoryPath(id);
@@ -1224,10 +1234,16 @@ class WebDavLibrarySource {
             .toList()
           ..sort((a, b) => compareComicFileNames(a.name, b.name));
     var metadataFilePresent = _hasMetadataFile(entries);
-    var metadataScrapeStatus = metadataFilePresent ? 'notNeeded' : 'pending';
-    int? metadataScrapeAttemptedAt;
-    int? metadataScrapeRetryAt;
-    String? metadataScrapeError;
+    var metadataScrapeStatus = metadataFilePresent
+        ? 'notNeeded'
+        : (previousSnapshot?.metadataScrapeStatus ?? 'pending');
+    var metadataScraperVersion = metadataFilePresent
+        ? ''
+        : (previousSnapshot?.metadataScraperVersion ?? '');
+    int? metadataScrapeAttemptedAt =
+        previousSnapshot?.metadataScrapeAttemptedAt;
+    int? metadataScrapeRetryAt = previousSnapshot?.metadataScrapeRetryAt;
+    String? metadataScrapeError = previousSnapshot?.metadataScrapeError;
     var metadata = await _readMetadata(
       config,
       comicPath,
@@ -1235,7 +1251,14 @@ class WebDavLibrarySource {
       pageCount: directories.isEmpty ? rootImages.length : null,
     );
     if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
-    if (!metadataFilePresent && _canScrapeMetadata) {
+    final shouldScrape = _shouldAttemptMetadataScrape(
+      previousSnapshot: previousSnapshot,
+      metadataFilePresent: metadataFilePresent,
+      scraperVersion: _metadataScraperVersion,
+      now: metadataNowProvider(),
+      automaticScrapingEnabled: _canScrapeMetadata,
+    );
+    if (shouldScrape) {
       if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
       final scraped = await _scrapeMissingMetadata(
         config,
@@ -1248,6 +1271,7 @@ class WebDavLibrarySource {
       metadata = scraped.metadata;
       metadataFilePresent = scraped.filePresent;
       metadataScrapeStatus = scraped.status;
+      metadataScraperVersion = _metadataScraperVersion;
       metadataScrapeAttemptedAt = scraped.attemptedAt;
       metadataScrapeRetryAt = scraped.retryAt;
       metadataScrapeError = scraped.error;
@@ -1261,41 +1285,35 @@ class WebDavLibrarySource {
     final chapterMap = <String, String>{};
     if (directories.isNotEmpty) {
       for (final directory in directories) {
-        final cached = inspectedChapterEntries[directory.name];
-        if (cached != null) {
-          final hasImages = _imageEntries(
-            cached,
-          ).any((entry) => !isNamedComicCover(entry.name));
-          if (hasImages) {
-            chapterMap[directory.name] = directory.name;
-          }
-        } else if (_looksLikeChapterName(directory.name)) {
-          chapterMap[directory.name] = directory.name;
-        } else {
+        var chapterEntries = inspectedChapterEntries[directory.name];
+        if (chapterEntries == null) {
           final chapterPath = config.childDirectoryPathFrom(
             comicPath,
             directory.name,
           );
           try {
-            final chapterEntries = List<WebDavLibraryEntry>.from(
+            chapterEntries = List<WebDavLibraryEntry>.from(
               await ops.readDir(config, chapterPath),
             );
             if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
             inspectedChapterEntries[directory.name] = chapterEntries;
-            final hasImages = _imageEntries(
-              chapterEntries,
-            ).any((entry) => !isNamedComicCover(entry.name));
-            if (hasImages) {
-              chapterMap[directory.name] = directory.name;
-            }
           } on _WebDavSynchronizationObsoleteException {
             rethrow;
           } catch (e) {
+            if (syncRun != null) rethrow;
             Log.warning(
               'WebDAV Library',
               'Failed to inspect chapter directory at $chapterPath: $e',
             );
           }
+        }
+        final hasReadablePages =
+            chapterEntries != null &&
+            _imageEntries(
+              chapterEntries,
+            ).any((entry) => !isNamedComicCover(entry.name));
+        if (hasReadablePages) {
+          chapterMap[directory.name] = directory.name;
         }
       }
       if (rootImages.isNotEmpty) {
@@ -1374,7 +1392,7 @@ class WebDavLibrarySource {
       bangumiSubjectId: metadata?.bangumiSubjectId,
       metadataFilePresent: metadataFilePresent,
       metadataScrapeStatus: metadataScrapeStatus,
-      metadataScraperVersion: _metadataScraperVersion,
+      metadataScraperVersion: metadataScraperVersion,
       metadataScrapeAttemptedAt: metadataScrapeAttemptedAt,
       metadataScrapeRetryAt: metadataScrapeRetryAt,
       metadataScrapeError: metadataScrapeError,
@@ -1620,7 +1638,7 @@ class WebDavLibrarySource {
     _WebDavLibrarySyncRun? syncRun,
   }) async {
     final scraper = _metadataScraper;
-    if (scraper == null) {
+    if (scraper == null || !_canScrapeMetadata) {
       return (
         metadata: null,
         filePresent: false,
@@ -1630,7 +1648,7 @@ class WebDavLibrarySource {
         error: null,
       );
     }
-    final attemptedAt = DateTime.now().millisecondsSinceEpoch;
+    final attemptedAt = metadataNowProvider();
     try {
       final scraped = await scraper(_directoryName(id));
       if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
@@ -1966,14 +1984,44 @@ class WebDavLibrarySource {
     });
   }
 
+  static bool _shouldAttemptMetadataScrape({
+    required _WebDavComicSnapshot? previousSnapshot,
+    required bool metadataFilePresent,
+    required String scraperVersion,
+    required int now,
+    required bool automaticScrapingEnabled,
+    bool forceMetadataScrape = false,
+  }) {
+    if (metadataFilePresent) return false;
+    if (!automaticScrapingEnabled && !forceMetadataScrape) return false;
+    if (forceMetadataScrape) return true;
+    if (previousSnapshot == null) return true;
+    if (previousSnapshot.metadataScraperVersion != scraperVersion) return true;
+
+    switch (previousSnapshot.metadataScrapeStatus) {
+      case 'pending':
+        return true;
+      case 'noMatch':
+      case 'matched':
+      case 'notNeeded':
+        return false;
+      case 'failed':
+        final retryAt = previousSnapshot.metadataScrapeRetryAt;
+        return retryAt == null || retryAt <= now;
+      default:
+        return true;
+    }
+  }
+
   static bool _looksLikeChapterName(String name) {
     final normalized = name.trim().toLowerCase();
     return RegExp(
       r'^(?:'
       r'\d+(?:[._-]\d+)?|'
-      r'第?\s*(?:\d+|[一二三四五六七八九十百]+)\s*(?:话|話|章|卷|册|冊|回|集)(?:[\s._:—–~\[-].*)?|'
-      r'\d+\s+第?\s*(?:\d+|[一二三四五六七八九十百]+)\s*(?:话|話|章|卷|册|冊|回|集)?(?:[\s._:—–~\[-].*)?|'
-      r'卷\s*(?:\d+|[一二三四五六七八九十百]+)(?:[\s._:—–~\[-].*)?|'
+      r'第?\s*(?:\d+|[零〇一二三四五六七八九十百两兩]+)\s*(?:话|話|章|卷|册|冊|回|集)(?:[\s._:—–~\[-].*)?|'
+      r'\d+\s+第?\s*(?:\d+|[零〇一二三四五六七八九十百两兩]+)\s*(?:话|話|章|卷|册|冊|回|集)?(?:[\s._:—–~\[-].*)?|'
+      r'卷\s*(?:\d+|[零〇一二三四五六七八九十百两兩]+)(?:[\s._:—–~\[-].*)?|'
+      r'全\s*(?:\d+|[零〇一二三四五六七八九十百两兩]+)\s*(?:卷|册|冊|部|篇)(?:[\s._:—–~\[-].*)?|'
       r'(?:上|中|下|全)\s*(?:卷|册|冊|部|篇)(?:[\s._:—–~\[-].*)?|'
       r'(?:单行本|單行本)\s*\d+(?:[\s._:—–~\[-].*)?|'
       r'(?:ch(?:apter)?|ep(?:isode)?|vol(?:ume)?)\.?\s*\d+(?:[._-]\d+)?(?:[\s._:—–~\[-].*)?|'

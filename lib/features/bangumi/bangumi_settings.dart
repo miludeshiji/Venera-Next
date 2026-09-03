@@ -34,8 +34,10 @@ class BangumiSettingsPage extends StatefulWidget {
 class _BangumiSettingsPageState extends State<BangumiSettingsPage> {
   late final TextEditingController _tokenController;
   late bool _autoSyncEnabled;
+  late bool _autoMetadataScrapeEnabled;
   bool _isConnecting = false;
   bool _isSavingAutoSync = false;
+  bool _isSavingAutoMetadataScrape = false;
   late bool _connectionInvalid;
   String? _errorMessage;
 
@@ -48,6 +50,10 @@ class _BangumiSettingsPageState extends State<BangumiSettingsPage> {
       text: _settingString('bangumiAccessToken'),
     );
     _autoSyncEnabled = _settingBool('bangumiAutoSyncEnabled', true);
+    _autoMetadataScrapeEnabled = _settingBool(
+      'bangumiAutoMetadataScrapeEnabled',
+      false,
+    );
     _connectionInvalid = _service.isAuthenticationPaused;
   }
 
@@ -109,10 +115,24 @@ class _BangumiSettingsPageState extends State<BangumiSettingsPage> {
             ),
             const SizedBox(height: 12),
             SwitchListTile(
+              key: const Key('bangumi-auto-sync'),
               contentPadding: EdgeInsets.zero,
               title: Text('Automatically sync after completing a chapter'.tl),
               value: _autoSyncEnabled,
               onChanged: _isSavingAutoSync ? null : _setAutoSyncEnabled,
+            ),
+            SwitchListTile(
+              key: const Key('bangumi-auto-metadata-scrape'),
+              contentPadding: EdgeInsets.zero,
+              title: Text('Automatic metadata scraping'.tl),
+              subtitle: Text(
+                'When enabled, Bangumi will be used to scrape comic metadata.'
+                    .tl,
+              ),
+              value: _autoMetadataScrapeEnabled,
+              onChanged: _isSavingAutoMetadataScrape
+                  ? null
+                  : _setAutoMetadataScrapeEnabled,
             ),
             if (_connectionInvalid && _errorMessage == null) ...[
               const SizedBox(height: 4),
@@ -255,6 +275,30 @@ class _BangumiSettingsPageState extends State<BangumiSettingsPage> {
       }
     } finally {
       if (mounted) setState(() => _isSavingAutoSync = false);
+    }
+  }
+
+  Future<void> _setAutoMetadataScrapeEnabled(bool value) async {
+    if (_isSavingAutoMetadataScrape) return;
+    final previous = _autoMetadataScrapeEnabled;
+    setState(() {
+      _autoMetadataScrapeEnabled = value;
+      _isSavingAutoMetadataScrape = true;
+    });
+    appdata.settings['bangumiAutoMetadataScrapeEnabled'] = value;
+    try {
+      await widget.saveSettings();
+      if (mounted) setState(() => _errorMessage = null);
+    } catch (error) {
+      appdata.settings['bangumiAutoMetadataScrapeEnabled'] = previous;
+      if (mounted) {
+        setState(() {
+          _autoMetadataScrapeEnabled = previous;
+          _errorMessage = '${'Failed to save Bangumi settings'.tl}: $error';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _isSavingAutoMetadataScrape = false);
     }
   }
 

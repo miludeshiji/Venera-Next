@@ -379,6 +379,11 @@ void main() {
       ops.dirs['/manga/Cat Eye/第02卷/'] = const [
         WebDavLibraryEntry(name: '001.webp', isDirectory: false),
       ];
+      for (var index = 3; index <= 5; index++) {
+        ops.dirs['/manga/Cat Eye/第0$index卷/'] = const [
+          WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+        ];
+      }
 
       final result = await WebDavLibrarySource.loadComicInfo('Cat Eye');
 
@@ -391,7 +396,14 @@ void main() {
         '第04卷': '第04卷',
         '第05卷': '第05卷',
       });
-      expect(ops.readPaths, ['/manga/Cat Eye/', '/manga/Cat Eye/第01卷/']);
+      expect(ops.readPaths, [
+        '/manga/Cat Eye/',
+        '/manga/Cat Eye/第01卷/',
+        '/manga/Cat Eye/第02卷/',
+        '/manga/Cat Eye/第03卷/',
+        '/manga/Cat Eye/第04卷/',
+        '/manga/Cat Eye/第05卷/',
+      ]);
     },
   );
 
@@ -612,7 +624,11 @@ void main() {
         '第01卷': '第01卷',
         '第02卷': '第02卷',
       });
-      expect(ops.readPaths, ['/manga/猫之眼[北条司]/', '/manga/猫之眼[北条司]/第01卷/']);
+      expect(ops.readPaths, [
+        '/manga/猫之眼[北条司]/',
+        '/manga/猫之眼[北条司]/第01卷/',
+        '/manga/猫之眼[北条司]/第02卷/',
+      ]);
     },
   );
 
@@ -1767,6 +1783,379 @@ void main() {
       expect(cache.find(config.cacheKey, 'Cat Eye/第二卷'), isNull);
     },
   );
+
+  test(
+    'single volume directory such as 全1卷 is recognized as chapter instead of comic',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Cat Eye', isDirectory: true),
+      ];
+      ops.dirs['/manga/Cat Eye/'] = const [
+        WebDavLibraryEntry(name: '全1卷', isDirectory: true),
+      ];
+      ops.dirs['/manga/Cat Eye/全1卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      final scrapedTitles = <String>[];
+      WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+        scrapedTitles.add(directoryTitle);
+        return const ComicMetaData(
+          title: 'Cat Eye',
+          author: 'Tsukasa Hojo',
+          tags: ['Action'],
+          description: '',
+        );
+      });
+
+      final sync = await WebDavLibrarySource.synchronize();
+      final comics = await WebDavLibrarySource.loadComics(1);
+      final details = await WebDavLibrarySource.loadComicInfo('Cat Eye');
+
+      expect(sync.success, isTrue);
+      expect(comics.data.map((c) => c.id), ['Cat Eye']);
+      expect(details.data.chapters!.allChapters.keys, ['全1卷']);
+      expect(scrapedTitles, ['Cat Eye']);
+      expect(scrapedTitles, isNot(contains('全1卷')));
+      expect(ops.writtenTexts.keys, ['/manga/Cat Eye/metadata.json']);
+      expect(
+        ops.writtenTexts.keys,
+        isNot(contains('/manga/Cat Eye/全1卷/metadata.json')),
+      );
+    },
+  );
+
+  test(
+    'metadata comic excludes empty chapter-named directory from chapters',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Comic', isDirectory: true),
+      ];
+      ops.dirs['/manga/Comic/'] = const [
+        WebDavLibraryEntry(name: 'metadata.json', isDirectory: false),
+        WebDavLibraryEntry(name: '第01卷', isDirectory: true),
+        WebDavLibraryEntry(name: '第02卷', isDirectory: true),
+      ];
+      ops.dirs['/manga/Comic/第01卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/Comic/第02卷/'] = const [];
+      ops.textFiles['/manga/Comic/metadata.json'] = jsonEncode({
+        'title': 'Comic',
+        'author': '',
+      });
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isTrue);
+
+      final details = await WebDavLibrarySource.loadComicInfo('Comic');
+      expect(details.data.chapters!.allChapters.keys, ['第01卷']);
+    },
+  );
+
+  test(
+    'chapter with only named cover is excluded from chapters and comic cover',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Comic', isDirectory: true),
+      ];
+      ops.dirs['/manga/Comic/'] = const [
+        WebDavLibraryEntry(name: '第01卷', isDirectory: true),
+        WebDavLibraryEntry(name: '第02卷', isDirectory: true),
+      ];
+      ops.dirs['/manga/Comic/第01卷/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      ops.dirs['/manga/Comic/第02卷/'] = const [
+        WebDavLibraryEntry(name: 'cover.jpg', isDirectory: false),
+      ];
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isTrue);
+
+      final details = await WebDavLibrarySource.loadComicInfo('Comic');
+      expect(details.data.chapters!.allChapters.keys, ['第01卷']);
+      expect(details.data.cover, '/manga/Comic/第01卷/001.jpg');
+    },
+  );
+
+  test(
+    'noMatch negative scrape cache is preserved across forced sync',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Unmatched Book', isDirectory: true),
+      ];
+      ops.dirs['/manga/Unmatched Book/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      var scraperCalls = 0;
+      WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+        scraperCalls++;
+        return null;
+      });
+
+      final firstSync = await WebDavLibrarySource.synchronize();
+      expect(firstSync.success, isTrue);
+      expect(scraperCalls, 1);
+
+      final secondSync = await WebDavLibrarySource.synchronize(force: true);
+      expect(secondSync.success, isTrue);
+      expect(scraperCalls, 1);
+    },
+  );
+
+  test(
+    'noMatch negative scrape cache is preserved when comic pages change',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Unmatched Book', isDirectory: true),
+      ];
+      ops.dirs['/manga/Unmatched Book/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false, eTag: 'p1'),
+      ];
+      var scraperCalls = 0;
+      WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+        scraperCalls++;
+        return null;
+      });
+
+      await WebDavLibrarySource.synchronize();
+      expect(scraperCalls, 1);
+
+      ops.dirs['/manga/Unmatched Book/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false, eTag: 'p1'),
+        WebDavLibraryEntry(name: '002.jpg', isDirectory: false, eTag: 'p2'),
+      ];
+
+      await WebDavLibrarySource.synchronize();
+      expect(scraperCalls, 1);
+    },
+  );
+
+  test(
+    'validatorless WebDAV comic does not loop scraper queries on subsequent syncs',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Unmatched Book', isDirectory: true),
+      ];
+      ops.dirs['/manga/Unmatched Book/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      var scraperCalls = 0;
+      WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+        scraperCalls++;
+        return null;
+      });
+
+      await WebDavLibrarySource.synchronize();
+      expect(scraperCalls, 1);
+
+      await WebDavLibrarySource.synchronize();
+      expect(scraperCalls, 1);
+    },
+  );
+
+  test('scraperVersion change retries an existing noMatch comic', () async {
+    ops.dirs['/manga/'] = const [
+      WebDavLibraryEntry(name: 'Unmatched Book', isDirectory: true),
+    ];
+    ops.dirs['/manga/Unmatched Book/'] = const [
+      WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+    ];
+    var scraperCalls = 0;
+    WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+      scraperCalls++;
+      return null;
+    }, scraperVersion: '1');
+
+    await WebDavLibrarySource.synchronize();
+    expect(scraperCalls, 1);
+
+    WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+      scraperCalls++;
+      return null;
+    }, scraperVersion: '2');
+
+    await WebDavLibrarySource.synchronize();
+    expect(scraperCalls, 2);
+  });
+
+  test(
+    'automatic scraping is skipped when scraper is disabled in settings',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Cat Eye[Tsukasa Hojo]', isDirectory: true),
+      ];
+      ops.dirs['/manga/Cat Eye[Tsukasa Hojo]/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      var scraperCalls = 0;
+      WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+        scraperCalls++;
+        return const ComicMetaData(
+          title: 'Cat Eye',
+          author: 'Tsukasa Hojo',
+          tags: ['Action'],
+          description: '',
+        );
+      }, isEnabled: () => false);
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isTrue);
+      expect(scraperCalls, 0);
+      expect(ops.writtenTexts, isEmpty);
+    },
+  );
+
+  test(
+    'disconnected scraper records failed status instead of noMatch',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Cat Eye[Tsukasa Hojo]', isDirectory: true),
+      ];
+      ops.dirs['/manga/Cat Eye[Tsukasa Hojo]/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+        throw StateError('Bangumi is not connected');
+      });
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isTrue);
+
+      final config = WebDavLibraryConfig.fromSettings();
+      final cached = WebDavLibraryCache.instance.find(
+        config.cacheKey,
+        'Cat Eye[Tsukasa Hojo]',
+      );
+      expect(cached, isNotNull);
+      final snapshot = cached!.snapshot!;
+      expect(snapshot['metadataScrapeStatus'], 'failed');
+      expect(snapshot['metadataScrapeRetryAt'], isNotNull);
+      expect(
+        snapshot['metadataScrapeError'],
+        contains('Bangumi is not connected'),
+      );
+    },
+  );
+
+  test('normal unmatching scraper records noMatch without retryAt', () async {
+    ops.dirs['/manga/'] = const [
+      WebDavLibraryEntry(name: 'Cat Eye[Tsukasa Hojo]', isDirectory: true),
+    ];
+    ops.dirs['/manga/Cat Eye[Tsukasa Hojo]/'] = const [
+      WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+    ];
+    WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+      return null;
+    });
+
+    final sync = await WebDavLibrarySource.synchronize();
+    expect(sync.success, isTrue);
+
+    final config = WebDavLibraryConfig.fromSettings();
+    final cached = WebDavLibraryCache.instance.find(
+      config.cacheKey,
+      'Cat Eye[Tsukasa Hojo]',
+    );
+    expect(cached, isNotNull);
+    final snapshot = cached!.snapshot!;
+    expect(snapshot['metadataScrapeStatus'], 'noMatch');
+    expect(snapshot['metadataScrapeRetryAt'], isNull);
+    expect(snapshot['metadataScrapeError'], isNull);
+  });
+
+  test(
+    'secondary gate skips scraper and sets pending if disabled before execution',
+    () async {
+      ops.dirs['/manga/'] = const [
+        WebDavLibraryEntry(name: 'Cat Eye[Tsukasa Hojo]', isDirectory: true),
+      ];
+      ops.dirs['/manga/Cat Eye[Tsukasa Hojo]/'] = const [
+        WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+      ];
+      var calls = 0;
+      var enabled = true;
+      WebDavLibrarySource.configureMetadataScraper(
+        (directoryTitle) async {
+          calls++;
+          return null;
+        },
+        isEnabled: () {
+          final current = enabled;
+          enabled = false;
+          return current;
+        },
+      );
+
+      final sync = await WebDavLibrarySource.synchronize();
+      expect(sync.success, isTrue);
+      expect(calls, 0);
+
+      final config = WebDavLibraryConfig.fromSettings();
+      final cached = WebDavLibraryCache.instance.find(
+        config.cacheKey,
+        'Cat Eye[Tsukasa Hojo]',
+      );
+      expect(cached, isNotNull);
+      expect(cached!.snapshot!['metadataScrapeStatus'], 'pending');
+    },
+  );
+
+  test('failed scraper does not retry before retryAt arrives', () async {
+    var simulatedTime = 1000000000000;
+    WebDavLibrarySource.metadataNowProvider = () => simulatedTime;
+
+    ops.dirs['/manga/'] = const [
+      WebDavLibraryEntry(name: 'Cat Eye[Tsukasa Hojo]', isDirectory: true),
+    ];
+    ops.dirs['/manga/Cat Eye[Tsukasa Hojo]/'] = const [
+      WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+    ];
+    var scraperCalls = 0;
+    WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+      scraperCalls++;
+      throw StateError('Bangumi is not connected');
+    });
+
+    final firstSync = await WebDavLibrarySource.synchronize();
+    expect(firstSync.success, isTrue);
+    expect(scraperCalls, 1);
+
+    // Advance time by 14 minutes (< 15 minutes retryAt)
+    simulatedTime += const Duration(minutes: 14).inMilliseconds;
+
+    final secondSync = await WebDavLibrarySource.synchronize();
+    expect(secondSync.success, isTrue);
+    expect(scraperCalls, 1);
+  });
+
+  test('failed scraper retries after retryAt has elapsed', () async {
+    var simulatedTime = 1000000000000;
+    WebDavLibrarySource.metadataNowProvider = () => simulatedTime;
+
+    ops.dirs['/manga/'] = const [
+      WebDavLibraryEntry(name: 'Cat Eye[Tsukasa Hojo]', isDirectory: true),
+    ];
+    ops.dirs['/manga/Cat Eye[Tsukasa Hojo]/'] = const [
+      WebDavLibraryEntry(name: '001.jpg', isDirectory: false),
+    ];
+    var scraperCalls = 0;
+    WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
+      scraperCalls++;
+      throw StateError('Bangumi is not connected');
+    });
+
+    final firstSync = await WebDavLibrarySource.synchronize();
+    expect(firstSync.success, isTrue);
+    expect(scraperCalls, 1);
+
+    // Advance time by 15 minutes (>= 15 minutes retryAt)
+    simulatedTime += const Duration(minutes: 15).inMilliseconds;
+
+    final secondSync = await WebDavLibrarySource.synchronize();
+    expect(secondSync.success, isTrue);
+    expect(scraperCalls, 2);
+  });
 
   test(
     'child metadata validators invalidate an unchanged parent snapshot',

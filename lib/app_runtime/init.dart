@@ -89,6 +89,19 @@ ComicMetaData _metadataFromBangumiSubject(BangumiSubject subject) =>
       bangumiSubjectId: subject.id,
     );
 
+@visibleForTesting
+Future<ComicMetaData?> scrapeBangumiMetadataForWebDav(
+  String directoryTitle, {
+  BangumiService? service,
+}) async {
+  final bangumi = service ?? BangumiService();
+  if (!bangumi.isConnected) {
+    throw StateError('Bangumi is not connected');
+  }
+  final subject = await bangumi.matchSubjectForMetadata(directoryTitle);
+  return subject == null ? null : _metadataFromBangumiSubject(subject);
+}
+
 Future<void> init() async {
   await App.init().wait();
   await SingleInstanceCookieJar.createInstance();
@@ -119,12 +132,12 @@ Future<void> init() async {
       checkForAutomaticSync: WebDavLibrarySource.checkForAutomaticSync,
     ),
   );
-  WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
-    final service = BangumiService();
-    if (!service.isConnected) return null;
-    final subject = await service.matchSubjectForMetadata(directoryTitle);
-    return subject == null ? null : _metadataFromBangumiSubject(subject);
-  }, isEnabled: () => BangumiService().isConnected);
+  WebDavLibrarySource.configureMetadataScraper(
+    scrapeBangumiMetadataForWebDav,
+    isEnabled: () =>
+        BangumiService().isConnected &&
+        appdata.settings['bangumiAutoMetadataScrapeEnabled'] == true,
+  );
   configureBangumiBindingMetadataHandler(({
     required String scopeId,
     required String sourceKey,
@@ -218,7 +231,8 @@ Future<void> init() async {
       await BangumiService().initialize();
       WebDavLibrarySource.initializeMetadataRetry();
       WebDavLibrarySource.initializeAutoSync();
-      if (BangumiService().isConnected) {
+      if (BangumiService().isConnected &&
+          appdata.settings['bangumiAutoMetadataScrapeEnabled'] == true) {
         unawaited(WebDavLibrarySource.synchronize());
       }
     },

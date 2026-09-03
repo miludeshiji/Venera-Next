@@ -447,6 +447,7 @@ class Settings with ChangeNotifier {
     'bangumiAccessToken': '',
     'bangumiUsername': '',
     'bangumiAutoSyncEnabled': true,
+    'bangumiAutoMetadataScrapeEnabled': false,
     'bangumiBindings': <String, Map<String, dynamic>>{},
   };
 

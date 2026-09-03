@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:venera_next/app_runtime/app_runtime.dart';
+import 'package:venera_next/features/bangumi/bangumi.dart';
+import 'package:venera_next/foundation/appdata.dart';
 
 void main() {
   group('runtime sources after settings import', () {
@@ -102,5 +104,31 @@ void main() {
     expect(initialization.isCompleted, isFalse);
     initialization.complete();
     await Future<void>.delayed(Duration.zero);
+  });
+
+  group('scrapeBangumiMetadataForWebDav', () {
+    tearDown(() {
+      appdata.settings['bangumiAccessToken'] = '';
+      appdata.settings['bangumiUsername'] = '';
+    });
+
+    test('throws StateError when Bangumi is not connected', () async {
+      appdata.settings['bangumiAccessToken'] = '';
+      appdata.settings['bangumiUsername'] = '';
+      final service = BangumiService.forTesting(
+        gatewayFactory: (_) => throw UnimplementedError(),
+      );
+
+      await expectLater(
+        scrapeBangumiMetadataForWebDav('Cat Eye', service: service),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'Bangumi is not connected',
+          ),
+        ),
+      );
+    });
   });
 }
