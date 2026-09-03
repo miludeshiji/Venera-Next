@@ -4,7 +4,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:venera_next/foundation/app.dart';
 import 'package:venera_next/foundation/sqlite_connection.dart';
 
-const webDavLibrarySnapshotFormatVersion = 4;
+const webDavLibrarySnapshotFormatVersion = 5;
 
 class WebDavLibraryCachedComic {
   const WebDavLibraryCachedComic({
@@ -49,14 +49,22 @@ class WebDavLibraryCachedComic {
 
   bool get isReady =>
       snapshot?['formatVersion'] == webDavLibrarySnapshotFormatVersion;
-  bool get metadataScrapePending =>
-      isReady &&
-      snapshot?['metadataFilePresent'] == false &&
-      snapshot?['metadataScrapeAttempted'] == false;
+  bool shouldRetryMetadataScrape({
+    required String scraperVersion,
+    required int now,
+  }) {
+    if (!isReady || snapshot?['metadataFilePresent'] == true) return false;
+    if (snapshot?['metadataScraperVersion'] != scraperVersion) return true;
+    final status = snapshot?['metadataScrapeStatus'];
+    if (status == 'pending') return true;
+    if (status != 'failed') return false;
+    final retryAt = snapshot?['metadataScrapeRetryAt'];
+    return retryAt is! int || retryAt <= now;
+  }
 
   bool hasSameRemoteVersion({String? eTag, int? modifiedAt}) {
     final hasVersion = (eTag?.isNotEmpty ?? false) || modifiedAt != null;
-    if (!hasVersion) return true;
+    if (!hasVersion) return false;
     return remoteETag == eTag && remoteModifiedAt == modifiedAt;
   }
 }

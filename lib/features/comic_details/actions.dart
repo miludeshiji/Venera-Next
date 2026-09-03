@@ -103,6 +103,7 @@ abstract mixin class ComicPageActions {
         sourceKey: comic.sourceKey,
         comicId: comic.id,
         comicTitle: comic.title,
+        initialSubjectId: int.tryParse(comic.externalIds['bangumi'] ?? ''),
         chapters: comic.chapters,
         history: history,
       ),

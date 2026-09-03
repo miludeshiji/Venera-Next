@@ -64,26 +64,39 @@ class Appdata with Init {
         .toList();
   }
 
-  /// Following fields are related to device-specific data and should not be synced.
-  static const _disableSync = [
+  /// Settings that are always device-local or synchronized only by an
+  /// explicit opt-in policy.
+  static const _disableSync = {
     "proxy",
     "authorizationRequired",
     "customImageProcessing",
     "webdav",
+    "webdavAutoSync",
     "webdavProxyEnabled",
     "backupWebdav",
     "backupWebdavPath",
+    "backupWebdavSyncEnabled",
     "webdavComicLibrary",
     "webdavComicLibraryPath",
+    "webdavComicLibraryAutoSync",
+    "webdavComicLibrarySyncIntervalMinutes",
+    "webdavComicLibrarySyncEnabled",
     "disableSyncFields",
     "deviceId",
     "lastSyncTime",
-  ];
+  };
 
-  static const _archiveSyncFields = ["backupWebdav", "backupWebdavPath"];
+  static const _archiveSyncFields = {"backupWebdav", "backupWebdavPath"};
 
-  /// Sync data from another device
-  void syncData(Map<String, dynamic> data) {
+  static const _comicLibrarySyncFields = {
+    "webdavComicLibrary",
+    "webdavComicLibraryPath",
+    "webdavComicLibraryAutoSync",
+    "webdavComicLibrarySyncIntervalMinutes",
+  };
+
+  /// Sync data from another device and persist the accepted settings.
+  Future<void> syncData(Map<String, dynamic> data) async {
     if (data['settings'] is Map) {
       var settings = data['settings'] as Map<String, dynamic>;
 
@@ -93,10 +106,18 @@ class Appdata with Init {
 
       final archiveSyncEnabled =
           this.settings["backupWebdavSyncEnabled"] == true;
+      final comicLibrarySyncEnabled =
+          this.settings["webdavComicLibrarySyncEnabled"] == true;
 
       for (var key in settings.keys) {
         if (_archiveSyncFields.contains(key)) {
           if (archiveSyncEnabled) {
+            this.settings[key] = settings[key];
+          }
+          continue;
+        }
+        if (_comicLibrarySyncFields.contains(key)) {
+          if (comicLibrarySyncEnabled) {
             this.settings[key] = settings[key];
           }
           continue;
@@ -107,7 +128,7 @@ class Appdata with Init {
       }
     }
     searchHistory = List.from(data['searchHistory'] ?? []);
-    saveData();
+    await saveData(false);
   }
 
   var implicitData = <String, dynamic>{};
@@ -121,35 +142,37 @@ class Appdata with Init {
   }
 
   Future<void> _writeAppData() async {
-    var futures = <Future>[];
     var json = toJson();
     var data = jsonEncode(json);
     var file = File(FilePath.join(App.dataPath, 'appdata.json'));
-    futures.add(_writeTextAtomically(file, data));
 
-    var disableSyncFields = json["settings"]["disableSyncFields"] as String;
-    if (disableSyncFields.isNotEmpty) {
-      var json4sync = jsonDecode(data);
-      List<String> customDisableSync = splitField(disableSyncFields);
-      for (var field in customDisableSync) {
-        json4sync["settings"].remove(field);
-      }
-      var data4sync = jsonEncode(json4sync);
-      var file4sync = File(FilePath.join(App.dataPath, 'syncdata.json'));
-      futures.add(_writeTextAtomically(file4sync, data4sync));
+    var json4sync = jsonDecode(data) as Map<String, dynamic>;
+    var syncSettings = json4sync["settings"] as Map<String, dynamic>;
+    var disabledSyncFields = <String>{..._disableSync};
+    if (settings["backupWebdavSyncEnabled"] == true) {
+      disabledSyncFields.removeAll(_archiveSyncFields);
     }
-
-    await Future.wait(futures);
-  }
-
-  void writeImplicitData() {
-    unawaited(
-      _enqueueWrite(() async {
-        var file = File(FilePath.join(App.dataPath, 'implicitData.json'));
-        await _writeTextAtomically(file, jsonEncode(implicitData));
-      }),
+    if (settings["webdavComicLibrarySyncEnabled"] == true) {
+      disabledSyncFields.removeAll(_comicLibrarySyncFields);
+    }
+    disabledSyncFields.addAll(
+      splitField(settings["disableSyncFields"] as String),
     );
+    for (var field in disabledSyncFields) {
+      syncSettings.remove(field);
+    }
+    var file4sync = File(FilePath.join(App.dataPath, 'syncdata.json'));
+
+    await Future.wait([
+      _writeTextAtomically(file, data),
+      _writeTextAtomically(file4sync, jsonEncode(json4sync)),
+    ]);
   }
+
+  Future<void> writeImplicitData() => _enqueueWrite(() async {
+    var file = File(FilePath.join(App.dataPath, 'implicitData.json'));
+    await _writeTextAtomically(file, jsonEncode(implicitData));
+  });
 
   @override
   Future<void> doInit() async {
@@ -384,6 +407,7 @@ class Settings with ChangeNotifier {
     'webdavComicLibraryPath': '/venera_comics/',
     'webdavComicLibraryAutoSync': true,
     'webdavComicLibrarySyncIntervalMinutes': 360,
+    'webdavComicLibrarySyncEnabled': false,
     "disableSyncFields": "", // "field1, field2, ..."
     'dataVersion': 0,
     'quickFavorite': null,

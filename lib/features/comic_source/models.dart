@@ -167,6 +167,9 @@ class ComicDetails with HistoryMixin {
 
   final String? subId;
 
+  /// External service identifiers keyed by service name.
+  final Map<String, String> externalIds;
+
   final bool? isLiked;
 
   final int? likesCount;
@@ -198,6 +201,15 @@ class ComicDetails with HistoryMixin {
     return res;
   }
 
+  static Map<String, String> _generateStringMap(Object? value) {
+    if (value is! Map) return const {};
+    return {
+      for (final entry in value.entries)
+        if (entry.key is String && entry.value is String)
+          entry.key as String: entry.value as String,
+    };
+  }
+
   ComicDetails.fromJson(Map<String, dynamic> json)
     : title = json["title"],
       subTitle = json["subtitle"],
@@ -213,6 +225,7 @@ class ComicDetails with HistoryMixin {
           .toList(),
       isFavorite = json["isFavorite"],
       subId = json["subId"],
+      externalIds = _generateStringMap(json["externalIds"]),
       likesCount = json["likesCount"],
       isLiked = json["isLiked"],
       commentCount = json["commentCount"],
@@ -240,6 +253,7 @@ class ComicDetails with HistoryMixin {
       "comicId": comicId,
       "isFavorite": isFavorite,
       "subId": subId,
+      "externalIds": externalIds,
       "isLiked": isLiked,
       "likesCount": likesCount,
       "commentsCount": commentCount,

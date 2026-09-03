@@ -5,6 +5,7 @@ abstract interface class BangumiGateway {
   Future<BangumiUser> currentUser();
   Future<List<BangumiSubject>> searchSubjects(String keyword);
   Future<BangumiSubject> getSubject(int subjectId);
+  Future<List<BangumiSubjectPerson>> getSubjectPersons(int subjectId);
   Future<BangumiCollection?> getCollection(String username, int subjectId);
   Future<void> createCollection(int subjectId, Map<String, dynamic> fields);
   Future<void> patchCollection(int subjectId, Map<String, dynamic> fields);
@@ -84,6 +85,29 @@ class BangumiApi implements BangumiGateway {
   Future<BangumiSubject> getSubject(int subjectId) async {
     final response = await _get('/v0/subjects/$subjectId');
     return _decode(response, BangumiSubject.fromJson);
+  }
+
+  @override
+  Future<List<BangumiSubjectPerson>> getSubjectPersons(int subjectId) async {
+    final response = await _get('/v0/subjects/$subjectId/persons');
+    final data = response.data;
+    if (data is! List) {
+      throw _invalidResponse(response);
+    }
+    final persons = <BangumiSubjectPerson>[];
+    for (final item in data) {
+      if (item is! Map) continue;
+      try {
+        final person = BangumiSubjectPerson.fromJson(_jsonMap(item));
+        if (person.name.trim().isNotEmpty &&
+            person.relation.trim().isNotEmpty) {
+          persons.add(person);
+        }
+      } catch (_) {
+        // A malformed credit should not hide other subject credits.
+      }
+    }
+    return persons;
   }
 
   @override

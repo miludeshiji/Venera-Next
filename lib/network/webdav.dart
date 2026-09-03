@@ -7,10 +7,9 @@ class WebDavEndpoint {
   WebDavEndpoint({
     required String url,
     required String user,
-    required String password,
-  }) : url = url.trim(),
-       user = user.trim(),
-       password = password.trim();
+    required this.password,
+  }) : url = normalizeWebDavEndpointUrl(url),
+       user = user.trim();
 
   final String url;
   final String user;
@@ -44,12 +43,45 @@ class WebDavEndpoint {
   }
 }
 
+String normalizeWebDavEndpointUrl(String value) {
+  final trimmed = value.trim().replaceAll('\\', '/');
+  if (trimmed.isEmpty) return '';
+  final uri = Uri.tryParse(trimmed);
+  if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+    return trimmed.endsWith('/')
+        ? trimmed.substring(0, trimmed.length - 1)
+        : trimmed;
+  }
+  final scheme = uri.scheme.toLowerCase();
+  final defaultPort =
+      (scheme == 'http' && uri.port == 80) ||
+      (scheme == 'https' && uri.port == 443);
+  var path = uri.normalizePath().path.replaceAll(RegExp('/+'), '/');
+  if (path == '/') {
+    path = '';
+  } else if (path.endsWith('/')) {
+    path = path.substring(0, path.length - 1);
+  }
+  return Uri(
+    scheme: scheme,
+    userInfo: uri.userInfo,
+    host: uri.host.toLowerCase(),
+    port: defaultPort || !uri.hasPort ? null : uri.port,
+    path: path,
+  ).toString();
+}
+
 String normalizeWebDavDirectoryPath(String path, {required String fallback}) {
   var result = path.trim().replaceAll('\\', '/');
   if (result.isEmpty) result = fallback.trim().replaceAll('\\', '/');
-  if (!result.startsWith('/')) result = '/$result';
-  if (!result.endsWith('/')) result = '$result/';
-  return result;
+  final segments = result
+      .split('/')
+      .where((segment) => segment.isNotEmpty && segment != '.')
+      .toList();
+  if (segments.any((segment) => segment == '..')) {
+    throw const FormatException('Invalid WebDAV directory path');
+  }
+  return segments.isEmpty ? '/' : '/${segments.join('/')}/';
 }
 
 String joinWebDavFilePath(String parent, String relativePath) {

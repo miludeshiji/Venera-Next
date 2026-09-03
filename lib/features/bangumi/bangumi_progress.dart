@@ -20,6 +20,7 @@ class BangumiProgressPanel extends StatefulWidget {
     required this.comicTitle,
     required this.chapters,
     required this.history,
+    this.initialSubjectId,
   });
 
   final BangumiService? service;
@@ -28,6 +29,7 @@ class BangumiProgressPanel extends StatefulWidget {
   final String comicTitle;
   final ComicChapters? chapters;
   final History? history;
+  final int? initialSubjectId;
 
   @override
   State<BangumiProgressPanel> createState() => _BangumiProgressPanelState();
@@ -58,7 +60,14 @@ class _BangumiProgressPanelState extends State<BangumiProgressPanel> {
     _queryController = TextEditingController(text: widget.comicTitle);
     _loadBinding();
     final binding = _binding;
-    if (binding != null &&
+    if (binding == null &&
+        widget.initialSubjectId != null &&
+        widget.initialSubjectId! > 0 &&
+        _service.isConnected) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_preselectInitialSubject());
+      });
+    } else if (binding != null &&
         binding.collectionStatus == null &&
         _service.isConnected) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -342,6 +351,35 @@ class _BangumiProgressPanelState extends State<BangumiProgressPanel> {
       style: TextStyle(color: Theme.of(context).colorScheme.error),
     ),
   );
+
+  Future<void> _preselectInitialSubject() async {
+    final subjectId = widget.initialSubjectId;
+    if (!mounted ||
+        _loading ||
+        _binding != null ||
+        subjectId == null ||
+        subjectId <= 0) {
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final subject = await _service.getSubject(subjectId);
+      if (!mounted || _binding != null) return;
+      setState(() {
+        _results = [subject];
+        _selected = subject;
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = '$error');
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   Future<void> _search() async {
     if (_loading) return;

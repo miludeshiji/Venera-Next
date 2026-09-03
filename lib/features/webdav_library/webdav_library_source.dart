@@ -1,5 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show HttpDate;
+
+import 'package:crypto/crypto.dart';
+import 'package:dio/dio.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:venera_next/features/comic_source/comic_source.dart';
@@ -15,6 +19,99 @@ import 'package:webdav_client/webdav_client.dart' hide File;
 
 typedef WebDavLibraryMetadataScraper =
     Future<ComicMetaData?> Function(String directoryTitle);
+
+typedef WebDavLibraryMetadataWriteGuard =
+    FutureOr<bool> Function(String libraryId, String comicId, int? subjectId);
+
+enum WebDavLibraryFailureKind {
+  preconditionFailed,
+  authentication,
+  transient,
+  unsupported,
+  other,
+}
+
+class WebDavLibraryException implements Exception {
+  const WebDavLibraryException(
+    this.message, {
+    required this.kind,
+    this.statusCode,
+    this.path,
+    this.cause,
+  });
+
+  final String message;
+  final WebDavLibraryFailureKind kind;
+  final int? statusCode;
+  final String? path;
+  final Object? cause;
+
+  bool get isRetryable =>
+      kind == WebDavLibraryFailureKind.preconditionFailed ||
+      kind == WebDavLibraryFailureKind.transient;
+
+  @override
+  String toString() => message;
+}
+
+class WebDavPreconditionFailedException extends WebDavLibraryException {
+  const WebDavPreconditionFailedException(String path)
+    : super(
+        'WebDAV resource changed before it could be written: $path',
+        kind: WebDavLibraryFailureKind.preconditionFailed,
+        statusCode: 412,
+        path: path,
+      );
+}
+
+class WebDavAuthenticationException extends WebDavLibraryException {
+  const WebDavAuthenticationException(
+    String path, {
+    required super.statusCode,
+    super.cause,
+  }) : super(
+         'WebDAV authentication or permission failed for $path',
+         kind: WebDavLibraryFailureKind.authentication,
+         path: path,
+       );
+}
+
+class WebDavTransientException extends WebDavLibraryException {
+  const WebDavTransientException(String path, {super.statusCode, super.cause})
+    : super(
+        'Temporary WebDAV failure for $path',
+        kind: WebDavLibraryFailureKind.transient,
+        path: path,
+      );
+}
+
+class WebDavUnsupportedException extends WebDavLibraryException {
+  const WebDavUnsupportedException(
+    String path, {
+    super.statusCode,
+    String? message,
+    super.cause,
+  }) : super(
+         message ?? 'The WebDAV server does not support safe writes for $path',
+         kind: WebDavLibraryFailureKind.unsupported,
+         path: path,
+       );
+}
+
+class WebDavTextFile {
+  const WebDavTextFile({required this.content, this.eTag, this.modifiedAt});
+
+  final String content;
+  final String? eTag;
+  final int? modifiedAt;
+}
+
+class WebDavWriteResult {
+  const WebDavWriteResult({this.eTag, this.modifiedAt});
+
+  final String? eTag;
+  final int? modifiedAt;
+}
 
 class WebDavLibraryConfig {
   WebDavLibraryConfig({
@@ -43,26 +140,42 @@ class WebDavLibraryConfig {
 
   String get cacheKey => jsonEncode([url, user, remotePath]);
 
+  String get libraryId {
+    final identity = jsonEncode([url, user.trim(), remotePath]);
+    return 'webdav:${sha256.convert(utf8.encode(identity))}';
+  }
+
   String get connectionKey => jsonEncode([url, user, pass, remotePath]);
 
   static WebDavLibraryConfig fromSettings() {
     final config = appdata.settings['webdavComicLibrary'];
     final path = appdata.settings['webdavComicLibraryPath'];
-    if (config is List && config.whereType<String>().length == 3) {
-      final values = config.whereType<String>().toList();
+    try {
+      if (config is List &&
+          config.length == 3 &&
+          config.every((value) => value is String)) {
+        final values = config.cast<String>();
+        return WebDavLibraryConfig(
+          url: values[0],
+          user: values[1],
+          pass: values[2],
+          remotePath: path is String ? path : '/venera_comics/',
+        );
+      }
       return WebDavLibraryConfig(
-        url: values[0],
-        user: values[1],
-        pass: values[2],
+        url: '',
+        user: '',
+        pass: '',
         remotePath: path is String ? path : '/venera_comics/',
       );
+    } on FormatException {
+      return WebDavLibraryConfig(
+        url: '',
+        user: '',
+        pass: '',
+        remotePath: '/venera_comics/',
+      );
     }
-    return WebDavLibraryConfig(
-      url: '',
-      user: '',
-      pass: '',
-      remotePath: path is String ? path : '/venera_comics/',
-    );
   }
 
   static Future<void> saveToSettings(WebDavLibraryConfig config) async {
@@ -120,13 +233,19 @@ abstract class WebDavLibraryOps {
     String remotePath,
   );
 
-  Future<String> readText(WebDavLibraryConfig config, String remotePath);
-
-  Future<void> writeText(
+  Future<WebDavTextFile> readText(
     WebDavLibraryConfig config,
     String remotePath,
-    String content,
   );
+
+  Future<WebDavWriteResult> writeText(
+    WebDavLibraryConfig config,
+    String remotePath,
+    String content, {
+    bool createOnly = false,
+    String? ifMatch,
+    int? ifUnmodifiedSince,
+  });
 }
 
 class _WebDavLibraryOps implements WebDavLibraryOps {
@@ -164,21 +283,190 @@ class _WebDavLibraryOps implements WebDavLibraryOps {
   }
 
   @override
-  Future<String> readText(WebDavLibraryConfig config, String remotePath) async {
-    final bytes = await _client(config).read(remotePath);
-    return utf8.decode(bytes, allowMalformed: false);
+  Future<WebDavTextFile> readText(
+    WebDavLibraryConfig config,
+    String remotePath,
+  ) async {
+    final client = _client(config);
+    try {
+      final response = await client.c.req<List<int>>(
+        client,
+        'GET',
+        remotePath,
+        optionsHandler: (options) => options.responseType = ResponseType.bytes,
+      );
+      _throwForStatus(response.statusCode, remotePath);
+      return WebDavTextFile(
+        content: utf8.decode(response.data ?? const [], allowMalformed: false),
+        eTag: _header(response.headers.map, 'etag'),
+        modifiedAt: _modifiedAt(response.headers.map),
+      );
+    } on DioException catch (error) {
+      throw _classifyDioError(error, remotePath);
+    }
   }
 
   @override
-  Future<void> writeText(
+  Future<WebDavWriteResult> writeText(
     WebDavLibraryConfig config,
     String remotePath,
-    String content,
-  ) async {
-    await _client(
-      config,
-    ).write(remotePath, Uint8List.fromList(utf8.encode(content)));
+    String content, {
+    bool createOnly = false,
+    String? ifMatch,
+    int? ifUnmodifiedSince,
+  }) async {
+    if (createOnly && (ifMatch != null || ifUnmodifiedSince != null)) {
+      throw ArgumentError(
+        'createOnly cannot be combined with update preconditions',
+      );
+    }
+    final client = _client(config);
+    try {
+      final response = await client.c.req<Object?>(
+        client,
+        'PUT',
+        remotePath,
+        data: Uint8List.fromList(utf8.encode(content)),
+        optionsHandler: (options) {
+          options.headers ??= {};
+          options.headers!['content-type'] = 'application/json; charset=utf-8';
+          if (createOnly) {
+            options.headers!['if-none-match'] = '*';
+          } else if (ifMatch != null) {
+            options.headers!['if-match'] = ifMatch;
+          } else if (ifUnmodifiedSince != null) {
+            options.headers!['if-unmodified-since'] = HttpDate.format(
+              DateTime.fromMillisecondsSinceEpoch(
+                ifUnmodifiedSince,
+                isUtc: true,
+              ),
+            );
+          }
+        },
+      );
+      _throwForStatus(response.statusCode, remotePath);
+      return WebDavWriteResult(
+        eTag: _header(response.headers.map, 'etag'),
+        modifiedAt: _modifiedAt(response.headers.map),
+      );
+    } on DioException catch (error) {
+      throw _classifyDioError(error, remotePath);
+    }
   }
+
+  static String? _header(Map<String, List<String>> headers, String name) {
+    final values = headers[name];
+    if (values == null || values.isEmpty || values.first.trim().isEmpty) {
+      return null;
+    }
+    return values.first;
+  }
+
+  static int? _modifiedAt(Map<String, List<String>> headers) {
+    final value = _header(headers, 'last-modified');
+    if (value == null) return null;
+    try {
+      return HttpDate.parse(value).millisecondsSinceEpoch;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static void _throwForStatus(int? statusCode, String path) {
+    if (statusCode != null && statusCode >= 200 && statusCode < 300) return;
+    if (statusCode == 412) throw WebDavPreconditionFailedException(path);
+    if (statusCode == 401 || statusCode == 403) {
+      throw WebDavAuthenticationException(path, statusCode: statusCode!);
+    }
+    if (statusCode == 405 || statusCode == 501) {
+      throw WebDavUnsupportedException(path, statusCode: statusCode);
+    }
+    if (statusCode == null ||
+        statusCode == 408 ||
+        statusCode == 425 ||
+        statusCode == 429 ||
+        statusCode >= 500) {
+      throw WebDavTransientException(path, statusCode: statusCode);
+    }
+    throw WebDavLibraryException(
+      'WebDAV request failed with HTTP $statusCode for $path',
+      kind: WebDavLibraryFailureKind.other,
+      statusCode: statusCode,
+      path: path,
+    );
+  }
+
+  static WebDavLibraryException _classifyDioError(
+    DioException error,
+    String path,
+  ) {
+    final status = error.response?.statusCode;
+    if (status == 412) return WebDavPreconditionFailedException(path);
+    if (status == 401 || status == 403) {
+      return WebDavAuthenticationException(
+        path,
+        statusCode: status!,
+        cause: error,
+      );
+    }
+    if (status == 405 || status == 501) {
+      return WebDavUnsupportedException(path, statusCode: status, cause: error);
+    }
+    if (status == null ||
+        status == 408 ||
+        status == 425 ||
+        status == 429 ||
+        status >= 500) {
+      return WebDavTransientException(path, statusCode: status, cause: error);
+    }
+    return WebDavLibraryException(
+      'WebDAV request failed with HTTP $status for $path',
+      kind: WebDavLibraryFailureKind.other,
+      statusCode: status,
+      path: path,
+      cause: error,
+    );
+  }
+}
+
+enum WebDavMetadataPendingFailure {
+  none,
+  authentication,
+  transient,
+  unsupported,
+  conflict,
+  rejected,
+  invalidMetadata,
+  other,
+}
+
+class WebDavMetadataPendingStatus {
+  const WebDavMetadataPendingStatus({
+    required this.libraryId,
+    required this.comicId,
+    required this.subjectId,
+    required this.attempts,
+    required this.lastAttemptAt,
+    required this.nextRetryAt,
+    required this.failure,
+    required this.errorMessage,
+  });
+
+  final String libraryId;
+  final String comicId;
+  final int? subjectId;
+  final int attempts;
+  final int? lastAttemptAt;
+  final int? nextRetryAt;
+  final WebDavMetadataPendingFailure failure;
+  final String? errorMessage;
+}
+
+class WebDavMetadataWriteRejectedException implements Exception {
+  const WebDavMetadataWriteRejectedException();
+
+  @override
+  String toString() => 'The WebDAV metadata write is no longer current';
 }
 
 class WebDavLibrarySyncStatus {
@@ -209,12 +497,20 @@ class WebDavLibrarySyncStatus {
 
 class _WebDavLibrarySyncRun {
   const _WebDavLibrarySyncRun({
+    required this.configurationIdentity,
+    required this.generation,
     required this.indexReady,
     required this.complete,
   });
 
+  final String configurationIdentity;
+  final int generation;
   final Future<Res<bool>> indexReady;
   final Future<Res<bool>> complete;
+}
+
+class _WebDavSynchronizationObsoleteException implements Exception {
+  const _WebDavSynchronizationObsoleteException();
 }
 
 class WebDavLibrarySource {
@@ -229,6 +525,10 @@ class WebDavLibrarySource {
   static const _metadataChapterPrefix = '__cbz_range_';
   static const _maxDiscoveryDepth = 8;
   static const _maxDiscoveryDirectories = 2000;
+  static const _maxMetadataMergeAttempts = 3;
+  static const _maxMetadataRetryAttempts = 4;
+  static const _defaultScraperVersion = '1';
+  static const _metadataPendingKey = 'webdavMetadataPending';
   static const _autoSyncCheckInterval = Duration(minutes: 15);
 
   static final _snapshotCache = <String, _WebDavComicSnapshot>{};
@@ -237,20 +537,44 @@ class WebDavLibrarySource {
   static final syncStatus = ValueNotifier<WebDavLibrarySyncStatus>(
     const WebDavLibrarySyncStatus(isSyncing: false, lastSuccessfulSync: 0),
   );
+  static final metadataPendingVersion = ValueNotifier<int>(0);
   static final _cache = WebDavLibraryCache.instance;
   static WebDavLibraryOps _ops = _WebDavLibraryOps();
   static _WebDavLibrarySyncRun? _syncRun;
+  static int _syncGeneration = 0;
   static Timer? _autoSyncTimer;
+  static Timer? _metadataRetryTimer;
   static final _metadataWriteTails = <String, Future<void>>{};
   static WebDavLibraryMetadataScraper? _metadataScraper;
   static bool Function()? _metadataScrapingEnabled;
+  static String _metadataScraperVersion = _defaultScraperVersion;
+  static WebDavLibraryMetadataWriteGuard? _metadataWriteGuard;
+  static int _metadataPayloadSequence = 0;
+
+  static String get currentLibraryId =>
+      WebDavLibraryConfig.fromSettings().libraryId;
+
+  static List<WebDavMetadataPendingStatus> get metadataPendingStatuses =>
+      _pendingMetadataWrites()
+          .map((pending) => pending.status)
+          .toList(growable: false);
 
   static void configureMetadataScraper(
     WebDavLibraryMetadataScraper? scraper, {
     bool Function()? isEnabled,
+    String scraperVersion = _defaultScraperVersion,
   }) {
     _metadataScraper = scraper;
     _metadataScrapingEnabled = isEnabled;
+    _metadataScraperVersion = scraperVersion.trim().isEmpty
+        ? _defaultScraperVersion
+        : scraperVersion.trim();
+  }
+
+  static void configureMetadataWriteGuard(
+    WebDavLibraryMetadataWriteGuard? guard,
+  ) {
+    _metadataWriteGuard = guard;
   }
 
   static bool get _canScrapeMetadata =>
@@ -274,13 +598,45 @@ class WebDavLibrarySource {
     _snapshotInFlight.clear();
   }
 
+  static void _invalidateSynchronization() {
+    _syncGeneration++;
+    _syncRun = null;
+  }
+
+  static void _resetSyncStatusForCurrentConfiguration() {
+    final config = WebDavLibraryConfig.fromSettings();
+    syncStatus.value = WebDavLibrarySyncStatus(
+      isSyncing: false,
+      lastSuccessfulSync: config.isValid
+          ? _cache.lastSuccessfulSync(config.cacheKey)
+          : 0,
+    );
+  }
+
   static void onConfigurationChanged(WebDavLibraryConfig previous) {
+    _invalidateSynchronization();
+    _metadataRetryTimer?.cancel();
+    _metadataRetryTimer = null;
     _clearMemoryCaches();
     _ops = _WebDavLibraryOps();
-    if (previous.isValid) {
+    _resetSyncStatusForCurrentConfiguration();
+    final current = WebDavLibraryConfig.fromSettings();
+    if (previous.isValid && previous.cacheKey != current.cacheKey) {
       _cache.clear(previous.cacheKey);
     }
     contentVersion.value++;
+    initializeMetadataRetry();
+  }
+
+  static void onSettingsImported() {
+    _invalidateSynchronization();
+    _metadataRetryTimer?.cancel();
+    _metadataRetryTimer = null;
+    _clearMemoryCaches();
+    _ops = _WebDavLibraryOps();
+    _resetSyncStatusForCurrentConfiguration();
+    contentVersion.value++;
+    initializeMetadataRetry();
   }
 
   static void initializeAutoSync() {
@@ -326,8 +682,18 @@ class WebDavLibrarySource {
   @visibleForTesting
   static void resetCacheForTesting() {
     _syncRun = null;
+    _syncGeneration++;
+    _autoSyncTimer?.cancel();
+    _autoSyncTimer = null;
+    _metadataRetryTimer?.cancel();
+    _metadataRetryTimer = null;
+    _metadataWriteTails.clear();
+    _metadataPayloadSequence = 0;
+    _metadataWriteGuard = null;
     _clearMemoryCaches();
     _cache.resetForTesting();
+    appdata.implicitData.remove(_metadataPendingKey);
+    metadataPendingVersion.value++;
     syncStatus.value = const WebDavLibrarySyncStatus(
       isSyncing: false,
       lastSuccessfulSync: 0,
@@ -457,14 +823,22 @@ class WebDavLibrarySource {
     required WebDavLibraryConfig config,
     bool force = false,
   }) {
+    final configurationIdentity = _configurationIdentity(config);
     final current = _syncRun;
-    if (current != null) return current;
+    if (current != null &&
+        current.generation == _syncGeneration &&
+        current.configurationIdentity == configurationIdentity) {
+      return current;
+    }
 
     final indexReady = Completer<Res<bool>>();
+    late final _WebDavLibrarySyncRun run;
     final complete = Future<Res<bool>>.microtask(
-      () => _runSynchronization(config, indexReady, force: force),
+      () => _runSynchronization(config, run, indexReady, force: force),
     );
-    final run = _WebDavLibrarySyncRun(
+    run = _WebDavLibrarySyncRun(
+      configurationIdentity: configurationIdentity,
+      generation: _syncGeneration,
       indexReady: indexReady.future,
       complete: complete,
     );
@@ -479,21 +853,50 @@ class WebDavLibrarySource {
     return run;
   }
 
+  static String _configurationIdentity(WebDavLibraryConfig config) =>
+      jsonEncode([config.url, config.user, config.pass, config.remotePath]);
+
+  static bool _isSynchronizationCurrent(_WebDavLibrarySyncRun run) {
+    if (!identical(_syncRun, run) || run.generation != _syncGeneration) {
+      return false;
+    }
+    final current = WebDavLibraryConfig.fromSettings();
+    return current.isValid &&
+        _configurationIdentity(current) == run.configurationIdentity;
+  }
+
+  static void _throwIfSynchronizationObsolete(_WebDavLibrarySyncRun run) {
+    if (!_isSynchronizationCurrent(run)) {
+      throw const _WebDavSynchronizationObsoleteException();
+    }
+  }
+
+  static Res<bool> _completeObsoleteSynchronization(
+    Completer<Res<bool>> indexReady,
+  ) {
+    const result = Res<bool>(true);
+    if (!indexReady.isCompleted) indexReady.complete(result);
+    return result;
+  }
+
   static Future<Res<bool>> _runSynchronization(
     WebDavLibraryConfig config,
+    _WebDavLibrarySyncRun run,
     Completer<Res<bool>> indexReady, {
     required bool force,
   }) async {
     final configKey = config.cacheKey;
     final previousLastSync = _cache.lastSuccessfulSync(configKey);
-    syncStatus.value = WebDavLibrarySyncStatus(
-      isSyncing: true,
-      lastSuccessfulSync: previousLastSync,
-    );
     try {
+      _throwIfSynchronizationObsolete(run);
+      syncStatus.value = WebDavLibrarySyncStatus(
+        isSyncing: true,
+        lastSuccessfulSync: previousLastSync,
+      );
       final rootEntries = List<WebDavLibraryEntry>.from(
         await ops.readDir(config, config.remotePath),
       );
+      _throwIfSynchronizationObsolete(run);
       final hadDirectoryIndex = _cache.hasDirectoryIndex(configKey);
       final previous = _cache.all(configKey);
       final provisionalDirectories = _sortedDirectories(rootEntries);
@@ -508,6 +911,7 @@ class WebDavLibrarySource {
             ),
         ]);
       }
+      _throwIfSynchronizationObsolete(run);
       if (!indexReady.isCompleted) {
         indexReady.complete(const Res(true));
       }
@@ -515,9 +919,9 @@ class WebDavLibrarySource {
       final discovered = await _discoverComicDirectories(
         config,
         rootEntries: rootEntries,
-        previous: previous,
-        force: force,
+        syncRun: run,
       );
+      _throwIfSynchronizationObsolete(run);
       final remoteDirectories = <WebDavLibraryRemoteDirectory>[
         for (var index = 0; index < discovered.length; index++)
           WebDavLibraryRemoteDirectory(
@@ -530,6 +934,7 @@ class WebDavLibrarySource {
       _cache.replaceDirectoryIndex(configKey, remoteDirectories);
       contentVersion.value++;
 
+      final scrapeCheckTime = DateTime.now().millisecondsSinceEpoch;
       final toRefresh = <WebDavLibraryRemoteDirectory>[];
       for (final directory in remoteDirectories) {
         final cached = previous[directory.id];
@@ -537,7 +942,11 @@ class WebDavLibrarySource {
             !hadDirectoryIndex ||
             cached == null ||
             !cached.isReady ||
-            (_canScrapeMetadata && cached.metadataScrapePending) ||
+            (_canScrapeMetadata &&
+                cached.shouldRetryMetadataScrape(
+                  scraperVersion: _metadataScraperVersion,
+                  now: scrapeCheckTime,
+                )) ||
             !cached.hasSameRemoteVersion(
               eTag: directory.eTag,
               modifiedAt: directory.modifiedAt,
@@ -548,6 +957,7 @@ class WebDavLibrarySource {
 
       var processed = 0;
       var failed = 0;
+      _throwIfSynchronizationObsolete(run);
       syncStatus.value = WebDavLibrarySyncStatus(
         isSyncing: true,
         lastSuccessfulSync: previousLastSync,
@@ -559,6 +969,7 @@ class WebDavLibrarySource {
         throttleEvery: 0,
         run: (directory) async {
           try {
+            _throwIfSynchronizationObsolete(run);
             final discoveredDirectory = discovered.firstWhere(
               (candidate) => candidate.id == directory.id,
             );
@@ -570,7 +981,10 @@ class WebDavLibrarySource {
               rootEntries: discoveredDirectory.entries.isEmpty
                   ? null
                   : discoveredDirectory.entries,
+              syncRun: run,
             );
+          } on _WebDavSynchronizationObsoleteException {
+            rethrow;
           } catch (e) {
             failed++;
             Log.warning(
@@ -579,7 +993,8 @@ class WebDavLibrarySource {
             );
           } finally {
             processed++;
-            if (processed % 5 == 0 || processed == toRefresh.length) {
+            if (_isSynchronizationCurrent(run) &&
+                (processed % 5 == 0 || processed == toRefresh.length)) {
               contentVersion.value++;
               syncStatus.value = WebDavLibrarySyncStatus(
                 isSyncing: true,
@@ -593,6 +1008,7 @@ class WebDavLibrarySource {
         },
       );
 
+      _throwIfSynchronizationObsolete(run);
       final now = DateTime.now().millisecondsSinceEpoch;
       _cache.setLastSuccessfulSync(configKey, now);
       syncStatus.value = WebDavLibrarySyncStatus(
@@ -604,7 +1020,12 @@ class WebDavLibrarySource {
       );
       contentVersion.value++;
       return const Res(true);
+    } on _WebDavSynchronizationObsoleteException {
+      return _completeObsoleteSynchronization(indexReady);
     } catch (e, s) {
+      if (!_isSynchronizationCurrent(run)) {
+        return _completeObsoleteSynchronization(indexReady);
+      }
       Log.error('WebDAV Library Sync', e, s);
       final result = Res<bool>.error(e.toString());
       if (!indexReady.isCompleted) {
@@ -640,6 +1061,10 @@ class WebDavLibrarySource {
               : snapshot.chapters,
           'sourceKey': sourceKey,
           'comicId': id,
+          'externalIds': {
+            if (snapshot.bangumiSubjectId != null)
+              'bangumi': snapshot.bangumiSubjectId.toString(),
+          },
           'thumbnails': null,
           'recommend': null,
           'isFavorite': false,
@@ -716,6 +1141,7 @@ class WebDavLibrarySource {
     bool forceRefresh = false,
     WebDavLibraryRemoteDirectory? remoteDirectory,
     List<WebDavLibraryEntry>? rootEntries,
+    _WebDavLibrarySyncRun? syncRun,
   }) async {
     final memoryKey = jsonEncode([config.cacheKey, id]);
     if (!forceRefresh) {
@@ -736,7 +1162,9 @@ class WebDavLibrarySource {
         config,
         id,
         rootEntries: rootEntries,
+        syncRun: syncRun,
       );
+      if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
       final existing = _cache.find(config.cacheKey, id);
       _cache.upsertSnapshot(
         config.cacheKey,
@@ -770,11 +1198,13 @@ class WebDavLibrarySource {
     WebDavLibraryConfig config,
     String id, {
     List<WebDavLibraryEntry>? rootEntries,
+    _WebDavLibrarySyncRun? syncRun,
   }) async {
     final comicPath = config.childDirectoryPath(id);
     final entries = List<WebDavLibraryEntry>.from(
       rootEntries ?? await ops.readDir(config, comicPath),
     );
+    if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
     final rootImages = _imageEntries(
       entries,
     ).where((entry) => !isNamedComicCover(entry.name)).toList();
@@ -785,23 +1215,33 @@ class WebDavLibrarySource {
             .toList()
           ..sort((a, b) => compareComicFileNames(a.name, b.name));
     var metadataFilePresent = _hasMetadataFile(entries);
-    var metadataScrapeAttempted = false;
+    var metadataScrapeStatus = metadataFilePresent ? 'notNeeded' : 'pending';
+    int? metadataScrapeAttemptedAt;
+    int? metadataScrapeRetryAt;
+    String? metadataScrapeError;
     var metadata = await _readMetadata(
       config,
       comicPath,
       entries,
       pageCount: directories.isEmpty ? rootImages.length : null,
     );
+    if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
     if (!metadataFilePresent && _canScrapeMetadata) {
+      if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
       final scraped = await _scrapeMissingMetadata(
         config,
         id,
         comicPath,
         pageCount: directories.isEmpty ? rootImages.length : null,
+        syncRun: syncRun,
       );
+      if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
       metadata = scraped.metadata;
       metadataFilePresent = scraped.filePresent;
-      metadataScrapeAttempted = scraped.attempted;
+      metadataScrapeStatus = scraped.status;
+      metadataScrapeAttemptedAt = scraped.attemptedAt;
+      metadataScrapeRetryAt = scraped.retryAt;
+      metadataScrapeError = scraped.error;
     }
 
     final metadataChapters = <String, ComicChapter>{};
@@ -846,6 +1286,7 @@ class WebDavLibrarySource {
           final chapterEntries = List<WebDavLibraryEntry>.from(
             await ops.readDir(config, chapterPath),
           );
+          if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
           final chapterCover = _findNamedCover(chapterEntries);
           final chapterPages = _imageEntries(
             chapterEntries,
@@ -855,6 +1296,8 @@ class WebDavLibrarySource {
             coverPath = config.childFilePath(chapterPath, coverEntry.name);
             break;
           }
+        } on _WebDavSynchronizationObsoleteException {
+          rethrow;
         } catch (e) {
           Log.warning(
             'WebDAV Library',
@@ -874,59 +1317,221 @@ class WebDavLibrarySource {
       chapters: chapterMap,
       metadataChapters: metadataChapters,
       rootImages: rootImages,
+      bangumiSubjectId: metadata?.bangumiSubjectId,
       metadataFilePresent: metadataFilePresent,
-      metadataScrapeAttempted: metadataScrapeAttempted,
+      metadataScrapeStatus: metadataScrapeStatus,
+      metadataScraperVersion: _metadataScraperVersion,
+      metadataScrapeAttemptedAt: metadataScrapeAttemptedAt,
+      metadataScrapeRetryAt: metadataScrapeRetryAt,
+      metadataScrapeError: metadataScrapeError,
     );
   }
 
-  static Future<void> writeMetadata(String id, ComicMetaData metadata) async {
+  static int _nextMetadataPayloadSequence() {
+    for (final pending in _pendingMetadataWrites()) {
+      if (pending.sequence > _metadataPayloadSequence) {
+        _metadataPayloadSequence = pending.sequence;
+      }
+    }
+    return ++_metadataPayloadSequence;
+  }
+
+  static Future<void> writeMetadata(
+    String id,
+    ComicMetaData metadata, {
+    String? expectedLibraryId,
+    int? expectedSubjectId,
+  }) async {
     final config = WebDavLibraryConfig.fromSettings();
     if (!config.isValid) {
       throw StateError('Invalid WebDAV comic library configuration');
     }
-    final comicPath = config.childDirectoryPath(id);
-    await _runMetadataWrite(config, id, () async {
-      final entries = List<WebDavLibraryEntry>.from(
-        await ops.readDir(config, comicPath),
-      );
-      final existing = await _readMetadata(
-        config,
-        comicPath,
-        entries,
-        pageCount: _metadataPageCount(entries),
-      );
-      final merged = ComicMetaData(
-        title: metadata.title.trim().isEmpty
-            ? existing?.title ?? _directoryName(id)
-            : metadata.title,
-        author: metadata.author.trim().isEmpty
-            ? existing?.author ?? ''
-            : metadata.author,
-        tags: metadata.tags.isEmpty
-            ? existing?.tags ?? const []
-            : metadata.tags,
-        description: metadata.description.trim().isEmpty
-            ? existing?.description ?? ''
-            : metadata.description,
-        chapters: existing?.chapters ?? metadata.chapters,
-        bangumiSubjectId:
-            metadata.bangumiSubjectId ?? existing?.bangumiSubjectId,
-      );
-      merged.validateChapterRanges(pageCount: _metadataPageCount(entries));
-      final metadataEntry = entries.firstWhereOrNull(
-        (entry) =>
-            !entry.isDirectory && entry.name.toLowerCase() == _metadataFileName,
-      );
-      await ops.writeText(
-        config,
-        config.childFilePath(
+    final pending = _WebDavPendingMetadataWrite(
+      libraryId: expectedLibraryId ?? config.libraryId,
+      comicId: id,
+      subjectId: expectedSubjectId ?? metadata.bangumiSubjectId,
+      metadata: metadata,
+      sequence: _nextMetadataPayloadSequence(),
+    );
+    try {
+      await _writeMetadataNow(config, pending);
+    } on WebDavMetadataWriteRejectedException {
+      await _removePendingMetadataWrite(pending);
+      rethrow;
+    } catch (error, stackTrace) {
+      await _recordPendingMetadataWrite(pending, error);
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    await _removePendingMetadataWrite(pending);
+    await _refreshSnapshotAfterMetadataWrite(config, id);
+  }
+
+  static Future<void> _writeMetadataNow(
+    WebDavLibraryConfig config,
+    _WebDavPendingMetadataWrite pending,
+  ) async {
+    await _ensureMetadataWriteCurrent(config, pending);
+    final comicPath = config.childDirectoryPath(pending.comicId);
+    await _runMetadataWrite(config, pending.comicId, () async {
+      for (var attempt = 0; attempt < _maxMetadataMergeAttempts; attempt++) {
+        await _ensureMetadataWriteCurrent(config, pending);
+        final entries = List<WebDavLibraryEntry>.from(
+          await ops.readDir(config, comicPath),
+        );
+        final pageCount = _metadataPageCount(entries);
+        final metadataEntry = entries.firstWhereOrNull(
+          (entry) =>
+              !entry.isDirectory &&
+              entry.name.toLowerCase() == _metadataFileName,
+        );
+        final metadataPath = config.childFilePath(
           comicPath,
           metadataEntry?.name ?? _metadataFileName,
-        ),
-        _encodeMetadata(merged),
-      );
+        );
+        try {
+          if (metadataEntry == null) {
+            final document = _mergeMetadataDocument(
+              const {},
+              pending.metadata,
+              fallbackTitle: _directoryName(pending.comicId),
+              pageCount: pageCount,
+            );
+            await _ensureMetadataWriteCurrent(config, pending);
+            await ops.writeText(
+              config,
+              metadataPath,
+              _encodeMetadataDocument(document),
+              createOnly: true,
+            );
+          } else {
+            final current = await ops.readText(config, metadataPath);
+            final document = _mergeMetadataDocument(
+              _decodeMetadataDocument(current.content),
+              pending.metadata,
+              fallbackTitle: _directoryName(pending.comicId),
+              pageCount: pageCount,
+            );
+            final strongETag = _strongETag(current.eTag);
+            if (strongETag == null && current.modifiedAt == null) {
+              throw WebDavUnsupportedException(
+                metadataPath,
+                message:
+                    'The WebDAV server returned no strong ETag or '
+                    'Last-Modified validator for $metadataPath',
+              );
+            }
+            await _ensureMetadataWriteCurrent(config, pending);
+            await ops.writeText(
+              config,
+              metadataPath,
+              _encodeMetadataDocument(document),
+              ifMatch: strongETag,
+              ifUnmodifiedSince: strongETag == null ? current.modifiedAt : null,
+            );
+          }
+          return;
+        } on WebDavPreconditionFailedException {
+          if (attempt + 1 >= _maxMetadataMergeAttempts) rethrow;
+        }
+      }
     });
+  }
 
+  static String? _strongETag(String? eTag) {
+    final candidate = eTag?.trim();
+    if (candidate == null ||
+        candidate.isEmpty ||
+        candidate.toLowerCase().startsWith('w/')) {
+      return null;
+    }
+    return candidate;
+  }
+
+  static Future<void> _ensureMetadataWriteCurrent(
+    WebDavLibraryConfig config,
+    _WebDavPendingMetadataWrite pending,
+  ) async {
+    if (config.libraryId != pending.libraryId ||
+        WebDavLibraryConfig.fromSettings().libraryId != pending.libraryId) {
+      throw const WebDavMetadataWriteRejectedException();
+    }
+    final guard = _metadataWriteGuard;
+    if (guard != null &&
+        !await Future.sync(
+          () => guard(pending.libraryId, pending.comicId, pending.subjectId),
+        )) {
+      throw const WebDavMetadataWriteRejectedException();
+    }
+  }
+
+  static Map<String, dynamic> _decodeMetadataDocument(String content) {
+    final decoded = jsonDecode(content);
+    if (decoded is! Map) {
+      throw const FormatException('metadata.json must contain an object');
+    }
+    return Map<String, dynamic>.from(decoded);
+  }
+
+  static Map<String, dynamic> _mergeMetadataDocument(
+    Map<String, dynamic> current,
+    ComicMetaData metadata, {
+    required String fallbackTitle,
+    required int? pageCount,
+  }) {
+    List<ComicChapter>? chapters = metadata.chapters;
+    final currentChapters = current['chapters'];
+    if (currentChapters == null) {
+      if (current.containsKey('chapters')) chapters = null;
+    } else if (currentChapters is List) {
+      try {
+        final parsed = currentChapters.map((chapter) {
+          if (chapter is! Map) {
+            throw const FormatException(
+              'metadata.chapters entries must be objects',
+            );
+          }
+          return ComicChapter.fromJson(Map<String, dynamic>.from(chapter));
+        }).toList();
+        final candidate = ComicMetaData(
+          title: metadata.title,
+          author: metadata.author,
+          tags: metadata.tags,
+          description: metadata.description,
+          chapters: parsed,
+          bangumiSubjectId: metadata.bangumiSubjectId,
+        );
+        candidate.validateChapterRanges(pageCount: pageCount);
+        chapters = parsed;
+      } on FormatException {
+        // Preserve only a structurally valid chapter list. Other corrupt
+        // metadata fields must not make valid ranges disappear on update.
+      }
+    }
+    final currentSubjectId = current['bangumiSubjectId'];
+    final merged = ComicMetaData(
+      title: metadata.title.trim().isEmpty ? fallbackTitle : metadata.title,
+      author: metadata.author,
+      tags: metadata.tags,
+      description: metadata.description,
+      chapters: chapters,
+      bangumiSubjectId:
+          metadata.bangumiSubjectId ??
+          (currentSubjectId is int && currentSubjectId > 0
+              ? currentSubjectId
+              : null),
+    );
+    merged.validateChapterRanges(pageCount: pageCount);
+    final result = <String, dynamic>{...current, ...merged.toJson()};
+    if (merged.bangumiSubjectId == null) {
+      result.remove('bangumiSubjectId');
+    }
+    return result;
+  }
+
+  static Future<void> _refreshSnapshotAfterMetadataWrite(
+    WebDavLibraryConfig config,
+    String id,
+  ) async {
     final memoryKey = jsonEncode([config.cacheKey, id]);
     final inFlight = _snapshotInFlight[memoryKey];
     if (inFlight != null) {
@@ -935,31 +1540,62 @@ class WebDavLibrarySource {
       } catch (_) {}
     }
     _snapshotCache.remove(memoryKey);
-    await _loadSnapshot(config, id, forceRefresh: true);
-    contentVersion.value++;
+    try {
+      await _loadSnapshot(config, id, forceRefresh: true);
+      contentVersion.value++;
+    } catch (error, stackTrace) {
+      Log.error('WebDAV metadata cache refresh', error, stackTrace);
+    }
   }
 
-  static Future<({ComicMetaData? metadata, bool filePresent, bool attempted})>
+  static Future<
+    ({
+      ComicMetaData? metadata,
+      bool filePresent,
+      String status,
+      int? attemptedAt,
+      int? retryAt,
+      String? error,
+    })
+  >
   _scrapeMissingMetadata(
     WebDavLibraryConfig config,
     String id,
     String comicPath, {
     required int? pageCount,
+    _WebDavLibrarySyncRun? syncRun,
   }) async {
     final scraper = _metadataScraper;
     if (scraper == null) {
-      return (metadata: null, filePresent: false, attempted: false);
+      return (
+        metadata: null,
+        filePresent: false,
+        status: 'pending',
+        attemptedAt: null,
+        retryAt: null,
+        error: null,
+      );
     }
+    final attemptedAt = DateTime.now().millisecondsSinceEpoch;
     try {
       final scraped = await scraper(_directoryName(id));
+      if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
       if (scraped == null) {
-        return (metadata: null, filePresent: false, attempted: true);
+        return (
+          metadata: null,
+          filePresent: false,
+          status: 'noMatch',
+          attemptedAt: attemptedAt,
+          retryAt: null,
+          error: null,
+        );
       }
       scraped.validateChapterRanges(pageCount: pageCount);
       return await _runMetadataWrite(config, id, () async {
         final latestEntries = List<WebDavLibraryEntry>.from(
           await ops.readDir(config, comicPath),
         );
+        if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
         if (_hasMetadataFile(latestEntries)) {
           return (
             metadata: await _readMetadata(
@@ -969,19 +1605,65 @@ class WebDavLibrarySource {
               pageCount: _metadataPageCount(latestEntries),
             ),
             filePresent: true,
-            attempted: true,
+            status: 'notNeeded',
+            attemptedAt: attemptedAt,
+            retryAt: null,
+            error: null,
           );
         }
-        await ops.writeText(
-          config,
-          config.childFilePath(comicPath, _metadataFileName),
-          _encodeMetadata(scraped),
-        );
-        return (metadata: scraped, filePresent: true, attempted: true);
+        try {
+          if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
+          await ops.writeText(
+            config,
+            config.childFilePath(comicPath, _metadataFileName),
+            _encodeMetadata(scraped),
+            createOnly: true,
+          );
+          if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
+          return (
+            metadata: scraped,
+            filePresent: true,
+            status: 'matched',
+            attemptedAt: attemptedAt,
+            retryAt: null,
+            error: null,
+          );
+        } on WebDavPreconditionFailedException {
+          final refreshedEntries = List<WebDavLibraryEntry>.from(
+            await ops.readDir(config, comicPath),
+          );
+          if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
+          if (!_hasMetadataFile(refreshedEntries)) rethrow;
+          return (
+            metadata: await _readMetadata(
+              config,
+              comicPath,
+              refreshedEntries,
+              pageCount: _metadataPageCount(refreshedEntries),
+            ),
+            filePresent: true,
+            status: 'notNeeded',
+            attemptedAt: attemptedAt,
+            retryAt: null,
+            error: null,
+          );
+        }
       });
-    } catch (e) {
-      Log.warning('WebDAV Library', 'Failed to scrape metadata for $id: $e');
-      return (metadata: null, filePresent: false, attempted: false);
+    } on _WebDavSynchronizationObsoleteException {
+      rethrow;
+    } catch (error) {
+      Log.warning(
+        'WebDAV Library',
+        'Failed to scrape metadata for $id: $error',
+      );
+      return (
+        metadata: null,
+        filePresent: false,
+        status: 'failed',
+        attemptedAt: attemptedAt,
+        retryAt: attemptedAt + const Duration(minutes: 15).inMilliseconds,
+        error: error.toString(),
+      );
     }
   }
 
@@ -1021,7 +1703,10 @@ class WebDavLibrarySource {
   }
 
   static String _encodeMetadata(ComicMetaData metadata) =>
-      '${const JsonEncoder.withIndent('  ').convert(metadata.toJson())}\n';
+      _encodeMetadataDocument(metadata.toJson());
+
+  static String _encodeMetadataDocument(Map<String, dynamic> metadata) =>
+      '${const JsonEncoder.withIndent('  ').convert(metadata)}\n';
 
   static Future<ComicMetaData?> _readMetadata(
     WebDavLibraryConfig config,
@@ -1037,111 +1722,322 @@ class WebDavLibrarySource {
 
     final metadataPath = config.childFilePath(comicPath, metadataEntry.name);
     try {
-      final decoded = jsonDecode(await ops.readText(config, metadataPath));
-      if (decoded is! Map) {
-        throw const FormatException('metadata.json must contain an object');
-      }
+      final file = await ops.readText(config, metadataPath);
       final metadata = ComicMetaData.fromJson(
-        Map<String, dynamic>.from(decoded),
+        _decodeMetadataDocument(file.content),
       );
       metadata.validateChapterRanges(pageCount: pageCount);
       return metadata;
-    } catch (e) {
+    } catch (error) {
       Log.warning(
         'WebDAV Library',
-        'Ignoring invalid metadata at $metadataPath: $e',
+        'Ignoring invalid metadata at $metadataPath: $error',
       );
       return null;
     }
   }
 
+  static void initializeMetadataRetry() {
+    unawaited(retryPendingMetadata(force: true));
+  }
+
+  static Future<void> retryPendingMetadata({bool force = false}) async {
+    _metadataRetryTimer?.cancel();
+    _metadataRetryTimer = null;
+    final config = WebDavLibraryConfig.fromSettings();
+    if (!config.isValid) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final pending in _pendingMetadataWrites()) {
+      if (pending.libraryId != config.libraryId ||
+          (!force &&
+              (pending.attempts >= _maxMetadataRetryAttempts ||
+                  pending.nextRetryAt == null ||
+                  pending.nextRetryAt! > now))) {
+        continue;
+      }
+      try {
+        await _writeMetadataNow(config, pending);
+        await _removePendingMetadataWrite(pending);
+        await _refreshSnapshotAfterMetadataWrite(config, pending.comicId);
+      } on WebDavMetadataWriteRejectedException {
+        await _removePendingMetadataWrite(pending);
+      } catch (error) {
+        await _recordPendingMetadataWrite(pending, error);
+      }
+    }
+    _scheduleMetadataRetry();
+  }
+
+  static List<_WebDavPendingMetadataWrite> _pendingMetadataWrites() {
+    final raw = appdata.implicitData[_metadataPendingKey];
+    if (raw is! Map) return const [];
+    final result = <_WebDavPendingMetadataWrite>[];
+    for (final value in raw.values) {
+      if (value is! Map) continue;
+      try {
+        result.add(
+          _WebDavPendingMetadataWrite.fromJson(
+            Map<String, dynamic>.from(value),
+          ),
+        );
+      } catch (_) {
+        continue;
+      }
+    }
+    return result;
+  }
+
+  static Future<void> _recordPendingMetadataWrite(
+    _WebDavPendingMetadataWrite pending,
+    Object error,
+  ) async {
+    final failure = _metadataPendingFailure(error);
+    final key = _pendingMetadataKey(pending.libraryId, pending.comicId);
+    final raw = appdata.implicitData[_metadataPendingKey];
+    final entries = <String, dynamic>{
+      if (raw is Map)
+        for (final entry in raw.entries)
+          if (entry.key is String) entry.key as String: entry.value,
+    };
+    final existingRaw = entries[key];
+    _WebDavPendingMetadataWrite? existing;
+    if (existingRaw is Map) {
+      try {
+        existing = _WebDavPendingMetadataWrite.fromJson(
+          Map<String, dynamic>.from(existingRaw),
+        );
+      } catch (_) {}
+    }
+    if (existing != null && existing.sequence > pending.sequence) return;
+    final attempts =
+        (existing != null &&
+            existing.sequence == pending.sequence &&
+            existing.subjectId == pending.subjectId)
+        ? existing.attempts + 1
+        : pending.attempts + 1;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final shouldRetry =
+        attempts < _maxMetadataRetryAttempts &&
+        (failure == WebDavMetadataPendingFailure.transient ||
+            failure == WebDavMetadataPendingFailure.conflict ||
+            failure == WebDavMetadataPendingFailure.other);
+    final retryDelay = Duration(minutes: 1 << (attempts - 1).clamp(0, 3));
+    final updated = pending.copyWith(
+      attempts: attempts,
+      lastAttemptAt: now,
+      nextRetryAt: shouldRetry ? now + retryDelay.inMilliseconds : null,
+      failure: failure,
+      errorMessage: error.toString(),
+    );
+    entries[key] = updated.toJson();
+    appdata.implicitData[_metadataPendingKey] = entries;
+    await appdata.writeImplicitData();
+    metadataPendingVersion.value++;
+    _scheduleMetadataRetry();
+  }
+
+  static Future<void> _removePendingMetadataWrite(
+    _WebDavPendingMetadataWrite pending,
+  ) async {
+    final raw = appdata.implicitData[_metadataPendingKey];
+    if (raw is! Map) return;
+    final key = _pendingMetadataKey(pending.libraryId, pending.comicId);
+    final current = raw[key];
+    if (current is Map) {
+      try {
+        final stored = _WebDavPendingMetadataWrite.fromJson(
+          Map<String, dynamic>.from(current),
+        );
+        if (stored.sequence > pending.sequence) return;
+      } catch (_) {}
+    }
+    final entries = <String, dynamic>{
+      for (final entry in raw.entries)
+        if (entry.key is String) entry.key as String: entry.value,
+    };
+    if (entries.remove(key) == null) return;
+    appdata.implicitData[_metadataPendingKey] = entries;
+    await appdata.writeImplicitData();
+    metadataPendingVersion.value++;
+    _scheduleMetadataRetry();
+  }
+
+  static WebDavMetadataPendingFailure _metadataPendingFailure(Object error) {
+    if (error is WebDavAuthenticationException) {
+      return WebDavMetadataPendingFailure.authentication;
+    }
+    if (error is WebDavTransientException) {
+      return WebDavMetadataPendingFailure.transient;
+    }
+    if (error is WebDavUnsupportedException) {
+      return WebDavMetadataPendingFailure.unsupported;
+    }
+    if (error is WebDavPreconditionFailedException) {
+      return WebDavMetadataPendingFailure.conflict;
+    }
+    if (error is FormatException) {
+      return WebDavMetadataPendingFailure.invalidMetadata;
+    }
+    return WebDavMetadataPendingFailure.other;
+  }
+
+  static String _pendingMetadataKey(String libraryId, String comicId) =>
+      jsonEncode([libraryId, comicId]);
+
+  static void _scheduleMetadataRetry() {
+    _metadataRetryTimer?.cancel();
+    _metadataRetryTimer = null;
+    final libraryId = WebDavLibraryConfig.fromSettings().libraryId;
+    final due = _pendingMetadataWrites()
+        .where(
+          (pending) =>
+              pending.libraryId == libraryId &&
+              pending.attempts < _maxMetadataRetryAttempts &&
+              pending.nextRetryAt != null,
+        )
+        .map((pending) => pending.nextRetryAt!)
+        .fold<int?>(null, (earliest, value) {
+          return earliest == null || value < earliest ? value : earliest;
+        });
+    if (due == null) return;
+    final delay = Duration(
+      milliseconds: (due - DateTime.now().millisecondsSinceEpoch).clamp(
+        0,
+        const Duration(days: 1).inMilliseconds,
+      ),
+    );
+    _metadataRetryTimer = Timer(delay, () {
+      _metadataRetryTimer = null;
+      unawaited(retryPendingMetadata());
+    });
+  }
+
   static Future<List<_WebDavDiscoveredDirectory>> _discoverComicDirectories(
     WebDavLibraryConfig config, {
     required List<WebDavLibraryEntry> rootEntries,
-    required Map<String, WebDavLibraryCachedComic> previous,
-    required bool force,
+    required _WebDavLibrarySyncRun syncRun,
   }) async {
-    final topLevelDirectories = _sortedDirectories(rootEntries);
     final result = <_WebDavDiscoveredDirectory>[];
     var inspectedDirectories = 0;
 
-    Future<List<_WebDavDiscoveredDirectory>> scanNested(
-      String parentId,
-      List<WebDavLibraryEntry> entries,
-      int depth,
-    ) async {
-      if (depth > _maxDiscoveryDepth ||
-          inspectedDirectories >= _maxDiscoveryDirectories) {
-        return const [];
-      }
-
-      final directories = _sortedDirectories(entries);
-      final nested = <_WebDavDiscoveredDirectory>[];
-      for (final directory in directories) {
-        if (inspectedDirectories >= _maxDiscoveryDirectories) break;
-        inspectedDirectories++;
-        final id = _joinRelativeDirectoryPath(parentId, directory.name);
-        final path = config.childDirectoryPath(id);
-        List<WebDavLibraryEntry> childEntries;
-        try {
-          childEntries = List<WebDavLibraryEntry>.from(
-            await ops.readDir(config, path),
-          );
-        } catch (e) {
-          Log.warning(
-            'WebDAV Library',
-            'Failed to inspect nested directory at $path: $e',
-          );
-          continue;
-        }
-
-        if (_hasMetadataFile(childEntries)) {
-          nested.add(
-            _WebDavDiscoveredDirectory(
-              id: id,
-              entries: childEntries,
-              eTag: directory.eTag,
-              modifiedAt: directory.modifiedAt,
-            ),
-          );
-          continue;
-        }
-        nested.addAll(await scanNested(id, childEntries, depth + 1));
-      }
-      return nested;
+    bool looksLikeChapterName(String name) {
+      final normalized = name.trim().toLowerCase();
+      return RegExp(
+        r'^(?:'
+        r'第?\s*\d+(?:[._-]\d+)?\s*(?:话|話|章|卷|册|冊|回|集)?|'
+        r'(?:ch(?:apter)?|ep(?:isode)?|vol(?:ume)?)\.?\s*\d+(?:[._-]\d+)?|'
+        r'序章|终章|終章|番外|后日谈|後日談|'
+        r'prologue|epilogue|extra|extras'
+        r')$',
+        caseSensitive: false,
+      ).hasMatch(normalized);
     }
 
-    for (final directory in topLevelDirectories) {
+    Future<List<_WebDavDiscoveredDirectory>> scan({
+      required WebDavLibraryEntry directory,
+      required String id,
+      required List<WebDavLibraryEntry> entries,
+      required int depth,
+      required bool preserveFallback,
+    }) async {
+      _throwIfSynchronizationObsolete(syncRun);
+      final version = _directoryContentVersion(directory, entries);
+      _WebDavDiscoveredDirectory current() => _WebDavDiscoveredDirectory(
+        id: id,
+        entries: entries,
+        eTag: version.eTag,
+        modifiedAt: version.modifiedAt,
+      );
+
+      if (_hasMetadataFile(entries) ||
+          _imageEntries(
+            entries,
+          ).any((entry) => !isNamedComicCover(entry.name))) {
+        return [current()];
+      }
+      final childDirectories = _sortedDirectories(entries);
+      if (childDirectories.isEmpty ||
+          depth >= _maxDiscoveryDepth ||
+          inspectedDirectories >= _maxDiscoveryDirectories) {
+        return preserveFallback ? [current()] : const [];
+      }
+
+      if (childDirectories.every((child) => looksLikeChapterName(child.name))) {
+        return [current()];
+      }
+
+      final children =
+          <
+            ({
+              WebDavLibraryEntry directory,
+              String id,
+              List<WebDavLibraryEntry> entries,
+            })
+          >[];
+      for (final child in childDirectories) {
+        if (inspectedDirectories >= _maxDiscoveryDirectories) break;
+        inspectedDirectories++;
+        final childId = _joinRelativeDirectoryPath(id, child.name);
+        final childPath = config.childDirectoryPath(childId);
+        try {
+          children.add((
+            directory: child,
+            id: childId,
+            entries: List<WebDavLibraryEntry>.from(
+              await ops.readDir(config, childPath),
+            ),
+          ));
+          _throwIfSynchronizationObsolete(syncRun);
+        } on _WebDavSynchronizationObsoleteException {
+          rethrow;
+        } catch (error) {
+          Log.warning(
+            'WebDAV Library',
+            'Failed to inspect nested directory at $childPath: $error',
+          );
+        }
+      }
+
+      final nested = <_WebDavDiscoveredDirectory>[];
+      for (final child in children) {
+        nested.addAll(
+          await scan(
+            directory: child.directory,
+            id: child.id,
+            entries: child.entries,
+            depth: depth + 1,
+            preserveFallback: false,
+          ),
+        );
+      }
+      if (nested.isNotEmpty) return nested;
+      return preserveFallback ? [current()] : const [];
+    }
+
+    for (final directory in _sortedDirectories(rootEntries)) {
       if (inspectedDirectories >= _maxDiscoveryDirectories) break;
       inspectedDirectories++;
       final id = directory.name;
-      final cached = previous[id];
-      if (!force &&
-          cached?.isReady == true &&
-          cached!.hasSameRemoteVersion(
-            eTag: directory.eTag,
-            modifiedAt: directory.modifiedAt,
-          )) {
-        result.add(
-          _WebDavDiscoveredDirectory(
+      final path = config.childDirectoryPath(id);
+      try {
+        result.addAll(
+          await scan(
+            directory: directory,
             id: id,
-            entries: const [],
-            eTag: directory.eTag,
-            modifiedAt: directory.modifiedAt,
+            entries: List<WebDavLibraryEntry>.from(
+              await ops.readDir(config, path),
+            ),
+            depth: 0,
+            preserveFallback: true,
           ),
         );
-        continue;
-      }
-      final path = config.childDirectoryPath(id);
-      List<WebDavLibraryEntry> entries;
-      try {
-        entries = List<WebDavLibraryEntry>.from(
-          await ops.readDir(config, path),
-        );
-      } catch (e) {
+        _throwIfSynchronizationObsolete(syncRun);
+      } on _WebDavSynchronizationObsoleteException {
+        rethrow;
+      } catch (error) {
         Log.warning(
           'WebDAV Library',
-          'Failed to inspect directory at $path: $e',
+          'Failed to inspect directory at $path: $error',
         );
         result.add(
           _WebDavDiscoveredDirectory(
@@ -1151,57 +2047,38 @@ class WebDavLibrarySource {
             modifiedAt: directory.modifiedAt,
           ),
         );
-        continue;
-      }
-
-      if (_hasMetadataFile(entries)) {
-        final discoveredDirectories = [
-          _WebDavDiscoveredDirectory(
-            id: id,
-            entries: entries,
-            eTag: directory.eTag,
-            modifiedAt: directory.modifiedAt,
-          ),
-        ];
-        result.addAll(discoveredDirectories);
-        continue;
-      }
-
-      final rootImages = _imageEntries(entries);
-      final childDirectories = _sortedDirectories(entries);
-      if (rootImages.isNotEmpty || childDirectories.isEmpty) {
-        final discoveredDirectories = [
-          _WebDavDiscoveredDirectory(
-            id: id,
-            entries: entries,
-            eTag: directory.eTag,
-            modifiedAt: directory.modifiedAt,
-          ),
-        ];
-        result.addAll(discoveredDirectories);
-        continue;
-      }
-
-      final nested = await scanNested(id, entries, 1);
-      if (nested.isEmpty) {
-        // Keep the original first-level directory behavior when no metadata
-        // marker can be found below a directory.
-        final discoveredDirectories = [
-          _WebDavDiscoveredDirectory(
-            id: id,
-            entries: entries,
-            eTag: directory.eTag,
-            modifiedAt: directory.modifiedAt,
-          ),
-        ];
-        result.addAll(discoveredDirectories);
-      } else {
-        result.addAll(nested);
       }
     }
 
     result.sort((a, b) => compareComicFileNames(a.id, b.id));
     return result;
+  }
+
+  static ({String? eTag, int? modifiedAt}) _directoryContentVersion(
+    WebDavLibraryEntry directory,
+    List<WebDavLibraryEntry> entries,
+  ) {
+    final trackedEntries = entries
+        .where((entry) => !_isIgnoredEntry(entry.name))
+        .toList();
+    final hasReliableValidators =
+        trackedEntries.isNotEmpty &&
+        trackedEntries.every(
+          (entry) => entry.eTag?.isNotEmpty == true || entry.modifiedAt != null,
+        );
+    if (!hasReliableValidators) return (eTag: null, modifiedAt: null);
+    final sorted = List<WebDavLibraryEntry>.from(trackedEntries)
+      ..sort((a, b) => compareComicFileNames(a.name, b.name));
+    final identity = jsonEncode([
+      directory.eTag,
+      directory.modifiedAt,
+      for (final entry in sorted)
+        [entry.name, entry.isDirectory, entry.eTag, entry.modifiedAt],
+    ]);
+    return (
+      eTag: 'venera:${sha256.convert(utf8.encode(identity))}',
+      modifiedAt: null,
+    );
   }
 
   static List<WebDavLibraryEntry> _sortedDirectories(
@@ -1282,6 +2159,111 @@ class _WebDavDiscoveredDirectory {
   final int? modifiedAt;
 }
 
+class _WebDavPendingMetadataWrite {
+  static const _unset = Object();
+
+  const _WebDavPendingMetadataWrite({
+    required this.libraryId,
+    required this.comicId,
+    required this.subjectId,
+    required this.metadata,
+    required this.sequence,
+    this.attempts = 0,
+    this.lastAttemptAt,
+    this.nextRetryAt,
+    this.failure = WebDavMetadataPendingFailure.none,
+    this.errorMessage,
+  });
+
+  factory _WebDavPendingMetadataWrite.fromJson(Map<String, dynamic> json) {
+    final libraryId = json['libraryId'];
+    final comicId = json['comicId'];
+    final subjectId = json['subjectId'];
+    final rawMetadata = json['metadata'];
+    if (libraryId is! String ||
+        libraryId.isEmpty ||
+        comicId is! String ||
+        comicId.isEmpty ||
+        (subjectId != null && (subjectId is! int || subjectId <= 0)) ||
+        rawMetadata is! Map) {
+      throw const FormatException('Invalid pending WebDAV metadata write');
+    }
+    final failureName = json['failure'];
+    final failure = WebDavMetadataPendingFailure.values.firstWhere(
+      (value) => value.name == failureName,
+      orElse: () => WebDavMetadataPendingFailure.other,
+    );
+    return _WebDavPendingMetadataWrite(
+      libraryId: libraryId,
+      comicId: comicId,
+      subjectId: subjectId as int?,
+      metadata: ComicMetaData.fromJson(Map<String, dynamic>.from(rawMetadata)),
+      sequence: (json['sequence'] as num?)?.toInt() ?? 0,
+      attempts: (json['attempts'] as num?)?.toInt() ?? 0,
+      lastAttemptAt: (json['lastAttemptAt'] as num?)?.toInt(),
+      nextRetryAt: (json['nextRetryAt'] as num?)?.toInt(),
+      failure: failure,
+      errorMessage: json['errorMessage'] as String?,
+    );
+  }
+
+  final String libraryId;
+  final String comicId;
+  final int? subjectId;
+  final ComicMetaData metadata;
+  final int sequence;
+  final int attempts;
+  final int? lastAttemptAt;
+  final int? nextRetryAt;
+  final WebDavMetadataPendingFailure failure;
+  final String? errorMessage;
+
+  WebDavMetadataPendingStatus get status => WebDavMetadataPendingStatus(
+    libraryId: libraryId,
+    comicId: comicId,
+    subjectId: subjectId,
+    attempts: attempts,
+    lastAttemptAt: lastAttemptAt,
+    nextRetryAt: nextRetryAt,
+    failure: failure,
+    errorMessage: errorMessage,
+  );
+
+  _WebDavPendingMetadataWrite copyWith({
+    int? attempts,
+    int? lastAttemptAt,
+    Object? nextRetryAt = _unset,
+    WebDavMetadataPendingFailure? failure,
+    String? errorMessage,
+  }) => _WebDavPendingMetadataWrite(
+    libraryId: libraryId,
+    comicId: comicId,
+    subjectId: subjectId,
+    metadata: metadata,
+    sequence: sequence,
+    attempts: attempts ?? this.attempts,
+    lastAttemptAt: lastAttemptAt ?? this.lastAttemptAt,
+    nextRetryAt: identical(nextRetryAt, _unset)
+        ? this.nextRetryAt
+        : nextRetryAt as int?,
+    failure: failure ?? this.failure,
+    errorMessage: errorMessage ?? this.errorMessage,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'libraryId': libraryId,
+    'comicId': comicId,
+    'subjectId': subjectId,
+    'metadata': metadata.toJson(),
+    'sequence': sequence,
+    'attempts': attempts,
+    'lastAttemptAt': lastAttemptAt,
+    'nextRetryAt': nextRetryAt,
+    'failure': failure.name,
+    'errorMessage': errorMessage,
+  };
+}
+
 class _WebDavComicSnapshot {
   const _WebDavComicSnapshot({
     required this.title,
@@ -1292,8 +2274,13 @@ class _WebDavComicSnapshot {
     required this.chapters,
     required this.metadataChapters,
     required this.rootImages,
+    required this.bangumiSubjectId,
     required this.metadataFilePresent,
-    required this.metadataScrapeAttempted,
+    required this.metadataScrapeStatus,
+    required this.metadataScraperVersion,
+    required this.metadataScrapeAttemptedAt,
+    required this.metadataScrapeRetryAt,
+    required this.metadataScrapeError,
   });
 
   final String title;
@@ -1304,13 +2291,19 @@ class _WebDavComicSnapshot {
   final Map<String, String> chapters;
   final Map<String, ComicChapter> metadataChapters;
   final List<WebDavLibraryEntry> rootImages;
+  final int? bangumiSubjectId;
   final bool metadataFilePresent;
-  final bool metadataScrapeAttempted;
+  final String metadataScrapeStatus;
+  final String metadataScraperVersion;
+  final int? metadataScrapeAttemptedAt;
+  final int? metadataScrapeRetryAt;
+  final String? metadataScrapeError;
 
   factory _WebDavComicSnapshot.fromJson(Map<String, dynamic> json) {
     final chapters = json['chapters'];
     final metadataChapters = json['metadataChapters'];
     final rootImages = json['rootImages'];
+    final metadataFilePresent = json['metadataFilePresent'] == true;
     return _WebDavComicSnapshot(
       title: json['title'] as String,
       author: json['author'] as String? ?? '',
@@ -1343,8 +2336,15 @@ class _WebDavComicSnapshot {
                 )
                 .toList()
           : const [],
-      metadataFilePresent: json['metadataFilePresent'] == true,
-      metadataScrapeAttempted: json['metadataScrapeAttempted'] == true,
+      bangumiSubjectId: json['bangumiSubjectId'] as int?,
+      metadataFilePresent: metadataFilePresent,
+      metadataScrapeStatus:
+          json['metadataScrapeStatus'] as String? ??
+          (metadataFilePresent ? 'notNeeded' : 'pending'),
+      metadataScraperVersion: json['metadataScraperVersion'] as String? ?? '',
+      metadataScrapeAttemptedAt: json['metadataScrapeAttemptedAt'] as int?,
+      metadataScrapeRetryAt: json['metadataScrapeRetryAt'] as int?,
+      metadataScrapeError: json['metadataScrapeError'] as String?,
     );
   }
 
@@ -1359,8 +2359,13 @@ class _WebDavComicSnapshot {
     'metadataChapters': metadataChapters.map(
       (key, value) => MapEntry(key, value.toJson()),
     ),
+    'bangumiSubjectId': bangumiSubjectId,
     'metadataFilePresent': metadataFilePresent,
-    'metadataScrapeAttempted': metadataScrapeAttempted,
+    'metadataScrapeStatus': metadataScrapeStatus,
+    'metadataScraperVersion': metadataScraperVersion,
+    'metadataScrapeAttemptedAt': metadataScrapeAttemptedAt,
+    'metadataScrapeRetryAt': metadataScrapeRetryAt,
+    'metadataScrapeError': metadataScrapeError,
     'rootImages': [
       for (final entry in rootImages)
         {

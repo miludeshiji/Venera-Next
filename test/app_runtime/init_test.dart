@@ -4,6 +4,55 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:venera_next/app_runtime/app_runtime.dart';
 
 void main() {
+  group('runtime sources after settings import', () {
+    const webDavSourceKey = 'webdav_library';
+    late bool webDavConfigIsValid;
+    late Set<String> runtimeSourceKeys;
+    late List<String> events;
+
+    Future<void> notifySettingsImported() {
+      return refreshRuntimeAfterSettingsImport(
+        resetWebDavLibrary: () => events.add('webdav-reset'),
+        reloadComicSources: () async {
+          events.add('sources-reloaded');
+          runtimeSourceKeys = {if (webDavConfigIsValid) webDavSourceKey};
+        },
+        initializeBangumi: () async => events.add('bangumi-initialized'),
+        checkForAutomaticSync: () => events.add('automatic-sync-checked'),
+      );
+    }
+
+    setUp(() {
+      webDavConfigIsValid = false;
+      runtimeSourceKeys = {};
+      events = [];
+    });
+
+    test('adds a source when imported settings make it valid', () async {
+      webDavConfigIsValid = true;
+
+      await notifySettingsImported();
+
+      expect(runtimeSourceKeys, contains(webDavSourceKey));
+      expect(events, [
+        'webdav-reset',
+        'sources-reloaded',
+        'bangumi-initialized',
+        'automatic-sync-checked',
+      ]);
+    });
+
+    test('removes a source when imported settings make it invalid', () async {
+      webDavConfigIsValid = true;
+      runtimeSourceKeys.add(webDavSourceKey);
+      webDavConfigIsValid = false;
+
+      await notifySettingsImported();
+
+      expect(runtimeSourceKeys, isNot(contains(webDavSourceKey)));
+    });
+  });
+
   test('Bangumi startup waits for data sync before initialization', () async {
     final download = Completer<void>();
     final events = <String>[];

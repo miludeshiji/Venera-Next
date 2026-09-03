@@ -724,6 +724,7 @@ class _WebDavComicLibrarySettingState
   bool isSyncing = false;
   late bool autoSyncEnabled;
   late int syncIntervalMinutes;
+  late bool configSyncEnabled;
 
   @override
   void initState() {
@@ -742,6 +743,8 @@ class _WebDavComicLibrarySettingState
         (appdata.settings['webdavComicLibrarySyncIntervalMinutes'] as num?)
             ?.round() ??
         360;
+    configSyncEnabled =
+        appdata.settings['webdavComicLibrarySyncEnabled'] as bool? ?? false;
   }
 
   @override
@@ -781,6 +784,21 @@ class _WebDavComicLibrarySettingState
                   ),
                 ],
               ),
+            ),
+            SwitchListTile(
+              key: const Key('webdav-comic-library-config-sync-switch'),
+              contentPadding: EdgeInsets.zero,
+              title: Text('Sync comic library config'.tl),
+              subtitle: Text(
+                'Sync the WebDAV comic library URL, username, password, remote path, automatic updates and update interval. Credentials will be stored in remote .venera files.'
+                    .tl,
+              ),
+              value: configSyncEnabled,
+              onChanged: (value) {
+                setState(() {
+                  configSyncEnabled = value;
+                });
+              },
             ),
             const SizedBox(height: 16),
             SwitchListTile(
@@ -965,12 +983,17 @@ class _WebDavComicLibrarySettingState
 
   Future<bool> _persistConfiguration() async {
     final config = currentConfig;
-    appdata.settings['webdavComicLibraryAutoSync'] = autoSyncEnabled;
-    appdata.settings['webdavComicLibrarySyncIntervalMinutes'] =
-        syncIntervalMinutes;
-    if (!config.isValid && config.user.isEmpty && config.pass.isEmpty) {
+    Future<void> persist() async {
+      appdata.settings['webdavComicLibraryAutoSync'] = autoSyncEnabled;
+      appdata.settings['webdavComicLibrarySyncIntervalMinutes'] =
+          syncIntervalMinutes;
+      appdata.settings['webdavComicLibrarySyncEnabled'] = configSyncEnabled;
       await WebDavLibraryConfig.saveToSettings(config);
-      _refreshWebDavLibrarySource(enabled: false);
+    }
+
+    if (!config.isValid && config.user.isEmpty && config.pass.isEmpty) {
+      await persist();
+      await _refreshWebDavLibrarySource(enabled: false);
       return true;
     }
     setState(() {
@@ -985,14 +1008,13 @@ class _WebDavComicLibrarySettingState
       context.showMessage(message: result.errorMessage!);
       context.showMessage(message: "Saved Failed".tl);
       return false;
-    } else {
-      await WebDavLibraryConfig.saveToSettings(config);
-      _refreshWebDavLibrarySource(enabled: true);
-      return true;
     }
+    await persist();
+    await _refreshWebDavLibrarySource(enabled: true);
+    return true;
   }
 
-  void _refreshWebDavLibrarySource({required bool enabled}) {
+  Future<void> _refreshWebDavLibrarySource({required bool enabled}) async {
     final manager = ComicSourceManager();
     manager.remove(WebDavLibrarySource.sourceKey);
     final pages = List<String>.from(appdata.settings['explore_pages']);
@@ -1002,6 +1024,6 @@ class _WebDavComicLibrarySettingState
       pages.add(WebDavLibrarySource.explorePageTitle);
     }
     appdata.settings['explore_pages'] = pages;
-    appdata.saveData(false);
+    await appdata.saveData(false);
   }
 }

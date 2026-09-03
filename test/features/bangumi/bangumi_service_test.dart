@@ -110,6 +110,36 @@ void main() {
   );
 
   test(
+    'interactive requests overtake queued chapter and metadata work',
+    () async {
+      connectSettings();
+      setBinding(binding());
+      gateway.collection = collection();
+      final firstSearch = Completer<void>();
+      gateway.searchBlockers['metadata-1'] = firstSearch;
+
+      final firstMetadata = service.matchSubjectForMetadata('metadata-1');
+      await pumpEventQueue();
+      final secondMetadata = service.matchSubjectForMetadata('metadata-2');
+      final chapter = service.onChapterCompleted(
+        sourceKey: 'source',
+        comicId: 'comic',
+        chapterTitle: '第 2 话',
+      );
+      final interactive = service.searchSubjects('interactive');
+      firstSearch.complete();
+      await Future.wait([firstMetadata, secondMetadata, chapter, interactive]);
+
+      expect(gateway.operationCalls, [
+        'search:metadata-1',
+        'search:interactive',
+        'collection:42',
+        'search:metadata-2',
+      ]);
+    },
+  );
+
+  test(
     'metadata matching strips author suffix and requires an exact title',
     () async {
       connectSettings();
@@ -134,7 +164,9 @@ void main() {
         tags: ['Manga'],
       );
 
-      final result = await service.matchSubjectForMetadata('Cats Eye[Author]');
+      final result = await service.matchSubjectForMetadata(
+        'Cats Eye 作者：[Author]',
+      );
 
       expect(result?.id, 42);
       expect(result?.authors, ['Author']);
@@ -162,15 +194,16 @@ void main() {
       coverUrl: 'cover',
       totalEpisodes: 24,
       totalVolumes: 4,
+      authors: ['Author'],
     );
 
     for (final directoryTitle in [
-      'Cats Eye[Author][Chinese]',
+      'Cats Eye 作者：[Author][Chinese]',
       'Cats Eye 语言：[Chinese]',
       'Cats Eye 版本[无修正]',
       'Cats Eye[DL版]',
       'Cats Eye 汉化者：[某汉化组]',
-      'Cats Eye[Author][Chinese][无修正][DL版] 汉化者：[某汉化组]',
+      'Cats Eye 作者：[Author][Chinese][无修正][DL版] 汉化者：[某汉化组]',
     ]) {
       expect((await service.matchSubjectForMetadata(directoryTitle))?.id, 42);
     }
@@ -193,6 +226,26 @@ void main() {
       ]);
     },
   );
+
+  test('an unlabeled author word remains part of the title', () async {
+    connectSettings();
+    gateway.searchResults = [
+      const BangumiSubject(
+        id: 42,
+        title: 'The Author Story',
+        originalTitle: '',
+        coverUrl: '',
+        totalEpisodes: 1,
+        totalVolumes: 1,
+      ),
+    ];
+    gateway.subjects[42] = gateway.searchResults.single;
+
+    final result = await service.matchSubjectForMetadata('The Author Story');
+
+    expect(result?.id, 42);
+    expect(gateway.searchKeywords, ['The Author Story']);
+  });
 
   test(
     'metadata matching uses an author hint to resolve duplicate titles',
@@ -229,13 +282,46 @@ void main() {
       );
 
       final result = await service.matchSubjectForMetadata(
-        'Title【Correct author】',
+        'Title 作者：【Correct author】',
       );
 
       expect(result?.id, 43);
       expect(gateway.subjectCalls, [42, 43]);
     },
   );
+
+  test('metadata author matching falls back to credited persons', () async {
+    connectSettings();
+    gateway.searchResults = [subject()];
+    gateway.subjects[42] = subject();
+    gateway.persons[42] = const [
+      BangumiSubjectPerson(name: 'Credited Author', relation: '原作'),
+      BangumiSubjectPerson(name: 'Credited Author', relation: '出版社'),
+    ];
+
+    final result = await service.matchSubjectForMetadata(
+      'Title 作者：[Credited Author]',
+    );
+
+    expect(result?.id, 42);
+    expect(gateway.personCalls, [42]);
+  });
+
+  test('metadata author matching rejects unrelated person credits', () async {
+    connectSettings();
+    gateway.searchResults = [subject()];
+    gateway.subjects[42] = subject();
+    gateway.persons[42] = const [
+      BangumiSubjectPerson(name: 'Wrong Credit', relation: '出版社'),
+    ];
+
+    final result = await service.matchSubjectForMetadata(
+      'Title 作者：[Wrong Credit]',
+    );
+
+    expect(result, isNull);
+    expect(gateway.personCalls, [42]);
+  });
 
   test('metadata matching rejects a non-exact search result', () async {
     connectSettings();
@@ -261,6 +347,7 @@ void main() {
     final started = Completer<void>();
     final release = Completer<void>();
     configureBangumiBindingMetadataHandler(({
+      required String scopeId,
       required String sourceKey,
       required String comicId,
       required BangumiSubject subject,
@@ -289,6 +376,7 @@ void main() {
   test('background metadata failure does not undo a binding', () async {
     connectSettings();
     configureBangumiBindingMetadataHandler(({
+      required String scopeId,
       required String sourceKey,
       required String comicId,
       required BangumiSubject subject,
@@ -306,6 +394,209 @@ void main() {
 
     expect(service.bindingFor('webdav_library', 'comic'), result);
   });
+
+  test('bindings are isolated by the active comic library scope', () async {
+    connectSettings();
+    gateway.collection = collection();
+    var scope = 'library-a';
+    final scopedService = BangumiService.forTesting(
+      gatewayFactory: (_) => gateway,
+      scopeResolver: (_) => scope,
+    );
+
+    final first = await scopedService.bind(
+      sourceKey: 'webdav_library',
+      comicId: 'same/path',
+      subject: subject(),
+      mode: BangumiProgressMode.episode,
+    );
+    scope = 'library-b';
+    expect(scopedService.bindingFor('webdav_library', 'same/path'), isNull);
+    final second = await scopedService.bind(
+      sourceKey: 'webdav_library',
+      comicId: 'same/path',
+      subject: const BangumiSubject(
+        id: 43,
+        title: 'Other',
+        originalTitle: 'Other',
+        coverUrl: '',
+        totalEpisodes: 1,
+        totalVolumes: 1,
+      ),
+      mode: BangumiProgressMode.episode,
+    );
+
+    expect(second.subjectId, 43);
+    scope = 'library-a';
+    expect(scopedService.bindingFor('webdav_library', 'same/path'), first);
+    expect((appdata.settings['bangumiBindings'] as Map), hasLength(2));
+  });
+
+  test(
+    'initialization migrates a legacy binding into the active scope',
+    () async {
+      connectSettings();
+      final legacy = binding().copyWith(
+        sourceKey: 'webdav_library',
+        comicId: 'book',
+      );
+      setBinding(legacy);
+      final scopedService = BangumiService.forTesting(
+        gatewayFactory: (_) => gateway,
+        scopeResolver: (_) => 'library-a',
+      );
+
+      await scopedService.initialize();
+
+      final migrated = scopedService.bindingFor('webdav_library', 'book');
+      expect(migrated?.scopeId, 'library-a');
+      expect((appdata.settings['bangumiBindings'] as Map).keys, [
+        bangumiBindingKey('webdav_library', 'book', scopeId: 'library-a'),
+      ]);
+    },
+  );
+
+  test(
+    'scoped migration persists pending progress before replacing its binding',
+    () async {
+      connectSettings();
+      final legacy = binding().copyWith(
+        sourceKey: 'webdav_library',
+        comicId: 'book',
+      );
+      setBinding(legacy);
+      final legacyKey = bangumiBindingKey('webdav_library', 'book');
+      final scopedKey = bangumiBindingKey(
+        'webdav_library',
+        'book',
+        scopeId: 'library-a',
+      );
+      final implicitData = <String, dynamic>{
+        'bangumiPendingProgress': {
+          legacyKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 28,
+              'attempts': 0,
+              'nextAttemptAt': DateTime(2100).millisecondsSinceEpoch,
+              'subjectId': 42,
+              'username': 'alice',
+            },
+          },
+        },
+      };
+      final implicitSaveStarted = Completer<void>();
+      final allowImplicitSave = Completer<void>();
+      var implicitSaveCompleted = false;
+      var settingsSaves = 0;
+      final scopedService = BangumiService.forTesting(
+        gatewayFactory: (_) => gateway,
+        scopeResolver: (_) => 'library-a',
+        implicitData: implicitData,
+        writeImplicitData: () async {
+          implicitSaveStarted.complete();
+          await allowImplicitSave.future;
+          implicitSaveCompleted = true;
+        },
+        saveSettings: () async {
+          expect(implicitSaveCompleted, isTrue);
+          settingsSaves++;
+        },
+        timerFactory: (duration, callback) =>
+            RecordingTimer(duration, callback),
+      );
+
+      final initialization = scopedService.initialize();
+      await implicitSaveStarted.future;
+
+      expect(settingsSaves, 0);
+      expect(
+        appdata.settings['bangumiBindings'],
+        containsPair(legacyKey, isNotNull),
+      );
+      expect(
+        appdata.settings['bangumiBindings'],
+        isNot(containsPair(scopedKey, anything)),
+      );
+
+      allowImplicitSave.complete();
+      await initialization;
+
+      expect(settingsSaves, 1);
+      expect(
+        appdata.settings['bangumiBindings'],
+        containsPair(scopedKey, isNotNull),
+      );
+      expect(
+        implicitData['bangumiPendingProgress'],
+        containsPair(scopedKey, isNotNull),
+      );
+      expect(
+        implicitData['bangumiPendingProgress'],
+        isNot(containsPair(legacyKey, anything)),
+      );
+    },
+  );
+
+  test(
+    'failed pending persistence leaves the legacy binding recoverable',
+    () async {
+      connectSettings();
+      final legacy = binding().copyWith(
+        sourceKey: 'webdav_library',
+        comicId: 'book',
+      );
+      setBinding(legacy);
+      final legacyKey = bangumiBindingKey('webdav_library', 'book');
+      final scopedKey = bangumiBindingKey(
+        'webdav_library',
+        'book',
+        scopeId: 'library-a',
+      );
+      final implicitData = <String, dynamic>{
+        'bangumiPendingProgress': {
+          legacyKey: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 28,
+              'attempts': 0,
+              'nextAttemptAt': DateTime(2100).millisecondsSinceEpoch,
+              'subjectId': 42,
+              'username': 'alice',
+            },
+          },
+        },
+      };
+      var settingsSaves = 0;
+      final scopedService = BangumiService.forTesting(
+        gatewayFactory: (_) => gateway,
+        scopeResolver: (_) => 'library-a',
+        implicitData: implicitData,
+        writeImplicitData: () async => throw StateError('implicit save failed'),
+        saveSettings: () async => settingsSaves++,
+      );
+
+      await expectLater(scopedService.initialize(), throwsStateError);
+
+      expect(settingsSaves, 0);
+      expect(
+        appdata.settings['bangumiBindings'],
+        containsPair(legacyKey, isNotNull),
+      );
+      expect(
+        appdata.settings['bangumiBindings'],
+        isNot(containsPair(scopedKey, anything)),
+      );
+      expect(
+        implicitData['bangumiPendingProgress'],
+        containsPair(legacyKey, isNotNull),
+      );
+      expect(
+        implicitData['bangumiPendingProgress'],
+        isNot(containsPair(scopedKey, anything)),
+      );
+    },
+  );
 
   test('connect rejects an empty username without changing settings', () async {
     appdata.settings['bangumiAccessToken'] = 'old-token';
@@ -803,6 +1094,180 @@ void main() {
     expect(updated.lastRemoteEpisode, 12);
     expect(updated.lastRemoteVolume, 5);
     expect(updated.rating, 6);
+  });
+
+  test(
+    'completed status fills both progress dimensions from fresh totals',
+    () async {
+      connectSettings();
+      setBinding(binding(lastRemoteEpisode: 1, lastRemoteVolume: 1));
+      gateway.collection = collection(epStatus: 26, volStatus: 2, rate: 6);
+      gateway.subjects[42] = subject();
+      final key = bangumiBindingKey('source', 'comic');
+      final implicitData = <String, dynamic>{
+        'bangumiPendingProgress': {
+          key: {
+            'ep_status': {'value': 28},
+            'vol_status': {'value': 3},
+          },
+        },
+      };
+      final completingService = BangumiService.forTesting(
+        gatewayFactory: (_) => gateway,
+        implicitData: implicitData,
+      );
+
+      await completingService.updateManual(
+        sourceKey: 'source',
+        comicId: 'comic',
+        field: BangumiProgressField.episode,
+        progress: 30,
+        rating: null,
+        collectionStatus: BangumiCollectionStatus.completed,
+        allowDecrease: false,
+      );
+
+      expect(gateway.patchFields.single, {
+        'type': 2,
+        'ep_status': 30,
+        'vol_status': 4,
+      });
+      final updated = completingService.bindingFor('source', 'comic')!;
+      expect(updated.lastRemoteEpisode, 30);
+      expect(updated.lastRemoteVolume, 4);
+      expect(updated.totalEpisodes, 24);
+      expect(updated.totalVolumes, 4);
+      expect(updated.collectionStatus, BangumiCollectionStatus.completed);
+      expect(implicitData['bangumiPendingProgress'], isEmpty);
+    },
+  );
+
+  test('completed status never lowers progress above subject totals', () async {
+    connectSettings();
+    setBinding(binding());
+    gateway.collection = collection(epStatus: 31, volStatus: 6, type: 3);
+    gateway.subjects[42] = subject();
+
+    await service.updateManual(
+      sourceKey: 'source',
+      comicId: 'comic',
+      field: null,
+      progress: null,
+      rating: null,
+      collectionStatus: BangumiCollectionStatus.completed,
+      allowDecrease: false,
+    );
+
+    expect(gateway.patchFields.single, {'type': 2});
+    final updated = service.bindingFor('source', 'comic')!;
+    expect(updated.lastRemoteEpisode, 31);
+    expect(updated.lastRemoteVolume, 6);
+  });
+
+  test(
+    'completed status uploads higher compatible episode and volume pending progress',
+    () async {
+      connectSettings();
+      setBinding(binding().copyWith(progressMode: BangumiProgressMode.auto));
+      gateway.collection = collection(epStatus: 20, volStatus: 3);
+      gateway.subjects[42] = subject();
+      final key = bangumiBindingKey('source', 'comic');
+      final implicitData = <String, dynamic>{
+        'bangumiPendingProgress': {
+          key: {
+            'ep_status': {
+              'field': 'ep_status',
+              'value': 35,
+              'attempts': 1,
+              'nextAttemptAt': 0,
+              'subjectId': 42,
+              'username': 'alice',
+            },
+            'vol_status': {
+              'field': 'vol_status',
+              'value': 8,
+              'attempts': 2,
+              'nextAttemptAt': 0,
+              'subjectId': 42,
+              'username': 'alice',
+            },
+          },
+        },
+      };
+      final completingService = BangumiService.forTesting(
+        gatewayFactory: (_) => gateway,
+        implicitData: implicitData,
+      );
+
+      await completingService.updateManual(
+        sourceKey: 'source',
+        comicId: 'comic',
+        field: null,
+        progress: null,
+        rating: null,
+        collectionStatus: BangumiCollectionStatus.completed,
+        allowDecrease: false,
+      );
+
+      expect(gateway.patchFields.single, {
+        'type': 2,
+        'ep_status': 35,
+        'vol_status': 8,
+      });
+      final updated = completingService.bindingFor('source', 'comic')!;
+      expect(updated.lastRemoteEpisode, 35);
+      expect(updated.lastRemoteVolume, 8);
+      expect(implicitData['bangumiPendingProgress'], isEmpty);
+    },
+  );
+
+  test('failed completed upload preserves both pending dimensions', () async {
+    connectSettings();
+    setBinding(binding().copyWith(progressMode: BangumiProgressMode.auto));
+    gateway.collection = collection(epStatus: 20, volStatus: 3);
+    gateway.subjects[42] = subject();
+    gateway.patchError = const BangumiApiException(503, 'offline');
+    final key = bangumiBindingKey('source', 'comic');
+    final pendingFields = <String, dynamic>{
+      'ep_status': {
+        'field': 'ep_status',
+        'value': 35,
+        'attempts': 1,
+        'nextAttemptAt': 0,
+        'subjectId': 42,
+        'username': 'alice',
+      },
+      'vol_status': {
+        'field': 'vol_status',
+        'value': 8,
+        'attempts': 2,
+        'nextAttemptAt': 0,
+        'subjectId': 42,
+        'username': 'alice',
+      },
+    };
+    final implicitData = <String, dynamic>{
+      'bangumiPendingProgress': {key: pendingFields},
+    };
+    final completingService = BangumiService.forTesting(
+      gatewayFactory: (_) => gateway,
+      implicitData: implicitData,
+    );
+
+    await expectLater(
+      completingService.updateManual(
+        sourceKey: 'source',
+        comicId: 'comic',
+        field: null,
+        progress: null,
+        rating: null,
+        collectionStatus: BangumiCollectionStatus.completed,
+        allowDecrease: false,
+      ),
+      throwsA(isA<BangumiApiException>()),
+    );
+
+    expect((implicitData['bangumiPendingProgress'] as Map)[key], pendingFields);
   });
 
   test('manual status compares against fresh remote state', () async {
@@ -3523,6 +3988,8 @@ class FakeBangumiGateway implements BangumiGateway {
   BangumiUser user = const BangumiUser('alice', 'Alice');
   List<BangumiSubject> searchResults = [];
   final Map<int, BangumiSubject> subjects = {};
+  final Map<int, List<BangumiSubjectPerson>> persons = {};
+  final Map<String, Completer<void>> searchBlockers = {};
   BangumiCollection? collection;
   Object? currentUserError;
   Object? createError;
@@ -3532,6 +3999,8 @@ class FakeBangumiGateway implements BangumiGateway {
   var currentUserCalls = 0;
   final searchKeywords = <String>[];
   final subjectCalls = <int>[];
+  final personCalls = <int>[];
+  final operationCalls = <String>[];
   final collectionCalls = <(String, int)>[];
   final createFields = <(int, Map<String, dynamic>)>[];
   final patchFields = <Map<String, dynamic>>[];
@@ -3546,6 +4015,8 @@ class FakeBangumiGateway implements BangumiGateway {
   @override
   Future<List<BangumiSubject>> searchSubjects(String keyword) async {
     searchKeywords.add(keyword);
+    operationCalls.add('search:$keyword');
+    await searchBlockers[keyword]?.future;
     return searchResults;
   }
 
@@ -3556,11 +4027,18 @@ class FakeBangumiGateway implements BangumiGateway {
   }
 
   @override
+  Future<List<BangumiSubjectPerson>> getSubjectPersons(int subjectId) async {
+    personCalls.add(subjectId);
+    return persons[subjectId] ?? const [];
+  }
+
+  @override
   Future<BangumiCollection?> getCollection(
     String username,
     int subjectId,
   ) async {
     collectionCalls.add((username, subjectId));
+    operationCalls.add('collection:$subjectId');
     final blocker = getCollectionBlocker;
     if (blocker != null) {
       await blocker.future;

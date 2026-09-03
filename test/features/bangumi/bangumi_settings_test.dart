@@ -389,6 +389,10 @@ class _Gateway implements BangumiGateway {
       throw UnsupportedError('unused');
 
   @override
+  Future<List<BangumiSubjectPerson>> getSubjectPersons(int subjectId) =>
+      throw UnsupportedError('unused');
+
+  @override
   Future<BangumiCollection?> getCollection(String username, int subjectId) =>
       throw UnsupportedError('unused');
 

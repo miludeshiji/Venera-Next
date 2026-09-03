@@ -67,6 +67,19 @@ void startBangumiAfterDataSync({
   );
 }
 
+@visibleForTesting
+Future<void> refreshRuntimeAfterSettingsImport({
+  required void Function() resetWebDavLibrary,
+  required Future<void> Function() reloadComicSources,
+  required Future<void> Function() initializeBangumi,
+  required void Function() checkForAutomaticSync,
+}) async {
+  resetWebDavLibrary();
+  await reloadComicSources();
+  await initializeBangumi();
+  checkForAutomaticSync();
+}
+
 ComicMetaData _metadataFromBangumiSubject(BangumiSubject subject) =>
     ComicMetaData(
       title: subject.metadataTitle,
@@ -80,6 +93,32 @@ Future<void> init() async {
   await App.init().wait();
   await SingleInstanceCookieJar.createInstance();
   configureComicTypeSourceKeyResolver();
+  configureBangumiScopeResolver((sourceKey) {
+    if (sourceKey != WebDavLibrarySource.sourceKey) return '';
+    final config = WebDavLibraryConfig.fromSettings();
+    return config.isValid ? config.libraryId : '';
+  });
+  WebDavLibrarySource.configureMetadataWriteGuard((
+    libraryId,
+    comicId,
+    subjectId,
+  ) {
+    final binding = BangumiService().bindingFor(
+      WebDavLibrarySource.sourceKey,
+      comicId,
+    );
+    return binding?.scopeId == libraryId && binding?.subjectId == subjectId;
+  });
+  registerAppDataSettingsChangedHandler(
+    () => refreshRuntimeAfterSettingsImport(
+      resetWebDavLibrary: WebDavLibrarySource.onSettingsImported,
+      reloadComicSources: () async {
+        await ComicSourceManager().reload();
+      },
+      initializeBangumi: BangumiService().initialize,
+      checkForAutomaticSync: WebDavLibrarySource.checkForAutomaticSync,
+    ),
+  );
   WebDavLibrarySource.configureMetadataScraper((directoryTitle) async {
     final service = BangumiService();
     if (!service.isConnected) return null;
@@ -87,18 +126,26 @@ Future<void> init() async {
     return subject == null ? null : _metadataFromBangumiSubject(subject);
   }, isEnabled: () => BangumiService().isConnected);
   configureBangumiBindingMetadataHandler(({
+    required String scopeId,
     required String sourceKey,
     required String comicId,
     required BangumiSubject subject,
   }) async {
     if (sourceKey != WebDavLibrarySource.sourceKey) return;
     final service = BangumiService();
-    if (service.bindingFor(sourceKey, comicId)?.subjectId != subject.id) return;
+    final binding = service.bindingFor(sourceKey, comicId);
+    if (binding?.scopeId != scopeId || binding?.subjectId != subject.id) return;
     final detailed = await service.getSubject(subject.id);
-    if (service.bindingFor(sourceKey, comicId)?.subjectId != subject.id) return;
+    final latestBinding = service.bindingFor(sourceKey, comicId);
+    if (latestBinding?.scopeId != scopeId ||
+        latestBinding?.subjectId != subject.id) {
+      return;
+    }
     await WebDavLibrarySource.writeMetadata(
       comicId,
       _metadataFromBangumiSubject(detailed),
+      expectedLibraryId: scopeId,
+      expectedSubjectId: subject.id,
     );
   });
   configureReaderChapterCompletedHandler(
@@ -169,12 +216,13 @@ Future<void> init() async {
     waitForDownload: dataSync.waitForDownload,
     createInitializer: () => () async {
       await BangumiService().initialize();
+      WebDavLibrarySource.initializeMetadataRetry();
+      WebDavLibrarySource.initializeAutoSync();
       if (BangumiService().isConnected) {
         unawaited(WebDavLibrarySource.synchronize());
       }
     },
   );
-  WebDavLibrarySource.initializeAutoSync();
   CacheManager().setLimitSize(appdata.settings['cacheSize']);
   _checkOldConfigs();
   if (App.isAndroid) {

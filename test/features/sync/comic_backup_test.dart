@@ -53,7 +53,7 @@ void main() {
   });
 
   group('archive WebDAV config sync setting', () {
-    test('does not sync archive WebDAV config when disabled', () {
+    test('does not sync archive WebDAV config when disabled', () async {
       appdata.settings['backupWebdavSyncEnabled'] = false;
       appdata.settings['backupWebdav'] = [
         'https://local.example/dav',
@@ -62,7 +62,7 @@ void main() {
       ];
       appdata.settings['backupWebdavPath'] = '/local/';
 
-      appdata.syncData({
+      await appdata.syncData({
         'settings': {
           'backupWebdavSyncEnabled': true,
           'backupWebdav': ['https://remote.example/dav', 'remote', 'pass'],
@@ -71,10 +71,9 @@ void main() {
         'searchHistory': [],
       });
 
-      // backupWebdavSyncEnabled itself syncs so remote toggle propagates
-      expect(appdata.settings['backupWebdavSyncEnabled'], isTrue);
-      // but backupWebdav/backupWebdavPath are blocked because sync was disabled BEFORE
-      // this syncData call (backupWebdavSyncEnabled was false when processing started)
+      // The opt-in is device-local, so a remote profile cannot enable
+      // credential synchronization on this device.
+      expect(appdata.settings['backupWebdavSyncEnabled'], isFalse);
       expect(appdata.settings['backupWebdav'], [
         'https://local.example/dav',
         'local',
@@ -83,7 +82,7 @@ void main() {
       expect(appdata.settings['backupWebdavPath'], '/local/');
     });
 
-    test('syncs archive WebDAV config when enabled locally', () {
+    test('syncs archive WebDAV config when enabled locally', () async {
       appdata.settings['backupWebdavSyncEnabled'] = true;
       appdata.settings['backupWebdav'] = [
         'https://local.example/dav',
@@ -92,7 +91,7 @@ void main() {
       ];
       appdata.settings['backupWebdavPath'] = '/local/';
 
-      appdata.syncData({
+      await appdata.syncData({
         'settings': {
           'backupWebdavSyncEnabled': true,
           'backupWebdav': ['https://remote.example/dav', 'remote', 'pass'],

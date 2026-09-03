@@ -212,6 +212,7 @@ void main() {
     () {
       const binding = BangumiBinding(
         sourceKey: 'source',
+        scopeId: 'library/a',
         comicId: 'comic/1',
         subjectId: 42,
         subjectTitle: '标题',
@@ -231,6 +232,16 @@ void main() {
         bangumiBindingKey(binding.sourceKey, binding.comicId),
         'source@comic%2F1',
       );
+      expect(
+        bangumiBindingKey(
+          binding.sourceKey,
+          binding.comicId,
+          scopeId: binding.scopeId,
+        ),
+        'source@library%2Fa@comic%2F1',
+      );
+      final unscopedJson = binding.toJson()..remove('scopeId');
+      expect(BangumiBinding.fromJson(unscopedJson).scopeId, isEmpty);
       expect(
         BangumiBinding.fromJson({
           ...binding.toJson(),

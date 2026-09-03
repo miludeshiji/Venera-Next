@@ -123,6 +123,28 @@ void main() {
       expect(adapter.requests.single.method, 'GET');
     });
 
+    test('gets credited persons and skips malformed entries', () async {
+      final adapter = QueueAdapter.json([
+        (
+          200,
+          [
+            {'name': 'Tsukasa Hojo', 'relation': '原作'},
+            {'name': 7, 'relation': '出版社'},
+            {'name': 'Missing relation'},
+          ],
+        ),
+      ]);
+      final api = BangumiApi(token: 'token', dio: dioWith(adapter));
+
+      final persons = await api.getSubjectPersons(123);
+
+      expect(persons, [
+        const BangumiSubjectPerson(name: 'Tsukasa Hojo', relation: '原作'),
+      ]);
+      expect(adapter.requests.single.path, '/v0/subjects/123/persons');
+      expect(adapter.requests.single.method, 'GET');
+    });
+
     test('wraps an invalid subject schema in an API exception', () async {
       final adapter = QueueAdapter.json([
         (200, {'id': 'bad'}),

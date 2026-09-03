@@ -312,6 +312,30 @@ class BangumiUser {
   int get hashCode => Object.hash(username, nickname);
 }
 
+class BangumiSubjectPerson {
+  final String name;
+  final String relation;
+
+  const BangumiSubjectPerson({required this.name, required this.relation});
+
+  factory BangumiSubjectPerson.fromJson(Map<String, dynamic> json) =>
+      BangumiSubjectPerson(
+        name: json['name'] as String? ?? '',
+        relation: json['relation'] as String? ?? '',
+      );
+
+  Map<String, dynamic> toJson() => {'name': name, 'relation': relation};
+
+  @override
+  bool operator ==(Object other) =>
+      other is BangumiSubjectPerson &&
+      other.name == name &&
+      other.relation == relation;
+
+  @override
+  int get hashCode => Object.hash(name, relation);
+}
+
 class BangumiSubject {
   static const _authorInfoboxKeys = {
     '作者',
@@ -508,6 +532,7 @@ class BangumiCollection {
 
 class BangumiBinding {
   final String sourceKey;
+  final String scopeId;
   final String comicId;
   final int subjectId;
   final String subjectTitle;
@@ -522,6 +547,7 @@ class BangumiBinding {
   final int rating;
 
   const BangumiBinding({
+    this.scopeId = '',
     required this.sourceKey,
     required this.comicId,
     required this.subjectId,
@@ -538,6 +564,7 @@ class BangumiBinding {
   });
 
   factory BangumiBinding.fromJson(Map<String, dynamic> json) => BangumiBinding(
+    scopeId: json['scopeId'] as String? ?? '',
     sourceKey: json['sourceKey'] as String? ?? '',
     comicId: json['comicId'] as String? ?? '',
     subjectId: (json['subjectId'] as num?)?.toInt() ?? 0,
@@ -554,6 +581,7 @@ class BangumiBinding {
   );
 
   Map<String, dynamic> toJson() => {
+    'scopeId': scopeId,
     'sourceKey': sourceKey,
     'comicId': comicId,
     'subjectId': subjectId,
@@ -570,6 +598,7 @@ class BangumiBinding {
   };
 
   BangumiBinding copyWith({
+    String? scopeId,
     String? sourceKey,
     String? comicId,
     int? subjectId,
@@ -584,6 +613,7 @@ class BangumiBinding {
     int? lastRemoteVolume,
     int? rating,
   }) => BangumiBinding(
+    scopeId: scopeId ?? this.scopeId,
     sourceKey: sourceKey ?? this.sourceKey,
     comicId: comicId ?? this.comicId,
     subjectId: subjectId ?? this.subjectId,
@@ -602,6 +632,7 @@ class BangumiBinding {
   @override
   bool operator ==(Object other) =>
       other is BangumiBinding &&
+      other.scopeId == scopeId &&
       other.sourceKey == sourceKey &&
       other.comicId == comicId &&
       other.subjectId == subjectId &&
@@ -618,6 +649,7 @@ class BangumiBinding {
 
   @override
   int get hashCode => Object.hashAll([
+    scopeId,
     sourceKey,
     comicId,
     subjectId,
@@ -634,8 +666,16 @@ class BangumiBinding {
   ]);
 }
 
-String bangumiBindingKey(String sourceKey, String comicId) =>
-    '${Uri.encodeComponent(sourceKey)}@${Uri.encodeComponent(comicId)}';
+String bangumiBindingKey(
+  String sourceKey,
+  String comicId, {
+  String scopeId = '',
+}) {
+  final source = Uri.encodeComponent(sourceKey);
+  final comic = Uri.encodeComponent(comicId);
+  if (scopeId.isEmpty) return '$source@$comic';
+  return '$source@${Uri.encodeComponent(scopeId)}@$comic';
+}
 
 BangumiProgressMode _progressModeFromJson(Object? value) {
   if (value is String) {

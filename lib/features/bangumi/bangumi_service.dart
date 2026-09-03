@@ -8,21 +8,29 @@ import 'package:venera_next/foundation/log.dart';
 
 typedef BangumiGatewayFactory = BangumiGateway Function(String token);
 typedef BangumiSettingsSaver = Future<void> Function();
+typedef BangumiImplicitDataSaver = FutureOr<void> Function();
 typedef BangumiRetryTimerFactory =
     Timer Function(Duration duration, void Function() callback);
+typedef BangumiScopeResolver = String Function(String sourceKey);
 typedef BangumiBindingMetadataHandler =
     Future<void> Function({
+      required String scopeId,
       required String sourceKey,
       required String comicId,
       required BangumiSubject subject,
     });
 
 BangumiBindingMetadataHandler? _bindingMetadataHandler;
+BangumiScopeResolver? _configuredScopeResolver;
 
 void configureBangumiBindingMetadataHandler(
   BangumiBindingMetadataHandler? handler,
 ) {
   _bindingMetadataHandler = handler;
+}
+
+void configureBangumiScopeResolver(BangumiScopeResolver? resolver) {
+  _configuredScopeResolver = resolver;
 }
 
 class BangumiProgressDecreaseRequired implements Exception {
@@ -51,15 +59,26 @@ class _BangumiStaleOperationException implements Exception {
 
 typedef _BangumiCredentials = ({String token, String username});
 
+enum _BangumiRequestPriority { metadata, chapter, interactive }
+
+class _BangumiScheduledOperation {
+  const _BangumiScheduledOperation({required this.priority, required this.run});
+
+  final _BangumiRequestPriority priority;
+  final Future<void> Function() run;
+}
+
 class _BangumiOperationSnapshot {
   const _BangumiOperationSnapshot({
     required this.credentials,
     required this.sourceKey,
+    required this.scopeId,
     required this.comicId,
     required this.binding,
   });
 
   final _BangumiCredentials credentials;
+  final String scopeId;
   final String sourceKey;
   final String comicId;
   final BangumiBinding? binding;
@@ -70,16 +89,18 @@ class BangumiService {
     required BangumiGatewayFactory gatewayFactory,
     required BangumiSettingsSaver saveSettings,
     required Map<String, dynamic> implicitData,
-    required void Function() writeImplicitData,
+    required BangumiImplicitDataSaver writeImplicitData,
     required DateTime Function() now,
     required BangumiRetryTimerFactory timerFactory,
     required bool observeSettings,
+    BangumiScopeResolver? scopeResolver,
   }) : _gatewayFactory = gatewayFactory,
        _saveSettings = saveSettings,
        _implicitData = implicitData,
        _writeImplicitData = writeImplicitData,
        _now = now,
        _timerFactory = timerFactory,
+       _scopeResolver = scopeResolver,
        _observeSettings = observeSettings {
     if (_observeSettings) {
       _observedCredentials = _credentials;
@@ -97,6 +118,7 @@ class BangumiService {
     writeImplicitData: appdata.writeImplicitData,
     now: DateTime.now,
     timerFactory: (duration, callback) => Timer(duration, callback),
+    scopeResolver: null,
     observeSettings: true,
   );
 
@@ -105,9 +127,10 @@ class BangumiService {
     required BangumiGatewayFactory gatewayFactory,
     BangumiSettingsSaver? saveSettings,
     Map<String, dynamic>? implicitData,
-    void Function()? writeImplicitData,
+    BangumiImplicitDataSaver? writeImplicitData,
     DateTime Function()? now,
     BangumiRetryTimerFactory? timerFactory,
+    BangumiScopeResolver? scopeResolver,
     bool observeSettings = false,
   }) => BangumiService._(
     gatewayFactory: gatewayFactory,
@@ -117,17 +140,20 @@ class BangumiService {
     now: now ?? DateTime.now,
     timerFactory:
         timerFactory ?? ((duration, callback) => Timer(duration, callback)),
+    scopeResolver: scopeResolver,
     observeSettings: observeSettings,
   );
 
   final BangumiGatewayFactory _gatewayFactory;
   final BangumiSettingsSaver _saveSettings;
   final Map<String, dynamic> _implicitData;
-  final void Function() _writeImplicitData;
+  final BangumiImplicitDataSaver _writeImplicitData;
   final DateTime Function() _now;
   final BangumiRetryTimerFactory _timerFactory;
+  final BangumiScopeResolver? _scopeResolver;
   final bool _observeSettings;
-  Future<void> _connectionTail = Future.value();
+  final _connectionQueue = <_BangumiScheduledOperation>[];
+  bool _connectionRunning = false;
   final _bindingTails = <String, Future<void>>{};
   Future<void> _bindingCommitTail = Future.value();
   Timer? _retryTimer;
@@ -208,16 +234,15 @@ class BangumiService {
 
   Future<BangumiSubject> getSubject(int subjectId) =>
       _runConnection(() => _gateway().getSubject(subjectId));
-  Future<BangumiSubject?> matchSubjectForMetadata(String directoryTitle) =>
-      _runConnection(() => _matchSubjectForMetadata(directoryTitle));
-
-  Future<BangumiSubject?> _matchSubjectForMetadata(
-    String directoryTitle,
-  ) async {
+  Future<List<BangumiSubjectPerson>> getSubjectPersons(int subjectId) =>
+      _runConnection(() => _gateway().getSubjectPersons(subjectId));
+  Future<BangumiSubject?> matchSubjectForMetadata(String directoryTitle) async {
     final hints = _metadataTitleHints(directoryTitle);
     if (hints.title.isEmpty) return null;
-    final gateway = _gateway();
-    final results = await gateway.searchSubjects(hints.title);
+    final results = await _runConnection(
+      () => _gateway().searchSubjects(hints.title),
+      priority: _BangumiRequestPriority.metadata,
+    );
     final normalizedTitle = _normalizeMetadataMatchValue(hints.title);
     final exact = <BangumiSubject>[];
     final ids = <int>{};
@@ -229,38 +254,102 @@ class BangumiService {
         exact.add(subject);
       }
     }
-    if (exact.length == 1) {
-      return gateway.getSubject(exact.single.id);
+    if (exact.isEmpty || (exact.length > 1 && hints.author == null)) {
+      return null;
     }
-    final authorHint = hints.author;
-    if (exact.isEmpty || authorHint == null) return null;
-    final normalizedAuthor = _normalizeMetadataMatchValue(authorHint);
+
     final matched = <BangumiSubject>[];
     for (final candidate in exact) {
-      final detailed = await gateway.getSubject(candidate.id);
-      if (detailed.authors.any(
-        (author) => _normalizeMetadataMatchValue(author) == normalizedAuthor,
-      )) {
+      final detailed = await _runConnection(
+        () => _gateway().getSubject(candidate.id),
+        priority: _BangumiRequestPriority.metadata,
+      );
+      final authorHint = hints.author;
+      if (authorHint == null ||
+          await _metadataAuthorMatches(detailed, authorHint)) {
         matched.add(detailed);
       }
     }
     return matched.length == 1 ? matched.single : null;
   }
 
-  static final _metadataLabeledSuffix = RegExp(
+  Future<bool> _metadataAuthorMatches(
+    BangumiSubject subject,
+    String authorHint,
+  ) async {
+    final normalizedAuthor = _normalizeMetadataMatchValue(authorHint);
+    if (subject.authors.any(
+      (author) => _normalizeMetadataMatchValue(author) == normalizedAuthor,
+    )) {
+      return true;
+    }
+    final persons = await _runConnection(
+      () => _gateway().getSubjectPersons(subject.id),
+      priority: _BangumiRequestPriority.metadata,
+    );
+    return persons.any(
+      (person) =>
+          _isAuthorRelation(person.relation) &&
+          _normalizeMetadataMatchValue(person.name) == normalizedAuthor,
+    );
+  }
+
+  static bool _isAuthorRelation(String relation) {
+    const values = {
+      '作者',
+      '著者',
+      '原作',
+      '作画',
+      '漫畫',
+      '漫画',
+      '脚本',
+      '劇本',
+      '剧本',
+      '繪者',
+      '绘者',
+      'author',
+      'original author',
+      'writer',
+      'artist',
+      'illustrator',
+      'story',
+      'script',
+      'scenario',
+      'screenplay',
+    };
+    return relation
+        .toLowerCase()
+        .split(RegExp(r'[\s/／,，、&＆+＋]+'))
+        .where((value) => value.isNotEmpty)
+        .any(values.contains);
+  }
+
+  static final _metadataLabeledNoiseSuffix = RegExp(
     r'\s*(?:语言|language|版本|version|汉化者|汉化组)\s*[:：]?\s*'
     r'(?:\[([^\[\]]+)\]|【([^【】]+)】)\s*$',
+    caseSensitive: false,
+  );
+  static final _metadataLabeledAuthorSuffix = RegExp(
+    r'\s*(?:作者|著者|原作|作画|漫画|脚本|剧本|繪者|绘者|author|writer|artist)'
+    r'\s*(?:(?:[:：]\s*)?(?:\[([^\[\]]+)\]|【([^【】]+)】)|'
+    r'[:：]\s*([^【】\[\]]+))\s*$',
     caseSensitive: false,
   );
   static final _metadataBracketSuffix = RegExp(
     r'^(.*?)(?:\[([^\[\]]+)\]|【([^【】]+)】)\s*$',
   );
-  static const _metadataNoiseMarkers = {'chinese', '中文', '无修正', 'dl版'};
+  static final _metadataNoiseMarker = RegExp(
+    r'^(?:chinese|中文|无修正|dl版|完结|已完结|完結|已完結|'
+    r'全\d+(?:卷|册|冊)|kindle(?:版)?|高清(?:版)?|日文(?:版)?|日本語|'
+    r'台版|台湾版|台灣版|典藏版|珍藏版|重制版|重製版|'
+    r'(?:19|20)\d{2}(?:年)?(?:重制|重製|重制版|重製版|新版|修订版|修訂版)?)$',
+    caseSensitive: false,
+  );
 
   static ({String title, String? author}) _metadataTitleHints(String value) {
     var remaining = value.trim();
     while (true) {
-      final match = _metadataLabeledSuffix.firstMatch(remaining);
+      final match = _metadataLabeledNoiseSuffix.firstMatch(remaining);
       if (match == null) break;
       remaining = remaining.substring(0, match.start).trimRight();
     }
@@ -268,27 +357,30 @@ class BangumiService {
       final match = _metadataBracketSuffix.firstMatch(remaining);
       if (match == null) break;
       final marker = (match.group(2) ?? match.group(3) ?? '').trim();
-      if (!_metadataNoiseMarkers.contains(marker.toLowerCase())) break;
+      if (!_metadataNoiseMarker.hasMatch(
+        marker.replaceAll(RegExp(r'\s+'), ''),
+      )) {
+        break;
+      }
       remaining = match.group(1)!.trimRight();
     }
 
     String? author;
-    final authorMatch = _metadataBracketSuffix.firstMatch(remaining);
-    if (authorMatch != null) {
-      final prefix = authorMatch.group(1)!.trimRight();
-      final candidate = (authorMatch.group(2) ?? authorMatch.group(3) ?? '')
-          .trim();
-      if (candidate.isNotEmpty &&
-          _metadataBracketSuffix.firstMatch(prefix) == null) {
-        author = candidate;
-        remaining = prefix;
-      }
+    final labeledAuthor = _metadataLabeledAuthorSuffix.firstMatch(remaining);
+    if (labeledAuthor != null) {
+      author =
+          (labeledAuthor.group(1) ??
+                  labeledAuthor.group(2) ??
+                  labeledAuthor.group(3) ??
+                  '')
+              .trim();
+      remaining = remaining.substring(0, labeledAuthor.start).trimRight();
     }
     final title = remaining
         .replaceAll(RegExp(r'\s+'), ' ')
         .replaceFirst(RegExp(r'[\s\-—_·|｜,，;；]+$'), '')
         .trim();
-    return (title: title, author: author);
+    return (title: title, author: author?.isEmpty == true ? null : author);
   }
 
   static String _normalizeMetadataMatchValue(String value) => value
@@ -304,7 +396,8 @@ class BangumiService {
     if (rawBindings is! Map) {
       return null;
     }
-    final rawBinding = rawBindings[bangumiBindingKey(sourceKey, comicId)];
+    final scopeId = _scopeIdFor(sourceKey);
+    final rawBinding = rawBindings[_bindingKey(sourceKey, comicId)];
     if (rawBinding is! Map) {
       return null;
     }
@@ -312,7 +405,12 @@ class BangumiService {
       final binding = BangumiBinding.fromJson(
         Map<String, dynamic>.from(rawBinding),
       );
-      if (!_isValidBinding(binding, sourceKey: sourceKey, comicId: comicId)) {
+      if (!_isValidBinding(
+        binding,
+        sourceKey: sourceKey,
+        scopeId: scopeId,
+        comicId: comicId,
+      )) {
         return null;
       }
       return binding;
@@ -322,7 +420,7 @@ class BangumiService {
   }
 
   bool hasPendingProgress(String sourceKey, String comicId) =>
-      _pendingEntries(bangumiBindingKey(sourceKey, comicId)).isNotEmpty;
+      _pendingEntries(_bindingKey(sourceKey, comicId)).isNotEmpty;
 
   Future<BangumiBinding> bind({
     required String sourceKey,
@@ -341,6 +439,7 @@ class BangumiService {
       ),
     );
     _scheduleBindingMetadataWrite(
+      scopeId: binding.scopeId,
       sourceKey: sourceKey,
       comicId: comicId,
       subject: subject,
@@ -349,6 +448,7 @@ class BangumiService {
   });
 
   void _scheduleBindingMetadataWrite({
+    required String scopeId,
     required String sourceKey,
     required String comicId,
     required BangumiSubject subject,
@@ -357,7 +457,12 @@ class BangumiService {
     if (handler == null) return;
     unawaited(
       Future.sync(
-        () => handler(sourceKey: sourceKey, comicId: comicId, subject: subject),
+        () => handler(
+          scopeId: scopeId,
+          sourceKey: sourceKey,
+          comicId: comicId,
+          subject: subject,
+        ),
       ).catchError((Object error, StackTrace stackTrace) {
         Log.error('Bangumi metadata write', error, stackTrace);
       }),
@@ -431,6 +536,7 @@ class BangumiService {
     }
 
     final binding = BangumiBinding(
+      scopeId: _scopeIdFor(sourceKey),
       sourceKey: sourceKey,
       comicId: comicId,
       subjectId: subject.id,
@@ -452,10 +558,10 @@ class BangumiService {
         expected: snapshot,
       );
     } on BangumiLocalPersistenceException {
-      _removePending(bangumiBindingKey(sourceKey, comicId));
+      _removePending(_bindingKey(sourceKey, comicId));
       rethrow;
     }
-    _removePending(bangumiBindingKey(sourceKey, comicId));
+    _removePending(_bindingKey(sourceKey, comicId));
     return binding;
   }
 
@@ -517,10 +623,7 @@ class BangumiService {
       BangumiProgressMode.auto => null,
     };
     if (expectedField != null) {
-      _removePending(
-        bangumiBindingKey(sourceKey, comicId),
-        keepField: expectedField,
-      );
+      _removePending(_bindingKey(sourceKey, comicId), keepField: expectedField);
     }
   }
 
@@ -588,84 +691,132 @@ class BangumiService {
     }
     _validateCollection(collection);
     final remoteStatus = collection.status!;
-    final freshBinding = binding.copyWith(
+    final completing = collectionStatus == BangumiCollectionStatus.completed;
+    var nextEpisode = collection.epStatus;
+    var nextVolume = collection.volStatus;
+    var updatedBinding = binding.copyWith(
       lastRemoteEpisode: collection.epStatus,
       lastRemoteVolume: collection.volStatus,
       rating: collection.rate,
       collectionStatus: remoteStatus,
     );
-    final remoteProgress = field == null
-        ? null
-        : _progressValue(collection, field);
-    if (progress != null &&
-        remoteProgress != null &&
-        progress < remoteProgress &&
-        !allowDecrease) {
-      throw BangumiProgressDecreaseRequired(
-        remote: remoteProgress,
-        proposed: progress,
+    final key = _bindingKey(sourceKey, comicId);
+
+    if (completing) {
+      final subject = await gateway.getSubject(binding.subjectId);
+      _ensureOperationCurrent(snapshot);
+      if (subject.id != binding.subjectId ||
+          subject.totalEpisodes < 0 ||
+          subject.totalVolumes < 0) {
+        throw StateError('Bangumi subject has invalid totals');
+      }
+      final pending = _compatiblePending(key, binding);
+      int maximum(int remote, int total, BangumiProgressField progressField) {
+        var result = remote > total ? remote : total;
+        if (field == progressField && progress != null && progress > result) {
+          result = progress;
+        }
+        for (final item in pending) {
+          if (item.field == progressField && item.value > result) {
+            result = item.value;
+          }
+        }
+        return result;
+      }
+
+      nextEpisode = maximum(
+        collection.epStatus,
+        subject.totalEpisodes,
+        BangumiProgressField.episode,
       );
+      nextVolume = maximum(
+        collection.volStatus,
+        subject.totalVolumes,
+        BangumiProgressField.volume,
+      );
+      updatedBinding = updatedBinding.copyWith(
+        subjectTitle: subject.title,
+        subjectOriginalTitle: subject.originalTitle,
+        coverUrl: subject.coverUrl,
+        totalEpisodes: subject.totalEpisodes,
+        totalVolumes: subject.totalVolumes,
+      );
+    } else {
+      final remoteProgress = field == null
+          ? null
+          : _progressValue(collection, field);
+      if (progress != null &&
+          remoteProgress != null &&
+          progress < remoteProgress &&
+          !allowDecrease) {
+        throw BangumiProgressDecreaseRequired(
+          remote: remoteProgress,
+          proposed: progress,
+        );
+      }
+      if (field == BangumiProgressField.episode) {
+        nextEpisode = progress!;
+      } else if (field == BangumiProgressField.volume) {
+        nextVolume = progress!;
+      }
     }
 
     final fields = <String, dynamic>{};
-    if (field != null && progress != remoteProgress) {
-      fields[field == BangumiProgressField.episode
-              ? 'ep_status'
-              : 'vol_status'] =
-          progress;
+    if (completing) {
+      fields['type'] = BangumiCollectionStatus.completed.apiValue;
+      if (nextEpisode != collection.epStatus) {
+        fields['ep_status'] = nextEpisode;
+      }
+      if (nextVolume != collection.volStatus) {
+        fields['vol_status'] = nextVolume;
+      }
+    } else {
+      if (field == BangumiProgressField.episode &&
+          nextEpisode != collection.epStatus) {
+        fields['ep_status'] = nextEpisode;
+      }
+      if (field == BangumiProgressField.volume &&
+          nextVolume != collection.volStatus) {
+        fields['vol_status'] = nextVolume;
+      }
+      if (collectionStatus != null && collectionStatus != remoteStatus) {
+        fields['type'] = collectionStatus.apiValue;
+      }
     }
     if (rating != null && rating != collection.rate) {
       fields['rate'] = rating;
     }
-    if (collectionStatus != null && collectionStatus != remoteStatus) {
-      fields['type'] = collectionStatus.apiValue;
-    }
-    if (fields.isEmpty) {
-      await _saveBinding(freshBinding, expected: snapshot);
-      if (field != null) {
-        _removePending(
-          bangumiBindingKey(sourceKey, comicId),
-          field: field == BangumiProgressField.episode
-              ? 'ep_status'
-              : 'vol_status',
-        );
-      }
-      return;
-    }
 
-    await gateway.patchCollection(binding.subjectId, fields);
-    _ensureOperationCurrent(snapshot);
-    try {
+    final nextBinding = updatedBinding.copyWith(
+      lastRemoteEpisode: nextEpisode,
+      lastRemoteVolume: nextVolume,
+      rating: rating ?? collection.rate,
+      collectionStatus: collectionStatus ?? remoteStatus,
+    );
+    if (fields.isEmpty) {
+      await _saveBinding(nextBinding, expected: snapshot);
+    } else {
+      await gateway.patchCollection(binding.subjectId, fields);
+      _ensureOperationCurrent(snapshot);
       await _saveBinding(
-        freshBinding.copyWith(
-          lastRemoteEpisode: field == BangumiProgressField.episode
-              ? progress
-              : freshBinding.lastRemoteEpisode,
-          lastRemoteVolume: field == BangumiProgressField.volume
-              ? progress
-              : freshBinding.lastRemoteVolume,
-          rating: rating ?? freshBinding.rating,
-          collectionStatus: collectionStatus ?? freshBinding.collectionStatus,
-        ),
+        nextBinding,
         remoteSucceeded: true,
         expected: snapshot,
       );
-    } on _BangumiStaleOperationException {
-      rethrow;
-    } catch (_) {
-      if (field != null) {
-        _removePending(
-          bangumiBindingKey(sourceKey, comicId),
-          field: field == BangumiProgressField.episode
-              ? 'ep_status'
-              : 'vol_status',
-        );
-      }
-      rethrow;
     }
-    if (field != null) {
+
+    if (completing) {
+      for (final pending in _compatiblePending(key, binding)) {
+        final confirmed = pending.field == BangumiProgressField.episode
+            ? nextEpisode
+            : nextVolume;
+        if (confirmed >= pending.value) {
+          _removePending(key, field: _apiField(pending.field));
+        }
+      }
+    } else if (field != null) {
       _removePending(
-        bangumiBindingKey(sourceKey, comicId),
+        key,
         field: field == BangumiProgressField.episode
             ? 'ep_status'
             : 'vol_status',
@@ -677,7 +828,7 @@ class BangumiService {
       _runBinding(sourceKey, comicId, () => _unbind(sourceKey, comicId));
 
   Future<void> _unbind(String sourceKey, String comicId) async {
-    final key = bangumiBindingKey(sourceKey, comicId);
+    final key = _bindingKey(sourceKey, comicId);
     final snapshot = _operationSnapshotFor(sourceKey, comicId);
     await _runBindingCommit(() async {
       _ensureOperationCurrent(snapshot);
@@ -702,6 +853,7 @@ class BangumiService {
 
   Future<void> initialize() async {
     _disposed = false;
+    await _migrateLegacyScopedBindings();
     _refreshAuthenticationPause();
     if (!_autoSyncEnabled || _authenticationPaused) {
       _cancelRetry();
@@ -728,6 +880,7 @@ class BangumiService {
         comicId,
         () => _runConnection(
           () => _onChapterCompleted(sourceKey, comicId, chapterTitle),
+          priority: _BangumiRequestPriority.chapter,
         ),
       );
     } catch (_) {
@@ -744,7 +897,7 @@ class BangumiService {
       return;
     }
     final binding = _requiredBinding(sourceKey, comicId);
-    final key = bangumiBindingKey(sourceKey, comicId);
+    final key = _bindingKey(sourceKey, comicId);
     final progress = BangumiTitleProgressParser.parse(
       chapterTitle,
       binding.progressMode,
@@ -837,6 +990,7 @@ class BangumiService {
               reportErrors: reportErrors,
               retryExhausted: retryExhausted,
             ),
+            priority: _BangumiRequestPriority.chapter,
           ),
         );
       } catch (_) {
@@ -1012,18 +1166,44 @@ class BangumiService {
     return _gatewayFactory(_settingString('bangumiAccessToken'));
   }
 
-  Future<T> _runConnection<T>(Future<T> Function() action) async {
-    final previous = _connectionTail;
-    final done = Completer<void>();
-    _connectionTail = done.future;
-    try {
-      try {
-        await previous;
-      } catch (_) {}
-      return await action();
-    } finally {
-      done.complete();
+  Future<T> _runConnection<T>(
+    Future<T> Function() action, {
+    _BangumiRequestPriority priority = _BangumiRequestPriority.interactive,
+  }) {
+    final result = Completer<T>();
+    _connectionQueue.add(
+      _BangumiScheduledOperation(
+        priority: priority,
+        run: () async {
+          try {
+            result.complete(await action());
+          } catch (error, stackTrace) {
+            result.completeError(error, stackTrace);
+          }
+        },
+      ),
+    );
+    _drainConnectionQueue();
+    return result.future;
+  }
+
+  void _drainConnectionQueue() {
+    if (_connectionRunning || _connectionQueue.isEmpty) return;
+    var selected = 0;
+    for (var index = 1; index < _connectionQueue.length; index++) {
+      if (_connectionQueue[index].priority.index >
+          _connectionQueue[selected].priority.index) {
+        selected = index;
+      }
     }
+    final operation = _connectionQueue.removeAt(selected);
+    _connectionRunning = true;
+    unawaited(
+      operation.run().whenComplete(() {
+        _connectionRunning = false;
+        _drainConnectionQueue();
+      }),
+    );
   }
 
   Future<T> _runBinding<T>(
@@ -1031,7 +1211,7 @@ class BangumiService {
     String comicId,
     Future<T> Function() action,
   ) {
-    final key = bangumiBindingKey(sourceKey, comicId);
+    final key = _bindingKey(sourceKey, comicId);
     final previous = _bindingTails[key];
     final done = Completer<void>();
     _bindingTails[key] = done.future;
@@ -1122,6 +1302,7 @@ class BangumiService {
       _BangumiOperationSnapshot(
         credentials: _credentials,
         sourceKey: binding.sourceKey,
+        scopeId: binding.scopeId,
         comicId: binding.comicId,
         binding: binding,
       );
@@ -1131,6 +1312,7 @@ class BangumiService {
     String comicId,
   ) => _BangumiOperationSnapshot(
     credentials: _credentials,
+    scopeId: _scopeIdFor(sourceKey),
     sourceKey: sourceKey,
     comicId: comicId,
     binding: bindingFor(sourceKey, comicId),
@@ -1138,6 +1320,7 @@ class BangumiService {
 
   void _ensureOperationCurrent(_BangumiOperationSnapshot snapshot) {
     if (_credentials != snapshot.credentials ||
+        _scopeIdFor(snapshot.sourceKey) != snapshot.scopeId ||
         bindingFor(snapshot.sourceKey, snapshot.comicId) != snapshot.binding) {
       throw const _BangumiStaleOperationException();
     }
@@ -1185,6 +1368,95 @@ class BangumiService {
     return value is String ? value : '';
   }
 
+  String _scopeIdFor(String sourceKey) =>
+      (_scopeResolver ?? _configuredScopeResolver)?.call(sourceKey).trim() ??
+      '';
+
+  String _bindingKey(String sourceKey, String comicId) =>
+      bangumiBindingKey(sourceKey, comicId, scopeId: _scopeIdFor(sourceKey));
+
+  Future<void> _migrateLegacyScopedBindings() {
+    return _runBindingCommit(() async {
+      final rawBindings = appdata.settings['bangumiBindings'];
+      if (rawBindings is! Map) return;
+      final bindings = _copiedBindings();
+      final migrations = <String, String>{};
+      for (final entry in rawBindings.entries) {
+        if (entry.key is! String || entry.value is! Map) continue;
+        try {
+          final binding = BangumiBinding.fromJson(
+            Map<String, dynamic>.from(entry.value as Map),
+          );
+          if (binding.scopeId.isNotEmpty || !_isValidBinding(binding)) {
+            continue;
+          }
+          final legacyKey = bangumiBindingKey(
+            binding.sourceKey,
+            binding.comicId,
+          );
+          final scopeId = _scopeIdFor(binding.sourceKey);
+          if (entry.key != legacyKey || scopeId.isEmpty) continue;
+          final scopedBinding = binding.copyWith(scopeId: scopeId);
+          final scopedKey = bangumiBindingKey(
+            binding.sourceKey,
+            binding.comicId,
+            scopeId: scopeId,
+          );
+          bindings.putIfAbsent(scopedKey, scopedBinding.toJson);
+          bindings.remove(legacyKey);
+          migrations[legacyKey] = scopedKey;
+        } catch (_) {
+          continue;
+        }
+      }
+      if (migrations.isEmpty) return;
+
+      final pending = _pendingMap();
+      if (pending != null) {
+        final migratedPending = <String, dynamic>{
+          for (final entry in pending.entries)
+            if (entry.key is String) entry.key as String: entry.value,
+        };
+        var changed = false;
+        for (final migration in migrations.entries) {
+          if (!migratedPending.containsKey(migration.key)) continue;
+          migratedPending.putIfAbsent(
+            migration.value,
+            () => migratedPending[migration.key],
+          );
+          migratedPending.remove(migration.key);
+          changed = true;
+        }
+        if (changed) {
+          final previousPending = _implicitData['bangumiPendingProgress'];
+          _implicitData['bangumiPendingProgress'] = migratedPending;
+          try {
+            await Future.sync(_writeImplicitData);
+          } catch (_) {
+            if (identical(
+              _implicitData['bangumiPendingProgress'],
+              migratedPending,
+            )) {
+              _implicitData['bangumiPendingProgress'] = previousPending;
+            }
+            rethrow;
+          }
+        }
+      }
+
+      final previousBindings = appdata.settings['bangumiBindings'];
+      appdata.settings['bangumiBindings'] = bindings;
+      try {
+        await _saveSettings();
+      } catch (_) {
+        if (identical(appdata.settings['bangumiBindings'], bindings)) {
+          appdata.settings['bangumiBindings'] = previousBindings;
+        }
+        rethrow;
+      }
+    });
+  }
+
   BangumiBinding _requiredBinding(String sourceKey, String comicId) {
     final binding = bindingFor(sourceKey, comicId);
     if (binding == null) {
@@ -1196,9 +1468,11 @@ class BangumiService {
   bool _isValidBinding(
     BangumiBinding binding, {
     String? sourceKey,
+    String? scopeId,
     String? comicId,
   }) =>
       (sourceKey == null || binding.sourceKey == sourceKey) &&
+      (scopeId == null || binding.scopeId == scopeId) &&
       (comicId == null || binding.comicId == comicId) &&
       binding.subjectId > 0 &&
       binding.totalEpisodes >= 0 &&
@@ -1277,7 +1551,11 @@ class BangumiService {
       }
       final previousBindings = appdata.settings['bangumiBindings'];
       final bindings = _copiedBindings();
-      bindings[bangumiBindingKey(binding.sourceKey, binding.comicId)] = binding
+      bindings[bangumiBindingKey(
+        binding.sourceKey,
+        binding.comicId,
+        scopeId: binding.scopeId,
+      )] = binding
           .toJson();
       appdata.settings['bangumiBindings'] = bindings;
       try {
@@ -1484,7 +1762,12 @@ class BangumiService {
         Map<String, dynamic>.from(rawBindings[key] as Map),
       );
       return _isValidBinding(binding) &&
-              bangumiBindingKey(binding.sourceKey, binding.comicId) == key
+              bangumiBindingKey(
+                    binding.sourceKey,
+                    binding.comicId,
+                    scopeId: binding.scopeId,
+                  ) ==
+                  key
           ? binding
           : null;
     } catch (_) {

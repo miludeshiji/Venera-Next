@@ -9,10 +9,20 @@ void main() {
       password: ' pass ',
     );
 
-    expect(endpoint.url, 'https://example.com/dav/');
+    expect(endpoint.url, 'https://example.com/dav');
     expect(endpoint.user, 'user');
-    expect(endpoint.password, 'pass');
-    expect(endpoint.authHeaders, {'authorization': 'Basic dXNlcjpwYXNz'});
+    expect(endpoint.password, ' pass ');
+    expect(endpoint.authHeaders, {'authorization': 'Basic dXNlcjogcGFzcyA='});
+  });
+
+  test('WebDavEndpoint removes default ports, query, and fragment', () {
+    final endpoint = WebDavEndpoint(
+      url: 'HTTPS://Example.COM:443/dav/?token=secret#section',
+      user: '',
+      password: '',
+    );
+
+    expect(endpoint.url, 'https://example.com/dav');
   });
 
   test('WebDavEndpoint encodes each remote path segment', () {

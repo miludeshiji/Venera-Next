@@ -169,6 +169,20 @@ void main() {
     expect(comicDetails.comments!.single.id, 'comment-1');
   });
 
+  test('comic details preserve external service identifiers', () {
+    final details = ComicDetails.fromJson({
+      'title': 'Detail',
+      'cover': 'cover.jpg',
+      'tags': <String, List<String>>{},
+      'sourceKey': 'webdav_library',
+      'comicId': 'book',
+      'externalIds': {'bangumi': '42', 7: 'ignored-key', 'ignored-value': 9},
+    });
+
+    expect(details.externalIds, {'bangumi': '42'});
+    expect(details.toJson()['externalIds'], {'bangumi': '42'});
+  });
+
   test('normalize comic details rejects invalid nested data', () {
     expect(
       debugNormalizeComicSourceComicDetails('bad', 'source', 'detail-id'),

@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
 
+import 'package:flutter/foundation.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:venera_next/foundation/app.dart';
 import 'package:venera_next/foundation/appdata.dart';
@@ -13,6 +15,29 @@ import 'package:venera_next/network/cookie_jar.dart';
 import 'package:venera_next/foundation/extensions.dart';
 import 'package:venera_next/foundation/file_system.dart';
 import 'package:zip_flutter/zip_flutter.dart';
+
+FutureOr<void> Function()? _appDataSettingsChangedHandler;
+
+FutureOr<void> Function(File archive, Directory destination)?
+_appDataArchiveExtractorForTesting;
+
+@visibleForTesting
+void configureAppDataArchiveExtractorForTesting(
+  FutureOr<void> Function(File archive, Directory destination)? extractor,
+) {
+  _appDataArchiveExtractorForTesting = extractor;
+}
+
+void registerAppDataSettingsChangedHandler(FutureOr<void> Function()? handler) {
+  _appDataSettingsChangedHandler = handler;
+}
+
+Future<void> _notifyAppDataSettingsChanged() async {
+  final handler = _appDataSettingsChangedHandler;
+  if (handler != null) {
+    await Future.sync(handler);
+  }
+}
 
 Future<File> exportAppData([bool sync = true]) async {
   var time = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -62,15 +87,21 @@ Future<void> importAppData(File file, [bool checkVersion = false]) async {
   var reloadCookies = false;
   var reloadComicSources = false;
   var success = false;
+  var importedSettingsChanged = false;
   var rolledBack = false;
   if (cacheDir.existsSync()) {
     cacheDir.deleteSync(recursive: true);
   }
   cacheDir.createSync();
   try {
-    await Isolate.run(() {
-      ZipFile.openAndExtract(file.path, cacheDirPath);
-    });
+    final archiveExtractor = _appDataArchiveExtractorForTesting;
+    if (archiveExtractor == null) {
+      await Isolate.run(() {
+        ZipFile.openAndExtract(file.path, cacheDirPath);
+      });
+    } else {
+      await Future.sync(() => archiveExtractor(file, cacheDir));
+    }
     var historyFile = cacheDir.joinFile("history.db");
     var localFavoriteFile = cacheDir.joinFile("local_favorite.db");
     var appdataFile = cacheDir.joinFile("appdata.json");
@@ -151,7 +182,8 @@ Future<void> importAppData(File file, [bool checkVersion = false]) async {
     }
 
     if (importedAppdata != null) {
-      appdata.syncData(importedAppdata);
+      importedSettingsChanged = importedAppdata["settings"] is Map;
+      await appdata.syncData(importedAppdata);
     }
     success = true;
   } catch (error, stackTrace) {
@@ -173,10 +205,13 @@ Future<void> importAppData(File file, [bool checkVersion = false]) async {
     }
     Error.throwWithStackTrace(error, stackTrace);
   } finally {
-    cacheDir.deleteIgnoreError(recursive: true);
+    await cacheDir.deleteIgnoreError(recursive: true);
     if (success || rolledBack) {
-      backupDir.deleteIgnoreError(recursive: true);
+      await backupDir.deleteIgnoreError(recursive: true);
     }
+  }
+  if (success && importedSettingsChanged) {
+    await _notifyAppDataSettingsChanged();
   }
 }
 
@@ -549,6 +584,6 @@ Future<void> importPicaData(File file) async {
       }
     }
   } finally {
-    cacheDir.deleteIgnoreError(recursive: true);
+    await cacheDir.deleteIgnoreError(recursive: true);
   }
 }

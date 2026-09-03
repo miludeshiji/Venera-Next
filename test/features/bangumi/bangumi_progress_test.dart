@@ -112,6 +112,19 @@ void main() {
     },
   );
 
+  testWidgets('metadata subject id is preselected without collecting it', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_panel(gateway, initialSubjectId: 42));
+    await tester.pumpAndSettle();
+
+    expect(gateway.subjectIds, [42]);
+    expect(gateway.searches, isEmpty);
+    expect(gateway.patches, isEmpty);
+    expect(find.byKey(const Key('bangumi-bind')), findsOneWidget);
+    expect(find.text('Book'), findsWidgets);
+  });
+
   testWidgets('keyword query delegates to subject search', (tester) async {
     await tester.pumpWidget(_panel(gateway));
     await tester.enterText(
@@ -154,6 +167,7 @@ void main() {
     final metadataWrite = Completer<void>();
     configureBangumiBindingMetadataHandler(
       ({
+        required String scopeId,
         required String sourceKey,
         required String comicId,
         required BangumiSubject subject,
@@ -219,6 +233,32 @@ void main() {
       ).bindingFor('source', 'comic')?.collectionStatus,
       BangumiCollectionStatus.onHold,
     );
+  });
+
+  testWidgets('selecting completed fills episode and volume totals', (
+    tester,
+  ) async {
+    appdata.settings['bangumiBindings'] = {
+      bangumiBindingKey('source', 'comic'): _binding().toJson(),
+    };
+    gateway.collection = const BangumiCollection(
+      type: 3,
+      rate: 0,
+      epStatus: 2,
+      volStatus: 1,
+    );
+    await tester.pumpWidget(_panel(gateway));
+    await tester.tap(find.byKey(const Key('bangumi-status')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Finished reading').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('bangumi-save')));
+    await tester.pumpAndSettle();
+
+    expect(gateway.subjectIds, [42]);
+    expect(gateway.patches, [
+      {'type': 2, 'ep_status': 12, 'vol_status': 2},
+    ]);
   });
 
   testWidgets('sync now refreshes the displayed status', (tester) async {
@@ -815,7 +855,11 @@ History _history({
   return history;
 }
 
-Widget _panel(_Gateway gateway, {ComicChapters? chapters}) => MaterialApp(
+Widget _panel(
+  _Gateway gateway, {
+  ComicChapters? chapters,
+  int? initialSubjectId,
+}) => MaterialApp(
   home: BangumiProgressPanel(
     service: BangumiService.forTesting(gatewayFactory: (_) => gateway),
     sourceKey: 'source',
@@ -823,6 +867,7 @@ Widget _panel(_Gateway gateway, {ComicChapters? chapters}) => MaterialApp(
     comicTitle: 'Title',
     chapters: chapters ?? const ComicChapters({'1': '第 1 话'}),
     history: null,
+    initialSubjectId: initialSubjectId,
   ),
 );
 
@@ -902,6 +947,10 @@ class _Gateway implements BangumiGateway {
     subjectIds.add(subjectId);
     return subject;
   }
+
+  @override
+  Future<List<BangumiSubjectPerson>> getSubjectPersons(int subjectId) async =>
+      const [];
 
   @override
   Future<void> patchCollection(

@@ -306,9 +306,7 @@ class DataSync with ChangeNotifier {
     try {
       appdata.settings['dataVersion']++;
       await appdata.saveData(false);
-      var data = await exportAppData(
-        appdata.settings['disableSyncFields'].toString().isNotEmpty,
-      );
+      var data = await exportAppData();
       var time = (DateTime.now().millisecondsSinceEpoch ~/ 86400000).toString();
       var filename = time;
       filename += '-';
