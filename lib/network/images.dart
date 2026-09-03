@@ -283,12 +283,13 @@ abstract class ImageDownloader {
     final cache = await CacheManager().findCache(cacheKey);
 
     if (cache != null) {
-      var data = await cache.readAsBytes();
+      final data = await cache.readAsBytes();
       yield ImageDownloadProgress(
         currentBytes: data.length,
         totalBytes: data.length,
         imageBytes: data,
       );
+      return;
     }
 
     JSInvokable? onLoadFailed;

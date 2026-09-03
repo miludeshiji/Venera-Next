@@ -11,6 +11,7 @@
 migrate_working_dir/
 */*/generated_*
 */*/Generated*
+.worktrees/
 
 # IntelliJ 相关
 *.iml
@@ -47,3 +48,4 @@ app.*.map.json
 .opencode/
 .codex/
 .agents/
+.omp/

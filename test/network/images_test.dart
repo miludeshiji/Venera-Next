@@ -1,10 +1,23 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_qjs/flutter_qjs.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqlite3/sqlite3.dart';
+import 'package:venera_next/foundation/app.dart';
+import 'package:venera_next/foundation/cache_manager.dart';
 import 'package:venera_next/network/images.dart';
 
+bool _sqliteAvailable() {
+  try {
+    final db = sqlite3.openInMemory();
+    db.dispose();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 class _FakeJSInvokable extends JSInvokable {
   _FakeJSInvokable(this.callback);
 
@@ -313,4 +326,68 @@ void main() {
     await sourceCanceled.future.timeout(const Duration(seconds: 1));
     await subscription.cancel();
   });
+
+  test(
+    'loadComicImageUnwrapped returns cached image without network request',
+    () async {
+      final dataDir = Directory.systemTemp.createTempSync(
+        'venera-image-cache-data-',
+      );
+
+      final cacheDir = Directory.systemTemp.createTempSync(
+        'venera-image-cache-cache-',
+      );
+
+      addTearDown(() {
+        CacheManager.resetForTesting();
+
+        if (dataDir.existsSync()) {
+          dataDir.deleteSync(recursive: true);
+        }
+
+        if (cacheDir.existsSync()) {
+          cacheDir.deleteSync(recursive: true);
+        }
+      });
+
+      App.dataPath = dataDir.path;
+      App.cachePath = cacheDir.path;
+
+      CacheManager.debugDisableInitialScan = true;
+
+      const imageKey = 'http://127.0.0.1:9/cached-image.jpg';
+      const String? sourceKey = null;
+      const cid = 'test-comic';
+      const eid = 'test-episode';
+
+      final cacheKey = '$imageKey@$sourceKey@$cid@$eid';
+
+      final imageBytes = Uint8List.fromList([
+        1,
+        2,
+        3,
+        4,
+      ]);
+
+      await CacheManager().writeCache(
+        cacheKey,
+        imageBytes,
+      );
+
+      final events = await ImageDownloader.loadComicImageUnwrapped(
+        imageKey,
+        sourceKey,
+        cid,
+        eid,
+      ).toList();
+
+      expect(events, hasLength(1));
+
+      expect(
+        events.single.imageBytes,
+        orderedEquals(imageBytes),
+      );
+    },
+    skip: _sqliteAvailable() ? false : 'sqlite3 native library is unavailable',
+  );
 }

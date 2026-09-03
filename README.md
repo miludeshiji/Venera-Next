@@ -4,6 +4,7 @@
   # VeneraNext — 个人自用分支
 
   ![Flutter](https://img.shields.io/badge/Flutter-3.41.4-02569B?logo=flutter&logoColor=white&style=flat-square)
+  [![Release](https://img.shields.io/github/v/release/miludeshiji/venera-next?label=Release&color=10B981&style=flat-square)](https://github.com/miludeshiji/venera-next/releases)
   ![License](https://img.shields.io/badge/License-GPL--3.0-10B981?style=flat-square)
 </div>
 
