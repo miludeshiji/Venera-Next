@@ -600,8 +600,9 @@ jobs:
           persist-credentials: false
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
-          channel: 'stable'
+          channel: 'master'
           flutter-version-file: pubspec.yaml
+          architecture: arm64
       - name: 准备 Rust 工具链
         run: python3 .github/scripts/prepare_rust_toolchain.py
       - name: 安装 Linux ARM64 构建依赖
