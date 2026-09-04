@@ -460,6 +460,92 @@ function Cookie({name, value, domain}) {
  */
 let Network = {
     /**
+     * Generic WebSocket transport for source extensions.
+     */
+    WebSocket: {
+        async connect(url, headers = {}, options = {}) {
+            const result = await sendMessage({
+                method: 'websocket',
+                function: 'connect',
+                url,
+                headers,
+                protocols: options.protocols || [],
+                connectTimeoutMs: options.connectTimeoutMs || 30000,
+            });
+            let closed = false;
+            let closePromise = null;
+            return {
+                id: result.id,
+                protocol: result.protocol,
+                get closed() {
+                    return closed;
+                },
+                async send(data) {
+                    if (closed) {
+                        throw new Error('WebSocket is closed');
+                    }
+                    if (ArrayBuffer.isView(data)) {
+                        data = data.buffer.slice(
+                            data.byteOffset,
+                            data.byteOffset + data.byteLength
+                        );
+                    }
+                    return sendMessage({
+                        method: 'websocket',
+                        function: 'send',
+                        id: result.id,
+                        data,
+                    });
+                },
+                async receive() {
+                    const event = await sendMessage({
+                        method: 'websocket',
+                        function: 'receive',
+                        id: result.id,
+                    });
+                    if (event.type === 'close') {
+                        closed = true;
+                        closePromise = Promise.resolve();
+                    }
+                    return event;
+                },
+                close(code = 1000, reason = '') {
+                    if (closePromise) {
+                        return closePromise;
+                    }
+                    if (closed) {
+                        closePromise = Promise.resolve();
+                        return closePromise;
+                    }
+                    if (!Number.isInteger(code) ||
+                        !((code >= 1000 && code <= 1003) ||
+                          (code >= 1007 && code <= 1014) ||
+                          (code >= 3000 && code <= 4999))) {
+                        return Promise.reject(
+                            new TypeError('WebSocket Invalid Argument: invalid close code')
+                        );
+                    }
+                    if (typeof reason !== 'string' ||
+                        Convert.encodeUtf8(reason).byteLength > 123) {
+                        return Promise.reject(
+                            new TypeError('WebSocket Invalid Argument: invalid close reason')
+                        );
+                    }
+                    closed = true;
+                    closePromise = sendMessage({
+                        method: 'websocket',
+                        function: 'close',
+                        id: result.id,
+                        code,
+                        reason,
+                    });
+                    return closePromise;
+                },
+            };
+        },
+    },
+
+    /**
      * Sends an HTTP request.
      * @param {string} method - The HTTP method (e.g., GET, POST, PUT, PATCH, DELETE).
      * @param {string} url - The URL to send the request to.

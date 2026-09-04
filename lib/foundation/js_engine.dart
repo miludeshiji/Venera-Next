@@ -24,6 +24,7 @@ import 'package:pointycastle/block/modes/ofb.dart';
 import 'package:uuid/uuid.dart';
 import 'package:venera_next/foundation/app.dart';
 import 'package:venera_next/foundation/js_pool.dart';
+import 'package:venera_next/foundation/js_websocket.dart';
 import 'package:venera_next/network/app_dio.dart';
 import 'package:venera_next/network/cache.dart';
 import 'package:venera_next/network/cookie_jar.dart';
@@ -80,6 +81,7 @@ class JsEngine with _JSEngineApi, Init {
   bool _closed = true;
 
   Dio? _dio;
+  final JsWebSocketBridge _webSocketBridge = JsWebSocketBridge();
 
   static JsSourceDataBridge? _sourceDataBridge;
 
@@ -109,11 +111,11 @@ class JsEngine with _JSEngineApi, Init {
   JsUiMessageHandler get _uiMessageBridge =>
       _uiMessageHandler ?? (throw "JS UI message handler is not configured.");
 
-  static void reset() {
+  static Future<void> reset() async {
     final oldEngine = _cache;
     _cache = null;
-    oldEngine?.dispose();
-    JsEngine().init();
+    await oldEngine?.dispose();
+    await JsEngine().init();
   }
 
   void resetDio() {
@@ -205,6 +207,8 @@ class JsEngine with _JSEngineApi, Init {
             _sourceBridge.deleteData(key, dataKey);
           case 'http':
             return _http(Map.from(message));
+          case 'websocket':
+            return _webSocketBridge.handle(Map<String, dynamic>.from(message));
           case 'html':
             return handleHtmlCallback(Map.from(message));
           case 'convert':
@@ -260,7 +264,10 @@ class JsEngine with _JSEngineApi, Init {
       }
       return null;
     } catch (e, s) {
-      Log.error("Failed to handle message: $message\n$e\n$s", "JsEngine");
+      final summary = message is Map && message['method'] == 'websocket'
+          ? 'websocket/${message['function']} id=${message['id'] ?? '-'}'
+          : message.toString();
+      Log.error('JsEngine', 'Failed to handle message: $summary\n$e\n$s');
       rethrow;
     }
   }
@@ -359,9 +366,10 @@ class JsEngine with _JSEngineApi, Init {
     return _isRetryableReadError(error);
   }
 
-  void dispose() {
+  Future<void> dispose() async {
     _cache = null;
     _closed = true;
+    await _webSocketBridge.dispose();
     _engine?.close();
     _engine?.port.close();
   }

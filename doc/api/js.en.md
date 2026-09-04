@@ -125,6 +125,20 @@ Get cookies for a specific url.
 
 Delete cookies for a specific url.
 
+### `Network.WebSocket.connect(url: string, headers?: object, options?: {protocols?: string[], connectTimeoutMs?: number}): Promise<WebSocketConnection>`
+
+Creates a generic WebSocket connection. The returned object exposes `id`,
+`protocol`, `closed`, `send(data)`, `receive()`, and
+`close(code = 1000, reason = "")`.
+
+`receive()` resolves to `{type: "message", data}` for text or binary frames, or
+`{type: "close", code, reason}` when the peer closes the connection. Only one
+pending `receive()` is allowed per connection. Connection, send, and receive
+failures reject their promises.
+
+This API is transport only. It does not implement SignalR, reconnection policy,
+or site-specific authentication semantics.
+
 ### `fetch`
 
 The fetch function is a wrapper of the `Network.fetchBytes` function. Same as the `fetch` function in the browser.
