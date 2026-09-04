@@ -15,6 +15,19 @@ JavaScript API 主要分为以下几类：
 | `Utils` | 常用工具函数 |
 | `Types` | 漫画、章节、图片、分类、设置项等运行时类型约定 |
 
+## WebSocket
+
+`Network.WebSocket.connect(url, headers = {}, options = {})` 建立通用 WebSocket
+连接。`options` 支持 `protocols` 和 `connectTimeoutMs`（默认 30000）。
+返回对象包含 `id`、`protocol`、`closed`、`send(data)`、`receive()` 和
+`close(code = 1000, reason = "")`。
+
+`receive()` 返回 `{type: "message", data}` 或
+`{type: "close", code, reason}`。同一连接同一时刻只允许一个等待中的
+`receive()`；连接、发送和接收错误通过 Promise rejection 暴露。该 API
+仅提供文本与二进制 WebSocket transport，不包含 SignalR、重连策略或
+站点认证语义。
+
 ## 使用建议
 
 - 新扩展应优先使用稳定 API，避免依赖内部实现细节。

@@ -460,6 +460,67 @@ function Cookie({name, value, domain}) {
  */
 let Network = {
     /**
+     * Generic WebSocket transport for source extensions.
+     */
+    WebSocket: {
+        async connect(url, headers = {}, options = {}) {
+            const result = await sendMessage({
+                method: 'websocket',
+                function: 'connect',
+                url,
+                headers,
+                protocols: options.protocols || [],
+                connectTimeoutMs: options.connectTimeoutMs || 30000,
+            });
+            let closed = false;
+            let closePromise = null;
+            return {
+                id: result.id,
+                protocol: result.protocol,
+                get closed() {
+                    return closed;
+                },
+                async send(data) {
+                    if (closed) {
+                        throw new Error('WebSocket is closed');
+                    }
+                    return sendMessage({
+                        method: 'websocket',
+                        function: 'send',
+                        id: result.id,
+                        data,
+                    });
+                },
+                async receive() {
+                    const event = await sendMessage({
+                        method: 'websocket',
+                        function: 'receive',
+                        id: result.id,
+                    });
+                    if (event.type === 'close') {
+                        closed = true;
+                    }
+                    return event;
+                },
+                close(code = 1000, reason = '') {
+                    if (closePromise) {
+                        return closePromise;
+                    }
+                    closed = true;
+                    closePromise = sendMessage({
+                        method: 'websocket',
+                        function: 'close',
+                        id: result.id,
+                        code,
+                        reason,
+                    });
+                    return closePromise;
+                },
+            };
+        },
+    },
+
+    /**
      * Sends an HTTP request.
      * @param {string} method - The HTTP method (e.g., GET, POST, PUT, PATCH, DELETE).
      * @param {string} url - The URL to send the request to.

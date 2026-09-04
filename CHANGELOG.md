@@ -12,6 +12,8 @@
   - 刮削缓存新增结构化结果、版本和重试时间记录；后台写入失败按漫画库与 Bangumi 条目身份持久化，并支持启动及退避重试。
   - WebDAV 漫画库配置可显式加入 DataSync/Appdata 同步，包含连接、远程路径和自动更新设置，并在界面提示远端 `.venera` 文件会保存凭据。
 
+- **漫画源 WebSocket Transport**：JavaScript Runtime 新增通用 `Network.WebSocket`，支持代理、Header、子协议、连接超时、文本与二进制消息以及可感知的远端关闭，并在引擎重置时统一释放连接。
+
 ### 变更
 
 - **元数据安全性与刮削精度优化**：
