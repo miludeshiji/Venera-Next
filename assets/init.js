@@ -526,7 +526,7 @@ let Network = {
                         );
                     }
                     if (typeof reason !== 'string' ||
-                        Convert.encodeUtf8(reason).length > 123) {
+                        Convert.encodeUtf8(reason).byteLength > 123) {
                         return Promise.reject(
                             new TypeError('WebSocket Invalid Argument: invalid close reason')
                         );
