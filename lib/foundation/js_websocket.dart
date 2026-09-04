@@ -32,6 +32,7 @@ class JsWebSocketBridge {
   final Map<int, _JsWebSocketConnection> _connections = {};
   final Set<int> _closedConnectionIds = {};
   final Set<HttpClient> _connectingClients = {};
+  final Set<Future<void>> _connectingAttempts = {};
   int _nextId = 1;
   bool _disposed = false;
 
@@ -44,7 +45,11 @@ class JsWebSocketBridge {
     }
     switch (message['function']) {
       case 'connect':
-        return await _connect(message);
+        final attempt = _connect(message);
+        final settled = attempt.then<void>((_) {}, onError: (_) {});
+        _connectingAttempts.add(settled);
+        settled.whenComplete(() => _connectingAttempts.remove(settled));
+        return await attempt;
       case 'send':
         await _send(message);
         return null;
@@ -81,19 +86,24 @@ class JsWebSocketBridge {
     final client = _clientFactory();
     _connectingClients.add(client);
     final timeout = Duration(milliseconds: timeoutMs);
+    final stopwatch = Stopwatch()..start();
     try {
       final proxy = await _proxyResolver().timeout(timeout);
       if (_disposed) {
         throw StateError('WebSocket Bridge Disposed');
       }
+      final remaining = timeout - stopwatch.elapsed;
+      if (remaining <= Duration.zero) {
+        throw TimeoutException('WebSocket connection timed out');
+      }
       client.findProxy = (_) => proxy == null ? 'DIRECT' : 'PROXY $proxy';
-      client.connectionTimeout = timeout;
+      client.connectionTimeout = remaining;
       final socket = await _connector(
         url,
         protocols: protocols,
         headers: headers,
         customClient: client,
-      ).timeout(timeout);
+      ).timeout(remaining);
       if (_disposed) {
         await socket.close(WebSocketStatus.goingAway, 'Bridge disposed');
         throw StateError('WebSocket Bridge Disposed');
@@ -242,6 +252,9 @@ class JsWebSocketBridge {
     _disposed = true;
     for (final client in _connectingClients.toList(growable: false)) {
       client.close(force: true);
+    }
+    if (_connectingAttempts.isNotEmpty) {
+      await Future.wait(_connectingAttempts.toList(growable: false));
     }
     _connectingClients.clear();
     final connections = _connections.values.toList(growable: false);

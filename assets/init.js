@@ -524,6 +524,10 @@ let Network = {
                         id: result.id,
                         code,
                         reason,
+                    }).catch(error => {
+                        closed = false;
+                        closePromise = null;
+                        throw error;
                     });
                     return closePromise;
                 },
