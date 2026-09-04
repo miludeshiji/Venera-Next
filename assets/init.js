@@ -517,6 +517,20 @@ let Network = {
                         closePromise = Promise.resolve();
                         return closePromise;
                     }
+                    if (!Number.isInteger(code) ||
+                        !((code >= 1000 && code <= 1003) ||
+                          (code >= 1007 && code <= 1014) ||
+                          (code >= 3000 && code <= 4999))) {
+                        return Promise.reject(
+                            new TypeError('WebSocket Invalid Argument: invalid close code')
+                        );
+                    }
+                    if (typeof reason !== 'string' ||
+                        Convert.encodeUtf8(reason).length > 123) {
+                        return Promise.reject(
+                            new TypeError('WebSocket Invalid Argument: invalid close reason')
+                        );
+                    }
                     closed = true;
                     closePromise = sendMessage({
                         method: 'websocket',
@@ -524,10 +538,6 @@ let Network = {
                         id: result.id,
                         code,
                         reason,
-                    }).catch(error => {
-                        closed = false;
-                        closePromise = null;
-                        throw error;
                     });
                     return closePromise;
                 },
