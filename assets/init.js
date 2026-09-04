@@ -517,27 +517,24 @@ let Network = {
                         closePromise = Promise.resolve();
                         return closePromise;
                     }
-                    if (!Number.isInteger(code) ||
-                        !((code >= 1000 && code <= 1003) ||
-                          (code >= 1007 && code <= 1014) ||
-                          (code >= 3000 && code <= 4999))) {
-                        return Promise.reject(
-                            new TypeError('WebSocket Invalid Argument: invalid close code')
+                    if (!Number.isInteger(code)) {
+                        throw new TypeError(
+                            'WebSocket Invalid Argument: close code must be an integer'
                         );
                     }
-                    if (typeof reason !== 'string' ||
-                        Convert.encodeUtf8(reason).byteLength > 123) {
-                        return Promise.reject(
-                            new TypeError('WebSocket Invalid Argument: invalid close reason')
+                    if (typeof reason !== 'string') {
+                        throw new TypeError(
+                            'WebSocket Invalid Argument: close reason must be a string'
                         );
                     }
-                    closed = true;
                     closePromise = sendMessage({
                         method: 'websocket',
                         function: 'close',
                         id: result.id,
                         code,
                         reason,
+                    }).then(() => {
+                        closed = true;
                     });
                     return closePromise;
                 },

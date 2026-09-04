@@ -127,8 +127,8 @@ void main() {
       {'type': 'close', 'code': 1001, 'reason': 'away'},
     );
     expect(bridge.debugConnectionCount, 0);
-    expect(
-      () => bridge.handle({'function': 'receive', 'id': connected['id']}),
+    await expectLater(
+      bridge.handle({'function': 'receive', 'id': connected['id']}),
       throwsA(isA<StateError>()),
     );
   });
@@ -204,6 +204,119 @@ void main() {
     expect(bridge.debugConnectionCount, 0);
     await receiveError;
   });
+  test('connection timeout includes proxy resolution', () async {
+    bridge = JsWebSocketBridge(
+      proxyResolver: () => Completer<String?>().future,
+    );
+    await expectLater(
+      bridge.handle({
+        'function': 'connect',
+        'url': 'ws://127.0.0.1:${server.port}/socket',
+        'connectTimeoutMs': 20,
+      }),
+      throwsA(
+        predicate(
+          (error) => error.toString().contains(
+            'WebSocket Connect Error: connection timed out',
+          ),
+        ),
+      ),
+    );
+  });
+
+  test('connection timeout includes the connector', () async {
+    bridge = JsWebSocketBridge(
+      proxyResolver: () async => null,
+      connector: (_, {protocols, headers, customClient}) =>
+          Completer<WebSocket>().future,
+    );
+    await expectLater(
+      bridge.handle({
+        'function': 'connect',
+        'url': 'ws://127.0.0.1:${server.port}/socket',
+        'connectTimeoutMs': 20,
+      }),
+      throwsA(
+        predicate(
+          (error) => error.toString().contains(
+            'WebSocket Connect Error: connection timed out',
+          ),
+        ),
+      ),
+    );
+  });
+
+  test('proxy resolver configures the HttpClient proxy callback', () async {
+    String? directProxy;
+    bridge = JsWebSocketBridge(
+      proxyResolver: () async => null,
+      onProxyApplied: (proxy) => directProxy = proxy,
+      connector: (_, {protocols, headers, customClient}) {
+        return Future.error(const WebSocketException('stop'));
+      },
+    );
+    await expectLater(
+      bridge.handle({'function': 'connect', 'url': 'wss://example.com/socket'}),
+      throwsException,
+    );
+    expect(directProxy, 'DIRECT');
+
+    String? manualProxy;
+    bridge = JsWebSocketBridge(
+      proxyResolver: () async => '127.0.0.1:7890',
+      onProxyApplied: (proxy) => manualProxy = proxy,
+      connector: (_, {protocols, headers, customClient}) {
+        return Future.error(const WebSocketException('stop'));
+      },
+    );
+    await expectLater(
+      bridge.handle({'function': 'connect', 'url': 'wss://example.com/socket'}),
+      throwsException,
+    );
+    expect(manualProxy, 'PROXY 127.0.0.1:7890');
+  });
+
+  test(
+    'unconsumed remote close releases active connection and expires',
+    () async {
+      final serverSocket = Completer<WebSocket>();
+      bridge = JsWebSocketBridge(
+        proxyResolver: () async => null,
+        terminalStateTtl: const Duration(milliseconds: 20),
+      );
+      unawaited(() async {
+        serverSocket.complete(
+          await WebSocketTransformer.upgrade(await server.first),
+        );
+      }());
+      await _connect(bridge, server.port);
+      await (await serverSocket.future).close(1000, 'done');
+      await pumpEventQueue();
+      expect(bridge.debugConnectionCount, 0);
+      expect(bridge.debugTerminalStateCount, 1);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(bridge.debugTerminalStateCount, 0);
+    },
+  );
+
+  test('terminal states are capacity bounded', () async {
+    bridge = JsWebSocketBridge(
+      proxyResolver: () async => null,
+      maxTerminalStates: 2,
+    );
+    unawaited(() async {
+      await for (final request in server) {
+        final socket = await WebSocketTransformer.upgrade(request);
+        await socket.close(1000, 'done');
+      }
+    }());
+    await _connect(bridge, server.port);
+    await _connect(bridge, server.port);
+    await _connect(bridge, server.port);
+    await pumpEventQueue();
+    expect(bridge.debugConnectionCount, 0);
+    expect(bridge.debugTerminalStateCount, 2);
+  });
 
   test('invalid arguments and unknown IDs fail explicitly', () async {
     expect(
@@ -215,6 +328,28 @@ void main() {
       () => bridge.handle({'function': 'receive', 'id': 999}),
       throwsA(isA<StateError>()),
     );
+  });
+  test('pending receive observes remote close exactly once', () async {
+    final serverSocket = Completer<WebSocket>();
+    unawaited(() async {
+      serverSocket.complete(
+        await WebSocketTransformer.upgrade(await server.first),
+      );
+    }());
+    final connected = await _connect(bridge, server.port);
+    final receive = bridge.handle({
+      'function': 'receive',
+      'id': connected['id'],
+    });
+    await (await serverSocket.future).close(1000, 'done');
+    expect(await receive, {'type': 'close', 'code': 1000, 'reason': 'done'});
+    expect(bridge.debugConnectionCount, 0);
+    expect(bridge.debugTerminalStateCount, 1);
+    await expectLater(
+      bridge.handle({'function': 'receive', 'id': connected['id']}),
+      throwsA(isA<StateError>()),
+    );
+    expect(bridge.debugTerminalStateCount, 0);
   });
 }
 

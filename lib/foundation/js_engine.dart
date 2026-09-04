@@ -74,18 +74,22 @@ class JsEngine with _JSEngineApi, Init {
 
   static JsEngine? _cache;
 
-  JsEngine._create();
+  JsEngine._create() : _webSocketBridge = debugCreateWebSocketBridge();
 
   FlutterQjs? _engine;
 
   bool _closed = true;
 
   Dio? _dio;
-  final JsWebSocketBridge _webSocketBridge = JsWebSocketBridge();
+  final JsWebSocketBridge _webSocketBridge;
 
   static JsSourceDataBridge? _sourceDataBridge;
 
   static JsUiMessageHandler? _uiMessageHandler;
+
+  @visibleForTesting
+  static JsWebSocketBridge Function() debugCreateWebSocketBridge =
+      JsWebSocketBridge.new;
 
   static void configureSourceDataBridge(JsSourceDataBridge? bridge) {
     _sourceDataBridge = bridge;
@@ -103,6 +107,11 @@ class JsEngine with _JSEngineApi, Init {
   @visibleForTesting
   static void debugResetUiMessageHandler() {
     configureUiMessageHandler(null);
+  }
+
+  @visibleForTesting
+  static void debugResetWebSocketBridgeFactory() {
+    debugCreateWebSocketBridge = JsWebSocketBridge.new;
   }
 
   JsSourceDataBridge get _sourceBridge =>
