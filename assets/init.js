@@ -484,6 +484,12 @@ let Network = {
                     if (closed) {
                         throw new Error('WebSocket is closed');
                     }
+                    if (ArrayBuffer.isView(data)) {
+                        data = data.buffer.slice(
+                            data.byteOffset,
+                            data.byteOffset + data.byteLength
+                        );
+                    }
                     return sendMessage({
                         method: 'websocket',
                         function: 'send',
@@ -499,11 +505,16 @@ let Network = {
                     });
                     if (event.type === 'close') {
                         closed = true;
+                        closePromise = Promise.resolve();
                     }
                     return event;
                 },
                 close(code = 1000, reason = '') {
                     if (closePromise) {
+                        return closePromise;
+                    }
+                    if (closed) {
+                        closePromise = Promise.resolve();
                         return closePromise;
                     }
                     closed = true;

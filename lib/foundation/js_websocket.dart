@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -30,6 +31,7 @@ class JsWebSocketBridge {
   final JsWebSocketClientFactory _clientFactory;
   final Map<int, _JsWebSocketConnection> _connections = {};
   final Set<int> _closedConnectionIds = {};
+  final Set<HttpClient> _connectingClients = {};
   int _nextId = 1;
   bool _disposed = false;
 
@@ -77,19 +79,23 @@ class JsWebSocketBridge {
     }
 
     final client = _clientFactory();
+    _connectingClients.add(client);
+    final timeout = Duration(milliseconds: timeoutMs);
     try {
-      final proxy = await _proxyResolver();
+      final proxy = await _proxyResolver().timeout(timeout);
+      if (_disposed) {
+        throw StateError('WebSocket Bridge Disposed');
+      }
       client.findProxy = (_) => proxy == null ? 'DIRECT' : 'PROXY $proxy';
-      client.connectionTimeout = Duration(milliseconds: timeoutMs);
+      client.connectionTimeout = timeout;
       final socket = await _connector(
         url,
         protocols: protocols,
         headers: headers,
         customClient: client,
-      ).timeout(Duration(milliseconds: timeoutMs));
+      ).timeout(timeout);
       if (_disposed) {
         await socket.close(WebSocketStatus.goingAway, 'Bridge disposed');
-        client.close(force: true);
         throw StateError('WebSocket Bridge Disposed');
       }
       final id = _nextId++;
@@ -98,7 +104,10 @@ class JsWebSocketBridge {
         id: id,
         socket: socket,
         client: client,
-        onTerminated: () => _connections.remove(id),
+        onTerminated: () {
+          _connections.remove(id);
+          _closedConnectionIds.add(id);
+        },
       );
       _connections[id] = connection;
       return {'id': id, 'protocol': socket.protocol ?? ''};
@@ -109,6 +118,8 @@ class JsWebSocketBridge {
         rethrow;
       }
       throw Exception('WebSocket Connect Error: ${_safeError(error)}');
+    } finally {
+      _connectingClients.remove(client);
     }
   }
 
@@ -157,12 +168,17 @@ class JsWebSocketBridge {
     }
     final code = message['code'] ?? WebSocketStatus.normalClosure;
     final reason = message['reason'] ?? '';
-    if (code is! int || code < 1000 || code > 4999) {
+    if (code is! int || !_isValidCloseCode(code)) {
       throw ArgumentError('WebSocket Invalid Argument: invalid close code');
     }
     if (reason is! String) {
       throw ArgumentError(
         'WebSocket Invalid Argument: reason must be a string',
+      );
+    }
+    if (utf8.encode(reason).length > 123) {
+      throw ArgumentError(
+        'WebSocket Invalid Argument: close reason is too long',
       );
     }
     await connection.close(code, reason);
@@ -224,6 +240,10 @@ class JsWebSocketBridge {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    for (final client in _connectingClients.toList(growable: false)) {
+      client.close(force: true);
+    }
+    _connectingClients.clear();
     final connections = _connections.values.toList(growable: false);
     _connections.clear();
     await Future.wait(connections.map((connection) => connection.dispose()));
@@ -269,6 +289,9 @@ class _JsWebSocketConnection {
     if (_events.isNotEmpty) {
       final event = _events.removeFirst();
       _afterEventDelivered(event);
+      if (!_closed && !_disposed) {
+        _subscription.resume();
+      }
       return Future.value(event);
     }
     if (_closed || _disposed) {
@@ -277,6 +300,7 @@ class _JsWebSocketConnection {
     if (_waitingReceiver != null) {
       throw StateError('Only one WebSocket receiver is allowed');
     }
+    _subscription.resume();
     final completer = Completer<Map<String, dynamic>>();
     _waitingReceiver = completer;
     return completer.future;
@@ -323,6 +347,7 @@ class _JsWebSocketConnection {
       _afterEventDelivered(event);
     } else {
       _events.add(event);
+      _subscription.pause();
     }
   }
 
@@ -376,6 +401,19 @@ class _JsWebSocketConnection {
       if (removeFromRegistry) onTerminated();
     }
   }
+}
+
+bool _isValidCloseCode(int code) {
+  return code == WebSocketStatus.normalClosure ||
+      code == WebSocketStatus.goingAway ||
+      code == WebSocketStatus.protocolError ||
+      code == WebSocketStatus.unsupportedData ||
+      code == WebSocketStatus.invalidFramePayloadData ||
+      code == WebSocketStatus.policyViolation ||
+      code == WebSocketStatus.messageTooBig ||
+      code == WebSocketStatus.missingMandatoryExtension ||
+      code == WebSocketStatus.internalServerError ||
+      code >= 3000 && code <= 4999;
 }
 
 String _safeError(Object error) {

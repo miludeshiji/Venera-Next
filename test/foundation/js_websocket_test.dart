@@ -132,6 +132,18 @@ void main() {
       throwsA(isA<StateError>()),
     );
   });
+  test('close after a remote close remains idempotent', () async {
+    final serverSocket = Completer<WebSocket>();
+    unawaited(() async {
+      serverSocket.complete(
+        await WebSocketTransformer.upgrade(await server.first),
+      );
+    }());
+    final connected = await _connect(bridge, server.port);
+    await (await serverSocket.future).close(1000, 'done');
+    await bridge.handle({'function': 'receive', 'id': connected['id']});
+    await bridge.handle({'function': 'close', 'id': connected['id']});
+  });
 
   test('local close is idempotent and blocks later sends', () async {
     unawaited(() async {
@@ -148,6 +160,32 @@ void main() {
         'data': 'late',
       }),
       throwsA(isA<StateError>()),
+    );
+  });
+  test('invalid close frame leaves the connection usable', () async {
+    unawaited(() async {
+      final socket = await WebSocketTransformer.upgrade(await server.first);
+      await for (final data in socket) {
+        socket.add(data);
+      }
+    }());
+    final connected = await _connect(bridge, server.port);
+    expect(
+      () => bridge.handle({
+        'function': 'close',
+        'id': connected['id'],
+        'code': 1006,
+      }),
+      throwsA(isA<ArgumentError>()),
+    );
+    await bridge.handle({
+      'function': 'send',
+      'id': connected['id'],
+      'data': 'still-open',
+    });
+    expect(
+      await bridge.handle({'function': 'receive', 'id': connected['id']}),
+      {'type': 'message', 'data': 'still-open'},
     );
   });
 
