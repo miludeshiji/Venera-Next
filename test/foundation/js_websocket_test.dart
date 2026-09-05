@@ -507,7 +507,16 @@ void main() {
 
         final serverSocket = await serverSocketCompleter.future;
         await serverSocket.close(1000, 'classified_remote_close_reason');
-        await pumpEventQueue();
+        final closed =
+            await testBridge.handle({
+                  'function': 'receive',
+                  'id': connected['id'],
+                })
+                as Map<String, dynamic>;
+
+        expect(closed['type'], 'close');
+        expect(closed['code'], 1000);
+        expect(closed['reason'], 'classified_remote_close_reason');
 
         await testBridge.dispose();
 
