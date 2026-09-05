@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:venera_next/foundation/log.dart';
 import 'package:venera_next/network/proxy.dart';
 
 typedef JsWebSocketConnector =
@@ -18,12 +19,16 @@ typedef JsWebSocketProxyResolver = Future<String?> Function();
 typedef JsWebSocketClientFactory = HttpClient Function();
 typedef JsWebSocketProxyApplied = void Function(String directive);
 
+typedef JsWebSocketLifecycleLogger =
+    void Function(LogLevel level, String content);
+
 class JsWebSocketBridge {
   JsWebSocketBridge({
     JsWebSocketConnector? connector,
     JsWebSocketProxyResolver? proxyResolver,
     JsWebSocketClientFactory? clientFactory,
     JsWebSocketProxyApplied? onProxyApplied,
+    JsWebSocketLifecycleLogger? lifecycleLogger,
     Duration terminalStateTtl = const Duration(minutes: 1),
     int maxTerminalStates = 128,
     Duration closeTimeout = const Duration(seconds: 2),
@@ -31,6 +36,7 @@ class JsWebSocketBridge {
        _proxyResolver = proxyResolver ?? getProxy,
        _clientFactory = clientFactory ?? HttpClient.new,
        _onProxyApplied = onProxyApplied,
+       _logger = lifecycleLogger ?? _defaultLogger,
        _terminalStateTtl = terminalStateTtl,
        _maxTerminalStates = maxTerminalStates,
        _closeTimeout = closeTimeout {
@@ -49,6 +55,7 @@ class JsWebSocketBridge {
   final JsWebSocketProxyResolver _proxyResolver;
   final JsWebSocketClientFactory _clientFactory;
   final JsWebSocketProxyApplied? _onProxyApplied;
+  final JsWebSocketLifecycleLogger _logger;
   final Duration _terminalStateTtl;
   final int _maxTerminalStates;
   final Duration _closeTimeout;
@@ -59,6 +66,18 @@ class JsWebSocketBridge {
   final Set<Future<void>> _connectingAttempts = {};
   int _nextId = 1;
   bool _disposed = false;
+
+  static void _defaultLogger(LogLevel level, String content) {
+    Log.addLog(level, 'WebSocket', content);
+  }
+
+  void _log(LogLevel level, String content) {
+    try {
+      _logger(level, content);
+    } catch (_) {
+      // Logger failures must not affect networking.
+    }
+  }
 
   @visibleForTesting
   int get debugConnectionCount => _connections.length;
@@ -114,10 +133,13 @@ class JsWebSocketBridge {
       );
     }
 
+    final endpoint = _formatSafeEndpoint(url);
+    _log(LogLevel.info, 'Connecting endpoint=$endpoint timeout=${timeoutMs}ms');
     final client = _clientFactory();
     _connectingClients.add(client);
     final timeout = Duration(milliseconds: timeoutMs);
     final stopwatch = Stopwatch()..start();
+    String proxyMode = 'direct';
     try {
       final proxy = await _proxyResolver().timeout(timeout);
       if (_disposed) throw StateError('WebSocket Bridge Disposed');
@@ -125,6 +147,12 @@ class JsWebSocketBridge {
       if (remaining <= Duration.zero) {
         throw TimeoutException('WebSocket connection timed out');
       }
+      proxyMode =
+          (proxy != null &&
+              proxy.trim().isNotEmpty &&
+              proxy.trim().toLowerCase() != 'direct')
+          ? 'configured'
+          : 'direct';
       final proxyDirective = proxy == null ? 'DIRECT' : 'PROXY $proxy';
       client.findProxy = (_) => proxyDirective;
       _onProxyApplied?.call(proxyDirective);
@@ -146,19 +174,31 @@ class JsWebSocketBridge {
       final id = _nextId++;
       final connection = _JsWebSocketConnection(
         id: id,
+        endpoint: endpoint,
         socket: socket,
         client: client,
         closeTimeout: _closeTimeout,
+        logger: _log,
         onTerminal: (terminal) => _recordTerminalState(id, terminal),
       );
       _connections[id] = connection;
+      _log(
+        LogLevel.info,
+        'Connected id=$id endpoint=$endpoint proxy=$proxyMode elapsed=${stopwatch.elapsedMilliseconds}ms',
+      );
       return {'id': id, 'protocol': socket.protocol ?? ''};
     } catch (error) {
       client.close(force: true);
       if (error is ArgumentError ||
-          error is StateError && error.message == 'WebSocket Bridge Disposed') {
+          _disposed ||
+          (error is StateError &&
+              error.message == 'WebSocket Bridge Disposed')) {
         rethrow;
       }
+      _log(
+        LogLevel.warning,
+        'Connect failed endpoint=$endpoint proxy=$proxyMode elapsed=${stopwatch.elapsedMilliseconds}ms error=${_safeError(error)}',
+      );
       throw Exception('WebSocket Connect Error: ${_safeError(error)}');
     } finally {
       _connectingClients.remove(client);
@@ -312,6 +352,11 @@ class JsWebSocketBridge {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    final active = _connections.length;
+    final connecting = _connectingClients.length;
+    if (active > 0 || connecting > 0) {
+      _log(LogLevel.info, 'Disposing active=$active connecting=$connecting');
+    }
     for (final client in _connectingClients.toList(growable: false)) {
       client.close(force: true);
     }
@@ -336,9 +381,11 @@ class _JsWebSocketTerminalState {
 class _JsWebSocketConnection {
   _JsWebSocketConnection({
     required this.id,
+    required this.endpoint,
     required this.socket,
     required this.client,
     required this.closeTimeout,
+    required this.logger,
     required this.onTerminal,
   }) {
     _subscription = socket.listen(
@@ -350,9 +397,11 @@ class _JsWebSocketConnection {
   }
 
   final int id;
+  final String endpoint;
   final WebSocket socket;
   final HttpClient client;
   final Duration closeTimeout;
+  final void Function(LogLevel level, String content) logger;
   final void Function(_JsWebSocketTerminalState terminal) onTerminal;
   final Queue<Map<String, dynamic>> _events = Queue();
   late final StreamSubscription<dynamic> _subscription;
@@ -401,6 +450,11 @@ class _JsWebSocketConnection {
   }
 
   void _onError(Object error, StackTrace stackTrace) {
+    if (_terminated) return;
+    logger(
+      LogLevel.warning,
+      'Receive failed id=$id endpoint=$endpoint error=${_safeError(error)}',
+    );
     unawaited(
       _terminate(
         error: Exception('WebSocket Receive Error: ${_safeError(error)}'),
@@ -410,11 +464,24 @@ class _JsWebSocketConnection {
   }
 
   void _onDone() {
+    if (_terminated) return;
+    final code = socket.closeCode;
+    final reason = socket.closeReason ?? '';
+    final reasonPresent = reason.isNotEmpty;
+    final level =
+        (code == WebSocketStatus.normalClosure ||
+            code == WebSocketStatus.goingAway)
+        ? LogLevel.info
+        : LogLevel.warning;
+    logger(
+      level,
+      'Closed id=$id endpoint=$endpoint direction=remote code=${code ?? 'none'} reasonPresent=$reasonPresent',
+    );
     unawaited(
       _terminate(
         closeEvent: {
           'type': 'close',
-          'code': socket.closeCode,
+          'code': code,
           'reason': socket.closeReason ?? '',
         },
       ),
@@ -430,7 +497,12 @@ class _JsWebSocketConnection {
     final receiver = _waitingReceiver;
     _waitingReceiver = null;
     receiver?.completeError(StateError('WebSocket Closed Connection: $id'));
+    final reasonPresent = reason.isNotEmpty;
     await _terminate(closeSocket: true, closeCode: code, closeReason: reason);
+    logger(
+      LogLevel.info,
+      'Closed id=$id endpoint=$endpoint direction=local code=$code reasonPresent=$reasonPresent',
+    );
   }
 
   Future<void> dispose() async {
@@ -526,7 +598,7 @@ bool _isValidCloseCode(int code) {
 String _safeError(Object error) {
   if (error is TimeoutException) return 'connection timed out';
   if (error is SocketException) {
-    return error.osError?.message ?? 'socket failure';
+    return 'socket failure';
   }
   if (error is WebSocketException) {
     return error.httpStatusCode == null
@@ -534,4 +606,38 @@ String _safeError(Object error) {
         : 'websocket handshake failed (HTTP ${error.httpStatusCode})';
   }
   return error.runtimeType.toString();
+}
+
+String _formatSafeEndpoint(String rawUrl) {
+  final uri = Uri.tryParse(rawUrl);
+  if (uri == null) return '<invalid-url>';
+
+  final scheme = uri.scheme.toLowerCase();
+  if (scheme != 'ws' && scheme != 'wss') {
+    return '<invalid-scheme>';
+  }
+
+  final host = uri.host;
+  if (host.isEmpty) {
+    return '<invalid-host>';
+  }
+
+  final formattedHost = host.contains(':') && !host.startsWith('[')
+      ? '[$host]'
+      : host;
+
+  final isDefaultPort =
+      (scheme == 'ws' && uri.hasPort && uri.port == 80) ||
+      (scheme == 'wss' && uri.hasPort && uri.port == 443) ||
+      (!uri.hasPort);
+
+  final portString = isDefaultPort ? '' : ':${uri.port}';
+
+  String path = uri.path.isEmpty ? '/' : uri.path;
+  const maxPathLength = 256;
+  if (path.length > maxPathLength) {
+    path = '${path.substring(0, maxPathLength - 3)}...';
+  }
+
+  return '$scheme://$formattedHost$portString$path';
 }
