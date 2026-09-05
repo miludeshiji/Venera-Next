@@ -816,6 +816,8 @@ class _SliverComicSource extends StatefulWidget {
 class _SliverComicSourceState extends State<_SliverComicSource> {
   ComicSource get source => widget.source;
 
+  bool _expanded = false;
+
   @override
   Widget build(BuildContext context) {
     var newVersion = ComicSourceManager().availableUpdates[source.key];
@@ -827,6 +829,11 @@ class _SliverComicSourceState extends State<_SliverComicSource> {
         SliverPadding(padding: const EdgeInsets.only(top: 16)),
         SliverToBoxAdapter(
           child: ListTile(
+            onTap: () {
+              setState(() {
+                _expanded = !_expanded;
+              });
+            },
             title: Row(
               children: [
                 Text(source.name, style: ts.s18),
@@ -889,27 +896,35 @@ class _SliverComicSourceState extends State<_SliverComicSource> {
                     icon: const Icon(Icons.delete),
                   ),
                 ),
+                const SizedBox(width: 4),
+                AnimatedRotation(
+                  turns: _expanded ? 0.5 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(Icons.expand_more),
+                ),
               ],
             ),
           ),
         ),
-        SliverToBoxAdapter(
-          child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: 8),
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(
-                  color: context.colorScheme.outlineVariant,
-                  width: 0.6,
+        if (_expanded) ...[
+          SliverToBoxAdapter(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    color: context.colorScheme.outlineVariant,
+                    width: 0.6,
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-        SliverToBoxAdapter(
-          child: Column(children: buildSourceSettings().toList()),
-        ),
-        SliverToBoxAdapter(child: Column(children: _buildAccount().toList())),
+          SliverToBoxAdapter(
+            child: Column(children: buildSourceSettings().toList()),
+          ),
+          SliverToBoxAdapter(child: Column(children: _buildAccount().toList())),
+        ],
       ],
     );
   }
