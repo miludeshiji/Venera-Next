@@ -48,6 +48,17 @@ typedef SendChapterCommentFunc =
       String? replyTo,
     );
 
+typedef UpdateReadProgressFunc =
+    Future<Res<bool>> Function(String comicId, String epId, int page);
+
+typedef ReplyCommentFunc =
+    Future<Res<bool>> Function(
+      String id,
+      String? subId,
+      String content,
+      String parentId,
+      String? replyId,
+    );
 typedef GetImageLoadingConfigFunc =
     Future<Map<String, dynamic>> Function(
       String imageKey,

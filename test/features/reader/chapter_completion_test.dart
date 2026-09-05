@@ -225,5 +225,8 @@ class _ReaderLocationHarness with ReaderLocation {
   }
 
   @override
+  void flushRemoteProgress() {}
+
+  @override
   void update() {}
 }

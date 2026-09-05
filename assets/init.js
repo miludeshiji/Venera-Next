@@ -107,6 +107,40 @@ let Convert = {
      * @param {ArrayBuffer} value
      * @returns {ArrayBuffer}
      */
+    encodeGzip: (value) => {
+        let res = sendMessage({
+            method: "convert",
+            type: "gzip",
+            value: value,
+            isEncode: true
+        });
+        if (res == null) {
+            throw new Error("Failed to encode gzip");
+        }
+        return res;
+    },
+
+    /**
+     * @param {ArrayBuffer} value
+     * @returns {ArrayBuffer}
+     */
+    decodeGzip: (value) => {
+        let res = sendMessage({
+            method: "convert",
+            type: "gzip",
+            value: value,
+            isEncode: false
+        });
+        if (res == null) {
+            throw new Error("Failed to decode gzip");
+        }
+        return res;
+    },
+
+    /**
+     * @param {ArrayBuffer} value
+     * @returns {ArrayBuffer}
+     */
     md5: (value) => {
         return sendMessage({
             method: "convert",
@@ -1184,9 +1218,12 @@ function ComicDetails({title, subtitle, subTitle, cover, description, tags, chap
  * @param isLiked {boolean?}
  * @param score {number?}
  * @param voteStatus {number?} - 1: upvote, -1: downvote, 0: none
+ * @param userId {string?}
+ * @param replyToId {string?}
+ * @param replyToUserName {string?}
  * @constructor
  */
-function Comment({userName, avatar, content, time, replyCount, id, isLiked, score, voteStatus}) {
+function Comment({userName, avatar, content, time, replyCount, id, isLiked, score, voteStatus, userId, replyToId, replyToUserName}) {
     this.userName = userName;
     this.avatar = avatar;
     this.content = content;
@@ -1196,6 +1233,9 @@ function Comment({userName, avatar, content, time, replyCount, id, isLiked, scor
     this.isLiked = isLiked;
     this.score = score;
     this.voteStatus = voteStatus;
+    this.userId = userId;
+    this.replyToId = replyToId;
+    this.replyToUserName = replyToUserName;
 }
 
 /**

@@ -142,6 +142,10 @@ class ComicSource {
 
   final ArchiveDownloader? archiveDownloader;
 
+  final UpdateReadProgressFunc? updateReadProgressFunc;
+
+  final ReplyCommentFunc? replyCommentFunc;
+
   Future<void> loadData() async {
     var file = File("${App.dataPath}/comic_source/$key.data");
     if (await file.exists()) {
@@ -258,8 +262,10 @@ class ComicSource {
     this.enableTagsSuggestions,
     this.enableTagsTranslate,
     this.starRatingFunc,
-    this.archiveDownloader,
-  );
+    this.archiveDownloader, {
+    this.updateReadProgressFunc,
+    this.replyCommentFunc,
+  });
 }
 
 class AccountConfig {

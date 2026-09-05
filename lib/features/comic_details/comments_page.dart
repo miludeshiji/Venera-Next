@@ -13,6 +13,7 @@ import 'package:venera_next/foundation/context.dart';
 import 'package:venera_next/foundation/image_provider/cached_image.dart';
 import 'package:venera_next/foundation/translations.dart';
 import 'package:venera_next/foundation/widget_utils.dart';
+import 'package:venera_next/foundation/res.dart';
 
 bool shouldBlockComment(Comment comment) {
   var blockedWords = appdata.settings["blockedCommentWords"] as List;
@@ -53,6 +54,21 @@ class _CommentsPageState extends State<CommentsPage> {
   int? maxPage;
   var controller = TextEditingController();
   bool sending = false;
+  Comment? _replyTarget;
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode();
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    controller.dispose();
+    super.dispose();
+  }
 
   void firstLoad() async {
     var res = await widget.source.commentsLoader!(
@@ -189,6 +205,17 @@ class _CommentsPageState extends State<CommentsPage> {
                       source: widget.source,
                       comic: widget.data,
                       showAvatar: showAvatar,
+                      onReply:
+                          (widget.replyComment != null &&
+                              widget.source.replyCommentFunc != null &&
+                              _comments![index].id != null)
+                          ? () {
+                              setState(() {
+                                _replyTarget = _comments![index];
+                              });
+                              _focusNode.requestFocus();
+                            }
+                          : null,
                     );
                   },
                 );
@@ -202,8 +229,19 @@ class _CommentsPageState extends State<CommentsPage> {
   }
 
   Widget buildBottom(BuildContext context) {
-    if (widget.source.sendCommentFunc == null) {
-      return const SizedBox(height: 0);
+    final isReplyPage = widget.replyComment != null;
+    if (isReplyPage) {
+      if (widget.replyComment!.id == null) {
+        return const SizedBox(height: 0);
+      }
+      if (widget.source.replyCommentFunc == null &&
+          widget.source.sendCommentFunc == null) {
+        return const SizedBox(height: 0);
+      }
+    } else {
+      if (widget.source.sendCommentFunc == null) {
+        return const SizedBox(height: 0);
+      }
     }
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
@@ -216,70 +254,134 @@ class _CommentsPageState extends State<CommentsPage> {
           ),
         ),
       ),
-      child: Material(
-        color: context.colorScheme.surfaceContainer,
-        borderRadius: BorderRadius.circular(24),
-        child: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: controller,
-                decoration: InputDecoration(
-                  border: InputBorder.none,
-                  isCollapsed: true,
-                  hintText: "Comment".tl,
-                ),
-                minLines: 1,
-                maxLines: 5,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_replyTarget != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 12, right: 8, bottom: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      "${"Replies".tl} @${_replyTarget!.userName}",
+                      key: const Key('reply-target-indicator'),
+                      style: ts.s12.withColor(context.colorScheme.primary),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  InkWell(
+                    key: const Key('reply-cancel-button'),
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () {
+                      setState(() {
+                        _replyTarget = null;
+                      });
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text("Cancel".tl, style: ts.s12),
+                          const SizedBox(width: 2),
+                          const Icon(Icons.close, size: 14),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            if (sending)
-              const Padding(
-                padding: EdgeInsets.all(8),
-                child: SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+          Material(
+            color: context.colorScheme.surfaceContainer,
+            borderRadius: BorderRadius.circular(24),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    focusNode: _focusNode,
+                    controller: controller,
+                    decoration: InputDecoration(
+                      border: InputBorder.none,
+                      isCollapsed: true,
+                      hintText: _replyTarget != null
+                          ? "${"Replies".tl} @${_replyTarget!.userName}"
+                          : "Comment".tl,
+                    ),
+                    minLines: 1,
+                    maxLines: 5,
+                  ),
                 ),
-              )
-            else
-              IconButton(
-                onPressed: () async {
-                  if (controller.text.isEmpty) {
-                    return;
-                  }
-                  setState(() {
-                    sending = true;
-                  });
-                  var b = await widget.source.sendCommentFunc!(
-                    widget.data.comicId,
-                    widget.data.subId,
-                    controller.text,
-                    widget.replyComment?.id,
-                  );
-                  if (!b.error) {
-                    controller.text = "";
-                    setState(() {
-                      sending = false;
-                      _loading = true;
-                      _comments?.clear();
-                      _page = 1;
-                      maxPage = null;
-                    });
-                  } else {
-                    context.showMessage(message: b.errorMessage ?? "Error".tl);
-                    setState(() {
-                      sending = false;
-                    });
-                  }
-                },
-                icon: Icon(
-                  Icons.send,
-                  color: Theme.of(context).colorScheme.secondary,
-                ),
-              ),
-          ],
-        ).paddingLeft(16).paddingRight(4),
+                if (sending)
+                  const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                else
+                  IconButton(
+                    onPressed: () async {
+                      if (controller.text.isEmpty) {
+                        return;
+                      }
+                      setState(() {
+                        sending = true;
+                      });
+                      late Res<bool> b;
+                      if (isReplyPage &&
+                          widget.source.replyCommentFunc != null) {
+                        b = await widget.source.replyCommentFunc!(
+                          widget.data.comicId,
+                          widget.data.subId,
+                          controller.text,
+                          widget.replyComment!.id!,
+                          _replyTarget?.id,
+                        );
+                      } else {
+                        b = await widget.source.sendCommentFunc!(
+                          widget.data.comicId,
+                          widget.data.subId,
+                          controller.text,
+                          widget.replyComment?.id,
+                        );
+                      }
+                      if (!b.error) {
+                        controller.text = "";
+                        setState(() {
+                          sending = false;
+                          _replyTarget = null;
+                          _loading = true;
+                          _comments?.clear();
+                          _page = 1;
+                          maxPage = null;
+                        });
+                      } else {
+                        context.showMessage(
+                          message: b.errorMessage ?? "Error".tl,
+                        );
+                        setState(() {
+                          sending = false;
+                        });
+                      }
+                    },
+                    icon: Icon(
+                      Icons.send,
+                      color: Theme.of(context).colorScheme.secondary,
+                    ),
+                  ),
+              ],
+            ).paddingLeft(16).paddingRight(4),
+          ),
+        ],
       ),
     );
   }
@@ -292,6 +394,7 @@ class _CommentTile extends StatefulWidget {
     required this.comic,
     required this.showAvatar,
     this.showActions = true,
+    this.onReply,
   });
 
   final Comment comment;
@@ -303,6 +406,8 @@ class _CommentTile extends StatefulWidget {
   final bool showAvatar;
 
   final bool showActions;
+
+  final VoidCallback? onReply;
 
   @override
   State<_CommentTile> createState() => _CommentTileState();
@@ -349,6 +454,26 @@ class _CommentTileState extends State<_CommentTile> {
                 Text(widget.comment.userName, style: ts.bold),
                 if (widget.comment.time != null)
                   Text(widget.comment.time!, style: ts.s12),
+                if (widget.comment.replyToUserName != null &&
+                    widget.comment.replyToUserName!.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2, bottom: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.reply,
+                          size: 14,
+                          color: context.colorScheme.primary,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          "${"Replies".tl} @${widget.comment.replyToUserName}",
+                          style: ts.s12.withColor(context.colorScheme.primary),
+                        ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(height: 4),
                 _CommentContent(text: widget.comment.content),
                 buildActions(),
@@ -364,7 +489,19 @@ class _CommentTileState extends State<_CommentTile> {
     if (!widget.showActions) {
       return const SizedBox();
     }
-    if (widget.comment.score == null && widget.comment.replyCount == null) {
+    final canVote =
+        widget.comment.id != null &&
+        widget.comment.score != null &&
+        widget.source.voteCommentFunc != null;
+    final canLike =
+        widget.comment.id != null &&
+        widget.comment.score != null &&
+        widget.source.likeCommentFunc != null;
+    final canOpenReplies =
+        widget.comment.id != null && widget.comment.replyCount != null;
+    final canReply = widget.comment.id != null && widget.onReply != null;
+
+    if (!canVote && !canLike && !canOpenReplies && !canReply) {
       return const SizedBox();
     }
     return SizedBox(
@@ -372,16 +509,38 @@ class _CommentTileState extends State<_CommentTile> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          if (widget.comment.score != null &&
-              widget.source.voteCommentFunc != null)
-            buildVote(),
-          if (widget.comment.score != null &&
-              widget.source.likeCommentFunc != null)
-            buildLike(),
-          if (widget.comment.replyCount != null) buildReply(),
+          if (canVote) buildVote(),
+          if (canLike) buildLike(),
+          if (canOpenReplies) buildReply(),
+          if (canReply) buildReplyAction(),
         ],
       ),
     ).paddingTop(8);
+  }
+
+  Widget buildReplyAction() {
+    return Container(
+      margin: const EdgeInsets.only(left: 8),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outlineVariant,
+          width: 0.6,
+        ),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: ClickInkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: widget.onReply,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.reply, size: 16),
+            const SizedBox(width: 4),
+            Text("Replies".tl, style: ts.s12),
+          ],
+        ).padding(const EdgeInsets.symmetric(horizontal: 12, vertical: 4)),
+      ),
+    );
   }
 
   Widget buildReply() {

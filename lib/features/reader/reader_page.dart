@@ -11,6 +11,7 @@ import 'package:venera_next/features/reader/chapter_completion.dart';
 import 'package:venera_next/features/reader/gesture.dart';
 import 'package:venera_next/features/reader/images.dart';
 import 'package:venera_next/features/reader/reading_session.dart';
+import 'package:venera_next/features/reader/remote_progress.dart';
 import 'package:venera_next/features/reader/scaffold.dart';
 import 'package:venera_next/features/reader/volume.dart';
 import 'package:venera_next/features/sync/sync.dart';
@@ -150,6 +151,7 @@ class ReaderState extends State<Reader>
   late final ReadingSessionTracker _readingSession;
   final _chapterCompletionNotifier = ReaderChapterCompletionNotifier();
   bool _readerContentReady = false;
+  RemoteProgressTracker? _remoteProgressTracker;
 
   @override
   bool isLoading = false;
@@ -211,6 +213,22 @@ class ReaderState extends State<Reader>
     Future.delayed(const Duration(milliseconds: 200), () {
       LocalFavoritesManager().onRead(cid, type);
     });
+    final updateProgressFunc = ComicSource.find(
+      type.sourceKey,
+    )?.updateReadProgressFunc;
+    if (updateProgressFunc != null) {
+      _remoteProgressTracker = RemoteProgressTracker(
+        comicId: cid,
+        onUpdateProgress: updateProgressFunc,
+        onError: (error, stackTrace) {
+          Log.error(
+            'Reader',
+            'Failed to update remote read progress: $error',
+            stackTrace,
+          );
+        },
+      );
+    }
     super.initState();
     WidgetsBinding.instance.addObserver(this);
   }
@@ -258,6 +276,7 @@ class ReaderState extends State<Reader>
     }
     autoPageTurningTimer?.cancel();
     _flushPendingHistoryUpdate();
+    unawaited(_remoteProgressTracker?.dispose());
     unawaited(
       _readingSession.dispose().whenComplete(() {
         DataSync().onDataChanged();
@@ -274,6 +293,7 @@ class ReaderState extends State<Reader>
   @override
   void onReaderContentLoading() {
     _readerContentReady = false;
+    flushRemoteProgress();
     unawaited(_readingSession.pause());
   }
 
@@ -299,8 +319,14 @@ class ReaderState extends State<Reader>
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
+        flushRemoteProgress();
         unawaited(_readingSession.pause());
     }
+  }
+
+  @override
+  void flushRemoteProgress() {
+    unawaited(_remoteProgressTracker?.flush());
   }
 
   @override
@@ -441,6 +467,13 @@ class ReaderState extends State<Reader>
         HistoryManager().addHistoryAsync(history!);
         _updateHistoryTimer = null;
       });
+      final remoteEpId = widget.chapters?.ids.elementAtOrNull(chapter - 1);
+      if (_readerContentReady &&
+          (images?.isNotEmpty ?? false) &&
+          remoteEpId != null &&
+          remoteEpId.isNotEmpty) {
+        _remoteProgressTracker?.schedule(remoteEpId, history!.page);
+      }
     }
   }
 
@@ -697,6 +730,8 @@ abstract mixin class ReaderLocation {
 
   void update();
 
+  void flushRemoteProgress();
+
   bool enablePageAnimation(String cid, ComicType type) => appdata.settings
       .getReaderSetting(cid, type.sourceKey, 'enablePageAnimation');
 
@@ -774,6 +809,7 @@ abstract mixin class ReaderLocation {
 
   bool toChapter(int c, {bool toLastPage = false}) {
     if (_validateChapter(c) && !isLoading) {
+      flushRemoteProgress();
       if (imageViewController?.toChapter(c, toLastPage: toLastPage) ?? false) {
         return true;
       }

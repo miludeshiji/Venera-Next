@@ -187,6 +187,8 @@ class ComicSourceParser {
       _getValue("comic.enableTagsTranslate") ?? false,
       _parseStarRatingFunc(),
       _parseArchiveDownloader(),
+      updateReadProgressFunc: _parseUpdateReadProgressFunc(),
+      replyCommentFunc: _parseReplyCommentFunc(),
     );
 
     await source.loadData();
@@ -793,6 +795,22 @@ class ComicSourceParser {
     };
   }
 
+  UpdateReadProgressFunc? _parseUpdateReadProgressFunc() {
+    if (!_checkExists("comic.updateReadProgress")) return null;
+    return (comicId, epId, page) async {
+      try {
+        await JsEngine().runCode("""
+          ComicSource.sources.$_key.comic.updateReadProgress(
+            ${jsonEncode(comicId)}, ${jsonEncode(epId)}, ${jsonEncode(page)})
+        """);
+        return const Res(true);
+      } catch (e, s) {
+        Log.error("Network", "$e\n$s");
+        return Res.error(e.toString());
+      }
+    };
+  }
+
   FavoriteData? _loadFavoriteData() {
     if (!_checkExists("favorites")) return null;
 
@@ -995,6 +1013,22 @@ class ComicSourceParser {
         }
       }
       return res;
+    };
+  }
+
+  ReplyCommentFunc? _parseReplyCommentFunc() {
+    if (!_checkExists("comic.replyComment")) return null;
+    return (id, subId, content, parentId, replyId) async {
+      try {
+        await JsEngine().runCode("""
+          ComicSource.sources.$_key.comic.replyComment(
+            ${jsonEncode(id)}, ${jsonEncode(subId)}, ${jsonEncode(content)}, ${jsonEncode(parentId)}, ${jsonEncode(replyId)})
+        """);
+        return const Res(true);
+      } catch (e, s) {
+        Log.error("Network", "$e\n$s");
+        return Res.error(e.toString());
+      }
     };
   }
 

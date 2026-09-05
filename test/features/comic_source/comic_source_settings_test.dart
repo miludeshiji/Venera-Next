@@ -238,6 +238,47 @@ void main() {
     expect(result.comments.single.id, '12');
   });
 
+  test(
+    'normalize comments result accepts userId, replyToId, replyToUserName and handles null id',
+    () {
+      final result = debugNormalizeComicSourceCommentsResult(<dynamic, dynamic>{
+        'comments': [
+          <dynamic, dynamic>{
+            'userName': 'alice',
+            'content': 'nested comment',
+            'userId': 'u-100',
+            'replyToId': 88,
+            'replyToUserName': 'bob',
+            'id': null,
+          },
+          <dynamic, dynamic>{
+            'userName': 'bob',
+            'content': 'root comment',
+            'userId': 200,
+            'id': 'c-88',
+          },
+        ],
+      });
+
+      expect(result!.comments, hasLength(2));
+      final first = result.comments[0];
+      expect(first.userName, 'alice');
+      expect(first.content, 'nested comment');
+      expect(first.userId, 'u-100');
+      expect(first.replyToId, '88');
+      expect(first.replyToUserName, 'bob');
+      expect(first.id, isNull);
+
+      final second = result.comments[1];
+      expect(second.userName, 'bob');
+      expect(second.content, 'root comment');
+      expect(second.userId, '200');
+      expect(second.replyToId, isNull);
+      expect(second.replyToUserName, isNull);
+      expect(second.id, 'c-88');
+    },
+  );
+
   test('normalize comments result rejects invalid data', () {
     expect(debugNormalizeComicSourceCommentsResult(null), isNull);
     expect(

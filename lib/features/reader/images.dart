@@ -85,8 +85,8 @@ class ReaderImagesState extends State<ReaderImages> {
           inProgress = false;
           _handleJumpToLastPage();
           Future.microtask(() {
-            reader.updateHistory();
             reader.onReaderContentReady();
+            reader.updateHistory();
           });
         });
       } catch (e) {
@@ -115,8 +115,8 @@ class ReaderImagesState extends State<ReaderImages> {
           inProgress = false;
           _handleJumpToLastPage();
           Future.microtask(() {
-            reader.updateHistory();
             reader.onReaderContentReady();
+            reader.updateHistory();
           });
         });
       }
@@ -939,6 +939,7 @@ class ContinuousModeState extends State<_ContinuousMode>
     var segment = _segmentOfChapter(imageRef.chapter);
     var chapterChanged = reader.chapter != imageRef.chapter;
     if (segment != null && chapterChanged) {
+      reader.flushRemoteProgress();
       reader.chapter = imageRef.chapter;
       reader.images = segment.images;
     }

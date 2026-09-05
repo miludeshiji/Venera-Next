@@ -4,15 +4,17 @@ import 'package:venera_next/foundation/history_contract.dart';
 
 class Comment {
   final String userName;
+  final String? userId;
   final String? avatar;
   final String content;
   final String? time;
   final int? replyCount;
   final String? id;
+  final String? replyToId;
+  final String? replyToUserName;
   int? score;
   final bool? isLiked;
   int? voteStatus; // 1: upvote, -1: downvote, 0: none
-
   static String? parseTime(dynamic value) {
     if (value == null) return null;
     if (value is int) {
@@ -31,11 +33,14 @@ class Comment {
 
   Comment.fromJson(Map<String, dynamic> json)
     : userName = json["userName"],
+      userId = json["userId"]?.toString(),
       avatar = json["avatar"],
       content = json["content"],
       time = parseTime(json["time"]),
       replyCount = json["replyCount"],
-      id = json["id"].toString(),
+      id = json["id"]?.toString(),
+      replyToId = json["replyToId"]?.toString(),
+      replyToUserName = json["replyToUserName"]?.toString(),
       score = json["score"],
       isLiked = json["isLiked"],
       voteStatus = json["voteStatus"];

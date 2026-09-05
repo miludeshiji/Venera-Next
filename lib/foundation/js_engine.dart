@@ -375,6 +375,11 @@ class JsEngine with _JSEngineApi, Init {
     return _isRetryableReadError(error);
   }
 
+  @visibleForTesting
+  static Object? debugConvert(Map<String, dynamic> data) {
+    return JsEngine()._convert(data);
+  }
+
   Future<void> dispose() async {
     _cache = null;
     _closed = true;
@@ -560,6 +565,25 @@ mixin class _JSEngineApi {
           return Uint8List.fromList(sha256.convert(value).bytes);
         case "sha512":
           return Uint8List.fromList(sha512.convert(value).bytes);
+        case "gzip":
+          final List<int> bytes;
+          if (value is Uint8List) {
+            bytes = value;
+          } else if (value is List<int>) {
+            bytes = value;
+          } else if (value is List) {
+            bytes = List<int>.from(value);
+          } else {
+            throw ArgumentError(
+              "Unsupported value type for gzip: ${value.runtimeType}",
+            );
+          }
+          if (!isEncode &&
+              (bytes.length < 2 || bytes[0] != 0x1f || bytes[1] != 0x8b)) {
+            throw const FormatException("Invalid gzip header");
+          }
+          final result = isEncode ? gzip.encode(bytes) : gzip.decode(bytes);
+          return result is Uint8List ? result : Uint8List.fromList(result);
         case "hmac":
           var key = data["key"];
           var hash = data["hash"];
