@@ -2,11 +2,15 @@ import argparse
 import subprocess
 
 
-def prepare_toolchain(version: str, targets: list[str]) -> None:
-    subprocess.run(
-        ["rustup", "toolchain", "uninstall", version],
-        check=False,
-    )
+DEFAULT_VERSION = "1.85.1"
+
+
+def prepare_toolchain(
+    version: str = DEFAULT_VERSION,
+    targets: list[str] | None = None,
+) -> None:
+    if targets is None:
+        targets = []
 
     command = [
         "rustup",
@@ -27,13 +31,16 @@ def prepare_toolchain(version: str, targets: list[str]) -> None:
     )
 
 
-def main() -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--version", default="1.85.1")
+    parser.add_argument("--version", default=DEFAULT_VERSION)
     parser.add_argument("--target", action="append", default=[])
-    args = parser.parse_args()
-    prepare_toolchain(args.version, args.target)
+    return parser.parse_args(argv)
 
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    prepare_toolchain(args.version, args.target)
 
 if __name__ == "__main__":
     main()

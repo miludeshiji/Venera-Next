@@ -146,6 +146,7 @@ jobs:
           channel: "stable"
           flutter-version-file: pubspec.yaml
           architecture: x64
+          cache: true
       - run: sudo xcode-select --switch /Applications/Xcode_16.4.app
       - name: 准备 Rust 工具链
         run: |
@@ -231,7 +232,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: rm -rf /opt/hostedtoolcache
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: "stable"
@@ -326,19 +326,20 @@ jobs:
           done
 
   Build_Windows:
-    runs-on: windows-latest
+    runs-on: windows-2025
     needs: Prepare_Release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: 安装 Inno Setup
-        run: choco install innosetup --no-progress
+        run: choco install innosetup --version=6.7.1 --no-progress -y
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: "stable"
           flutter-version-file: pubspec.yaml
           architecture: x64
+          cache: true
       - name: 构建 Windows 安装包
         run: |
           flutter pub get --enforce-lockfile
@@ -428,6 +429,7 @@ jobs:
           channel: 'stable'
           flutter-version-file: pubspec.yaml
           architecture: x64
+          cache: true
       - name: 准备 Rust 工具链
         run: python3 .github/scripts/prepare_rust_toolchain.py
       - name: 安装 Linux 构建依赖
@@ -525,6 +527,7 @@ jobs:
           channel: 'master'
           flutter-version-file: pubspec.yaml
           architecture: arm64
+          cache: true
       - name: 准备 Rust 工具链
         run: python3 .github/scripts/prepare_rust_toolchain.py
       - name: 安装 Linux ARM64 构建依赖

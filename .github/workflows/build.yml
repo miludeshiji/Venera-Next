@@ -80,8 +80,6 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-      - name: 释放 Android 构建所需磁盘空间
-        run: rm -rf /opt/hostedtoolcache
       - uses: subosito/flutter-action@v2
         with:
           channel: "stable"
