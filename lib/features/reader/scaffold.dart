@@ -639,7 +639,7 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
                           : context.reader.toPage(1)
                     : context.reader.chapter < context.reader.maxChapter
                     ? context.reader.toNextChapter()
-                    : context.reader.toPage(context.reader.maxPage),
+                    : context.reader.toVisualEnd(),
                 icon: const Icon(Icons.first_page),
               ),
               Expanded(child: buildSlider()),
@@ -647,7 +647,7 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
                 onPressed: () => !isReversed
                     ? context.reader.chapter < context.reader.maxChapter
                           ? context.reader.toNextChapter()
-                          : context.reader.toPage(context.reader.maxPage)
+                          : context.reader.toVisualEnd()
                     : context.reader.chapter > 1
                     ? context.reader.toPrevChapter()
                     : context.reader.toPage(1),
@@ -903,7 +903,9 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
             update();
           }
           if (key == "showChapterComments" ||
-              key == "showChapterCommentsAtEnd") {
+              key == "showChapterCommentsAtEnd" ||
+              key == "splitDualPage" ||
+              key == "splitDualPageInvert") {
             update();
           }
           if (key == "showSystemStatusBar") {
@@ -1053,6 +1055,9 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
   Future<int?> selectImage() async {
     var reader = context.reader;
     var imageViewController = context.reader.imageViewController;
+    if (imageViewController == null) {
+      return null;
+    }
 
     bool needsSelection = false;
     int? singleImageIndex;
@@ -1081,11 +1086,15 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
       if (location == null) {
         return null;
       }
-      var imageKey = imageViewController!.getImageKeyByOffset(location);
+      var imageKey = imageViewController.getImageKeyByOffset(location);
       if (imageKey == null) {
         return null;
       }
-      return reader.images!.indexOf(imageKey);
+      final index = reader.images?.indexOf(imageKey);
+      if (index == null || index == -1) {
+        return null;
+      }
+      return index;
     }
   }
 

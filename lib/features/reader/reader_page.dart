@@ -291,7 +291,10 @@ class ReaderState extends State<Reader>
   }
 
   @override
-  void onReaderContentLoading() {
+  void onReaderContentLoading({bool keepImageViewController = false}) {
+    super.onReaderContentLoading(
+      keepImageViewController: keepImageViewController,
+    );
     _readerContentReady = false;
     flushRemoteProgress();
     unawaited(_readingSession.pause());
@@ -364,28 +367,42 @@ class ReaderState extends State<Reader>
   @override
   int get maxChapter => widget.chapters?.length ?? 1;
 
+  bool get isSplitDualPageEnabled =>
+      mode.isGallery &&
+      imagesPerPage == 1 &&
+      appdata.settings.getReaderSetting(cid, type.sourceKey, 'splitDualPage') ==
+          true;
+
   @override
   void onPageChanged() {
     updateHistory();
+    if (consumeChapterCompletionSuppression()) {
+      return;
+    }
+    unawaited(_notifyChapterCompletedIfNeeded());
+  }
+
+  void notifyChapterCompletedIfNeeded() {
     unawaited(_notifyChapterCompletedIfNeeded());
   }
 
   Future<void> _notifyChapterCompletedIfNeeded() async {
     final chapters = widget.chapters;
+    if (chapters == null) return;
     final lifecycleState = WidgetsBinding.instance.lifecycleState;
-    if (!_readerContentReady ||
-        !isReaderChapterCompletionPosition(
-          isActive:
-              lifecycleState == null ||
-              lifecycleState == AppLifecycleState.resumed,
-          hasImages: images?.isNotEmpty ?? false,
-          page: page,
-          lastImagePage: maxPage,
-          totalPages: totalPages,
-        ) ||
-        chapters == null ||
-        chapter < 1 ||
-        chapter > chapters.length) {
+    if (!canCompleteReaderChapter(
+      isContentReady: _readerContentReady,
+      isActive:
+          lifecycleState == null || lifecycleState == AppLifecycleState.resumed,
+      hasImages: images?.isNotEmpty ?? false,
+      page: page,
+      lastImagePage: maxPage,
+      totalPages: totalPages,
+      chapter: chapter,
+      maxChapter: chapters.length,
+      isGallerySplitEnabled: isSplitDualPageEnabled,
+      controller: imageViewController,
+    )) {
       return;
     }
     final chapterKey = chapters.ids.elementAtOrNull(chapter - 1);
@@ -704,6 +721,9 @@ abstract mixin class ReaderLocation {
   /// Flag to indicate that the page should jump to the last page after images are loaded.
   bool jumpToLastPageOnLoad = false;
 
+  /// Flag to indicate that the initial visual page should be the last visual page
+  /// (e.g. when jumping to the previous chapter's end).
+  bool targetLastVisualPage = false;
   int get page => pageValue;
 
   set page(int value) {
@@ -726,7 +746,11 @@ abstract mixin class ReaderLocation {
 
   ComicType get type;
 
-  void onReaderContentLoading();
+  void onReaderContentLoading({bool keepImageViewController = false}) {
+    if (!keepImageViewController) {
+      imageViewController = null;
+    }
+  }
 
   void update();
 
@@ -738,6 +762,27 @@ abstract mixin class ReaderLocation {
   ReaderImageViewController? imageViewController;
 
   void onPageChanged();
+
+  bool _suppressNextChapterCompletion = false;
+
+  /// Sets [page] while suppressing chapter completion notification for this update.
+  /// Used exclusively during comments tail-growth recovery.
+  void setPageSuppressingCompletion(int page) {
+    _suppressNextChapterCompletion = true;
+    try {
+      setPage(page);
+    } finally {
+      _suppressNextChapterCompletion = false;
+    }
+  }
+
+  /// Consumes and clears the chapter completion suppression flag.
+  @protected
+  bool consumeChapterCompletionSuppression() {
+    final suppressed = _suppressNextChapterCompletion;
+    _suppressNextChapterCompletion = false;
+    return suppressed;
+  }
 
   void setPage(int page) {
     // Prevent page change during animation
@@ -751,19 +796,41 @@ abstract mixin class ReaderLocation {
     return page >= 1 && page <= totalPages;
   }
 
+  void startPageAnimation() {
+    _animationCount++;
+    update();
+  }
+
+  void endPageAnimation() {
+    if (_animationCount > 0) {
+      _animationCount--;
+      update();
+    }
+  }
+
   /// Returns true if the page is changed
   bool toNextPage() {
+    if (imageViewController?.toNextPage() ?? false) {
+      return true;
+    }
     return toPage(page + 1);
   }
 
   /// Returns true if the page is changed
   bool toPrevPage() {
+    if (imageViewController?.toPrevPage() ?? false) {
+      return true;
+    }
     return toPage(page - 1);
   }
 
   int _animationCount = 0;
 
   bool toPage(int page) {
+    final controller = imageViewController;
+    if (controller == null) {
+      return false;
+    }
     if (_validatePage(page)) {
       if (page == this.page && page != 1 && page != totalPages) {
         return false;
@@ -773,7 +840,7 @@ abstract mixin class ReaderLocation {
         _pendingPage = page;
         _animationCount++;
         update();
-        imageViewController!.animateToPage(page).then((_) {
+        controller.animateToPage(page).then((_) {
           _animationCount--;
           if (_pendingPage == page) {
             _pendingPage = null;
@@ -783,11 +850,19 @@ abstract mixin class ReaderLocation {
       } else {
         this.page = page;
         update();
-        imageViewController!.toPage(page);
+        controller.toPage(page);
       }
       return true;
     }
     return false;
+  }
+
+  void toVisualEnd() {
+    if (imageViewController != null) {
+      imageViewController!.toVisualEnd();
+    } else if (isLoading) {
+      jumpToLastPageOnLoad = true;
+    }
   }
 
   bool get isPageAnimating => _animationCount > 0;
@@ -836,10 +911,11 @@ abstract mixin class ReaderLocation {
         'autoPageTurningInterval',
       );
       autoPageTurningTimer = Timer.periodic(Duration(seconds: interval), (_) {
-        if (page == maxPage) {
-          autoPageTurningTimer!.cancel();
+        if (!toNextPage()) {
+          autoPageTurningTimer?.cancel();
+          autoPageTurningTimer = null;
+          update();
         }
-        toNextPage();
       });
     }
   }
@@ -917,10 +993,26 @@ enum ReaderMode {
   }
 }
 
-abstract interface class ReaderImageViewController {
+abstract interface class ReaderImageViewController
+    implements ChapterCompletionSourceController {
   void toPage(int page);
 
+  void toVisualEnd();
+
   Future<void> animateToPage(int page);
+
+  bool toNextPage();
+
+  bool toPrevPage();
+
+  @override
+  bool isAtLastVisualPartOfSource();
+
+  @override
+  bool isCurrentSourceSizeResolved();
+
+  @override
+  bool isReadyForChapter(int chapter);
 
   bool toChapter(int chapter, {bool toLastPage = false});
 

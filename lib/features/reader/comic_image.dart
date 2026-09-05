@@ -7,6 +7,7 @@ import 'package:venera_next/features/reader/gesture.dart';
 import 'package:venera_next/foundation/context.dart';
 import 'package:venera_next/foundation/global_state.dart';
 import 'package:venera_next/foundation/translations.dart';
+import 'package:venera_next/features/reader/gallery_page_plan.dart';
 
 class ComicImage extends StatefulWidget {
   /// Modified from flutter Image
@@ -31,6 +32,8 @@ class ComicImage extends StatefulWidget {
     this.isAntiAlias = false,
     this.splitWideImage = false,
     this.splitWideImageInvert = false,
+    this.wideImagePart,
+    this.onImageSize,
     Map<String, String>? headers,
     int? cacheWidth,
     int? cacheHeight,
@@ -75,6 +78,9 @@ class ComicImage extends StatefulWidget {
   final bool splitWideImage;
 
   final bool splitWideImageInvert;
+  final GalleryImagePart? wideImagePart;
+
+  final void Function(Size size)? onImageSize;
 
   final void Function(State<ComicImage> state)? onInit;
 
@@ -82,11 +88,13 @@ class ComicImage extends StatefulWidget {
 
   static void clear() => ComicImageState.clear();
 
+  static Size? getCachedImageSize(ImageProvider provider) =>
+      ComicImageState._cache[provider.hashCode];
+
   @override
   State<ComicImage> createState() => ComicImageState();
 }
 
-@visibleForTesting
 bool shouldSplitWideImage(Size imageSize) => imageSize.width > imageSize.height;
 
 @visibleForTesting
@@ -110,6 +118,44 @@ List<Rect> splitWideImageSourceRects(Size imageSize, {required bool invert}) {
   return invert ? [left, right] : [right, left];
 }
 
+@visibleForTesting
+Rect wideImagePartSourceRect(Size imageSize, GalleryImagePart part) {
+  final halfWidth = imageSize.width / 2;
+  switch (part) {
+    case GalleryImagePart.left:
+      return Rect.fromLTWH(0, 0, halfWidth, imageSize.height);
+    case GalleryImagePart.right:
+      return Rect.fromLTWH(
+        imageSize.width - halfWidth,
+        0,
+        halfWidth,
+        imageSize.height,
+      );
+    case GalleryImagePart.full:
+      return Rect.fromLTWH(0, 0, imageSize.width, imageSize.height);
+  }
+}
+
+@visibleForTesting
+Size wideImagePartDisplaySize(Size imageSize, GalleryImagePart? part) {
+  if (part == null ||
+      part == GalleryImagePart.full ||
+      !shouldSplitWideImage(imageSize)) {
+    return imageSize;
+  }
+  return Size(imageSize.width / 2, imageSize.height);
+}
+
+@visibleForTesting
+bool shouldNotifyImageSize({
+  required Size? lastReportedSize,
+  required Object? lastReportedKey,
+  required Size currentSize,
+  required Object currentKey,
+}) {
+  return lastReportedKey != currentKey || lastReportedSize != currentSize;
+}
+
 class ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
   ImageStream? _imageStream;
   ImageInfo? _imageInfo;
@@ -121,10 +167,30 @@ class ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
   late DisposableBuildContext<State<ComicImage>> _scrollAwareContext;
   Object? _lastException;
   ImageStreamCompleterHandle? _completerHandle;
+  Size? _lastReportedSize;
+  Object? _lastReportedImageKey;
+
+  void _notifyImageSizeIfNeeded(ImageInfo? imageInfo) {
+    if (imageInfo == null) return;
+    final currentSize = Size(
+      imageInfo.image.width.toDouble(),
+      imageInfo.image.height.toDouble(),
+    );
+    if (shouldNotifyImageSize(
+      lastReportedSize: _lastReportedSize,
+      lastReportedKey: _lastReportedImageKey,
+      currentSize: currentSize,
+      currentKey: widget.image,
+    )) {
+      _lastReportedSize = currentSize;
+      _lastReportedImageKey = widget.image;
+      widget.onImageSize?.call(currentSize);
+    }
+  }
 
   static final Map<int, Size> _cache = {};
 
-  static clear() => _cache.clear();
+  static void clear() => _cache.clear();
 
   @override
   void initState() {
@@ -142,6 +208,8 @@ class ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
     _completerHandle?.dispose();
     _scrollAwareContext.dispose();
     _replaceImage(info: null);
+    _lastReportedSize = null;
+    _lastReportedImageKey = null;
     widget.onDispose?.call(this);
     super.dispose();
   }
@@ -165,6 +233,8 @@ class ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
     super.didUpdateWidget(oldWidget);
     if (widget.image != oldWidget.image) {
       _resolveImage();
+      _lastReportedSize = null;
+      _lastReportedImageKey = null;
     }
   }
 
@@ -232,6 +302,7 @@ class ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
   }
 
   void _handleImageFrame(ImageInfo imageInfo, bool synchronousCall) {
+    _notifyImageSizeIfNeeded(imageInfo);
     setState(() {
       _replaceImage(info: imageInfo);
       _loadingProgress = null;
@@ -381,13 +452,20 @@ class ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
             _imageInfo!.image.width.toDouble(),
             _imageInfo!.image.height.toDouble(),
           );
+          _notifyImageSizeIfNeeded(_imageInfo);
         }
-
         Size? cacheSize = _cache[widget.image.hashCode];
         if (cacheSize != null) {
-          final displaySize = widget.splitWideImage
-              ? splitWideImageDisplaySize(cacheSize)
-              : cacheSize;
+          final isWide = shouldSplitWideImage(cacheSize);
+          final hasSinglePart =
+              widget.wideImagePart != null &&
+              widget.wideImagePart != GalleryImagePart.full &&
+              isWide;
+          final displaySize = hasSinglePart
+              ? wideImagePartDisplaySize(cacheSize, widget.wideImagePart)
+              : (widget.splitWideImage
+                    ? splitWideImageDisplaySize(cacheSize)
+                    : cacheSize);
           if (width == double.infinity) {
             width = constrains.maxWidth;
             height = width * displaySize.height / displaySize.width;
@@ -410,10 +488,30 @@ class ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
             _imageInfo!.image.width.toDouble(),
             _imageInfo!.image.height.toDouble(),
           );
-          final shouldSplit =
-              widget.splitWideImage && shouldSplitWideImage(imageSize);
+          final isWide = shouldSplitWideImage(imageSize);
+          final hasSinglePart =
+              widget.wideImagePart != null &&
+              widget.wideImagePart != GalleryImagePart.full &&
+              isWide;
+          final shouldSplit = !hasSinglePart && widget.splitWideImage && isWide;
           // build image
-          Widget result = shouldSplit
+          Widget result = hasSinglePart
+              ? _SinglePartWideImage(
+                  image: _imageInfo!.image,
+                  part: widget.wideImagePart!,
+                  width: width,
+                  height: height,
+                  color: widget.color,
+                  opacity: widget.opacity,
+                  colorBlendMode: widget.colorBlendMode,
+                  fit: widget.fit,
+                  alignment: widget.alignment,
+                  matchTextDirection: widget.matchTextDirection,
+                  invertColors: _invertColors,
+                  isAntiAlias: widget.isAntiAlias,
+                  filterQuality: widget.filterQuality,
+                )
+              : shouldSplit
               ? _SplitWideImage(
                   image: _imageInfo!.image,
                   width: width,
@@ -678,5 +776,134 @@ class _SplitWideImagePainter extends CustomPainter {
         oldDelegate.isAntiAlias != isAntiAlias ||
         oldDelegate.filterQuality != filterQuality ||
         oldDelegate.splitInvert != splitInvert;
+  }
+}
+
+class _SinglePartWideImage extends StatelessWidget {
+  const _SinglePartWideImage({
+    required this.image,
+    required this.part,
+    required this.width,
+    required this.height,
+    required this.color,
+    required this.opacity,
+    required this.colorBlendMode,
+    required this.fit,
+    required this.alignment,
+    required this.matchTextDirection,
+    required this.invertColors,
+    required this.isAntiAlias,
+    required this.filterQuality,
+  });
+
+  final ui.Image image;
+  final GalleryImagePart part;
+  final double? width;
+  final double? height;
+  final Color? color;
+  final Animation<double>? opacity;
+  final BlendMode? colorBlendMode;
+  final BoxFit? fit;
+  final AlignmentGeometry alignment;
+  final bool matchTextDirection;
+  final bool invertColors;
+  final bool isAntiAlias;
+  final FilterQuality filterQuality;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget result = CustomPaint(
+      size: Size(
+        width ?? image.width.toDouble() / 2,
+        height ?? image.height.toDouble(),
+      ),
+      painter: _SinglePartWideImagePainter(
+        image: image,
+        part: part,
+        color: color,
+        colorBlendMode: colorBlendMode,
+        fit: fit,
+        alignment: alignment.resolve(Directionality.maybeOf(context)),
+        matchTextDirection: matchTextDirection,
+        textDirection: Directionality.maybeOf(context),
+        invertColors: invertColors,
+        isAntiAlias: isAntiAlias,
+        filterQuality: filterQuality,
+      ),
+    );
+    if (opacity != null) {
+      result = FadeTransition(opacity: opacity!, child: result);
+    }
+    return SizedBox(width: width, height: height, child: result);
+  }
+}
+
+class _SinglePartWideImagePainter extends CustomPainter {
+  const _SinglePartWideImagePainter({
+    required this.image,
+    required this.part,
+    required this.color,
+    required this.colorBlendMode,
+    required this.fit,
+    required this.alignment,
+    required this.matchTextDirection,
+    required this.textDirection,
+    required this.invertColors,
+    required this.isAntiAlias,
+    required this.filterQuality,
+  });
+
+  final ui.Image image;
+  final GalleryImagePart part;
+  final Color? color;
+  final BlendMode? colorBlendMode;
+  final BoxFit? fit;
+  final Alignment alignment;
+  final bool matchTextDirection;
+  final TextDirection? textDirection;
+  final bool invertColors;
+  final bool isAntiAlias;
+  final FilterQuality filterQuality;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+
+    final imageSize = Size(image.width.toDouble(), image.height.toDouble());
+    final sourceRect = wideImagePartSourceRect(imageSize, part);
+    final displaySize = Size(sourceRect.width, sourceRect.height);
+    final fitted = applyBoxFit(fit ?? BoxFit.scaleDown, displaySize, size);
+    final destination = alignment.inscribe(
+      fitted.destination,
+      Offset.zero & size,
+    );
+
+    final paint = Paint()
+      ..isAntiAlias = isAntiAlias
+      ..filterQuality = filterQuality
+      ..invertColors = invertColors;
+    if (color != null) {
+      paint.colorFilter = ColorFilter.mode(
+        color!,
+        colorBlendMode ?? BlendMode.srcIn,
+      );
+    }
+
+    canvas.drawImageRect(image, sourceRect, destination, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SinglePartWideImagePainter oldDelegate) {
+    return oldDelegate.image != image ||
+        oldDelegate.part != part ||
+        oldDelegate.color != color ||
+        oldDelegate.colorBlendMode != colorBlendMode ||
+        oldDelegate.fit != fit ||
+        oldDelegate.alignment != alignment ||
+        oldDelegate.matchTextDirection != matchTextDirection ||
+        oldDelegate.textDirection != textDirection ||
+        oldDelegate.invertColors != invertColors ||
+        oldDelegate.isAntiAlias != isAntiAlias ||
+        oldDelegate.filterQuality != filterQuality;
   }
 }

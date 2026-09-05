@@ -150,6 +150,9 @@ class ReaderGestureDetectorState
     if (HardwareKeyboard.instance.isControlPressed) {
       return;
     }
+    if (context.reader.imageViewController == null) {
+      return;
+    }
     if (context.reader.mode.key.startsWith('gallery')) {
       if (forward) {
         if (!context.reader.toNextPage() &&
@@ -217,7 +220,11 @@ class ReaderGestureDetectorState
   }
 
   void onTap(Offset location) {
-    if (reader.imageViewController!.handleOnTap(location)) {
+    final controller = reader.imageViewController;
+    if (controller == null) {
+      return;
+    }
+    if (controller.handleOnTap(location)) {
       return;
     } else if (context.readerScaffold.isOpen) {
       context.readerScaffold.openOrClose();
@@ -379,7 +386,8 @@ class ReaderGestureDetectorState
 
   void copyImage(Offset location) async {
     var controller = reader.imageViewController;
-    var image = await controller!.getImageByOffset(location);
+    if (controller == null) return;
+    var image = await controller.getImageByOffset(location);
     if (image != null) {
       writeImageToClipboard(image);
     } else {
@@ -389,7 +397,8 @@ class ReaderGestureDetectorState
 
   void saveImage(Offset location) async {
     var controller = reader.imageViewController;
-    var image = await controller!.getImageByOffset(location);
+    if (controller == null) return;
+    var image = await controller.getImageByOffset(location);
     if (image != null) {
       var filetype = detectFileType(image);
       saveFile(filename: "image${filetype.ext}", data: image);

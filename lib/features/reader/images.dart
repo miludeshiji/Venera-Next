@@ -15,6 +15,8 @@ import 'package:venera_next/features/comic_source/comic_source.dart';
 import 'package:venera_next/features/local_comics/local_comics.dart';
 import 'package:venera_next/features/reader/chapter_comments.dart';
 import 'package:venera_next/features/reader/comic_image.dart';
+import 'package:venera_next/features/reader/gallery_page_plan.dart';
+import 'package:venera_next/features/reader/gallery_coordinator.dart';
 import 'package:venera_next/features/reader/reader_page.dart';
 import 'package:venera_next/features/reader/waterfall_flow.dart';
 import 'package:venera_next/foundation/appdata.dart';
@@ -58,8 +60,15 @@ class ReaderImagesState extends State<ReaderImages> {
   /// Handle jumping to last page when jumpToLastPageOnLoad is true
   void _handleJumpToLastPage() {
     if (reader.jumpToLastPageOnLoad) {
+      if (reader.isSplitDualPageEnabled) {
+        reader.targetLastVisualPage = true;
+      } else {
+        reader.targetLastVisualPage = false;
+      }
       reader.pageValue = reader.maxPage;
       reader.jumpToLastPageOnLoad = false;
+    } else if (!reader.isSplitDualPageEnabled) {
+      reader.targetLastVisualPage = false;
     }
   }
 
@@ -162,9 +171,23 @@ class ReaderImagesState extends State<ReaderImages> {
               'showChapterCommentsAtEnd',
             ) ==
             true;
+        var splitDualPage =
+            appdata.settings.getReaderSetting(
+              reader.cid,
+              reader.type.sourceKey,
+              'splitDualPage',
+            ) ==
+            true;
+        var splitDualPageInvert =
+            appdata.settings.getReaderSetting(
+              reader.cid,
+              reader.type.sourceKey,
+              'splitDualPageInvert',
+            ) ==
+            true;
         return _GalleryMode(
           key: Key(
-            '${reader.mode.key}_${reader.imagesPerPage}_${showComments}_$showCommentsAtEnd',
+            '${reader.mode.key}_${reader.imagesPerPage}_${showComments}_${showCommentsAtEnd}_${splitDualPage}_${splitDualPageInvert}_${reader.chapter}',
           ),
         );
       } else {
@@ -177,12 +200,30 @@ class ReaderImagesState extends State<ReaderImages> {
   }
 }
 
-class _GalleryMode extends StatefulWidget {
-  const _GalleryMode({super.key});
+GalleryReadingDirection _galleryReadingDirectionOf(ReaderMode mode) {
+  switch (mode) {
+    case ReaderMode.galleryRightToLeft:
+    case ReaderMode.continuousRightToLeft:
+      return GalleryReadingDirection.rightToLeft;
+    case ReaderMode.galleryTopToBottom:
+    case ReaderMode.continuousTopToBottom:
+    case ReaderMode.waterfallTopToBottom:
+      return GalleryReadingDirection.topToBottom;
+    case ReaderMode.galleryLeftToRight:
+    case ReaderMode.continuousLeftToRight:
+      return GalleryReadingDirection.leftToRight;
+  }
+}
+
+@visibleForTesting
+class GalleryMode extends StatefulWidget {
+  const GalleryMode({super.key});
 
   @override
-  State<_GalleryMode> createState() => GalleryModeState();
+  State<GalleryMode> createState() => GalleryModeState();
 }
+
+typedef _GalleryMode = GalleryMode;
 
 class GalleryModeState extends State<_GalleryMode>
     implements ReaderImageViewController {
@@ -190,9 +231,82 @@ class GalleryModeState extends State<_GalleryMode>
 
   int get preCacheCount => appdata.settings["preloadImageCount"];
 
-  var photoViewControllers = <int, PhotoViewController>{};
+  final _pool = GalleryPhotoViewControllerPool();
+  String? _lastVisibleStableIdentity;
+  bool _isAnimatingVisualPage = false;
+
+  String _controllerKeyForIndex(int index) {
+    return resolveControllerKey(
+      controllerIndex: index,
+      isSplitEnabled: isSplitEnabled,
+      plan: _pagePlan,
+      isCommentsPage: isChapterCommentsPage(index),
+      getPageImagesRange: getPageImagesRange,
+    );
+  }
+
+  String? _visibleStableIdentityForIndex(int index) {
+    return resolveVisibleStableIdentity(
+      controllerIndex: index,
+      totalVisualPages: totalVisualPages,
+      isSplitEnabled: isSplitEnabled,
+      plan: _pagePlan,
+      isCommentsPage: isChapterCommentsPage(index),
+      getPageImagesRange: getPageImagesRange,
+    );
+  }
 
   late ReaderState reader;
+
+  GalleryPagePlan? _pagePlan;
+  int _currentControllerIndex = 1;
+  int? _attachedChapter;
+  final Set<int> _resolvedSourceIndices = <int>{};
+  final _coalescer = GallerySizeUpdateCoalescer();
+  bool _recoveryScheduled = false;
+  bool isSourceSizeResolved(int sourceIndex) =>
+      _resolvedSourceIndices.contains(sourceIndex);
+
+  @override
+  bool isReadyForChapter(int chapter) =>
+      mounted && _attachedChapter == chapter && _pagePlan != null;
+
+  @override
+  bool isCurrentSourceSizeResolved() {
+    if (!isSplitEnabled || _pagePlan == null) return true;
+    final current = controller.hasClients && controller.page != null
+        ? controller.page!.round()
+        : _currentControllerIndex;
+    if (isChapterCommentsPage(current)) {
+      return isCommentsSourceSizeResolved(
+        isSplitEnabled: isSplitEnabled,
+        sourcePageCount: reader.images?.length ?? 0,
+        resolvedSourceIndices: _resolvedSourceIndices,
+      );
+    }
+    final visualIndex = current - 1;
+    final displayPage = _pagePlan!.maybeDisplayPageAt(visualIndex);
+    if (displayPage == null) return false;
+    return _resolvedSourceIndices.contains(displayPage.sourceIndex);
+  }
+
+  bool get isSplitEnabled => reader.imagesPerPage == 1 && _splitDualPage;
+
+  bool get _splitDualPage =>
+      appdata.settings.getReaderSetting(
+        reader.cid,
+        reader.type.sourceKey,
+        'splitDualPage',
+      ) ==
+      true;
+
+  bool get _splitDualPageInvert =>
+      appdata.settings.getReaderSetting(
+        reader.cid,
+        reader.type.sourceKey,
+        'splitDualPageInvert',
+      ) ==
+      true;
 
   bool get showChapterCommentsAtEnd {
     if (reader.mode != ReaderMode.galleryLeftToRight &&
@@ -222,10 +336,20 @@ class GalleryModeState extends State<_GalleryMode>
         : 1 + ((reader.images!.length - 1) / reader.imagesPerPage).ceil();
   }
 
-  int get totalPages => reader.totalPages;
+  int get totalVisualImagePages => (isSplitEnabled && _pagePlan != null)
+      ? _pagePlan!.displayPageCount
+      : totalImagePages;
+
+  int get totalVisualPages {
+    var pages = totalVisualImagePages;
+    if (showChapterCommentsAtEnd) pages++;
+    return pages;
+  }
+
+  int get totalPages => totalVisualPages;
 
   bool isChapterCommentsPage(int pageIndex) {
-    return showChapterCommentsAtEnd && pageIndex == totalImagePages + 1;
+    return showChapterCommentsAtEnd && pageIndex == totalVisualImagePages + 1;
   }
 
   var imageStates = <State<ComicImage>>{};
@@ -234,15 +358,241 @@ class GalleryModeState extends State<_GalleryMode>
 
   int fingers = 0;
 
+  void _initPagePlan() {
+    _resolvedSourceIndices.clear();
+    _lastVisibleStableIdentity = null;
+    _attachedChapter = reader.chapter;
+    if (!isSplitEnabled) {
+      _pagePlan = null;
+      return;
+    }
+    final wideIndices = <int>[];
+    if (reader.images != null) {
+      for (int i = 0; i < reader.images!.length; i++) {
+        final provider = _createImageProvider(i + 1, context);
+        final size = ComicImage.getCachedImageSize(provider);
+        if (size != null) {
+          _resolvedSourceIndices.add(i);
+          if (shouldSplitWideImage(size)) {
+            wideIndices.add(i);
+          }
+        }
+      }
+    }
+    _pagePlan = GalleryPagePlan(
+      sourcePageCount: reader.images?.length ?? 0,
+      direction: _galleryReadingDirectionOf(reader.mode),
+      splitDualPage: isSplitEnabled,
+      splitDualPageInvert: _splitDualPageInvert,
+      wideSourceIndices: wideIndices,
+    );
+  }
+
+  int _computeInitialControllerIndex() {
+    if (!isSplitEnabled || _pagePlan == null) {
+      return reader.page;
+    }
+    if (reader.targetLastVisualPage) {
+      final lastSourceIndex = (reader.images?.length ?? 0) - 1;
+      if (isSourceSizeResolved(lastSourceIndex)) {
+        reader.targetLastVisualPage = false;
+        final lastVisual = _pagePlan!.sourceIndexToLastVisualIndex(
+          lastSourceIndex,
+        );
+        return lastVisual != -1 ? lastVisual + 1 : _pagePlan!.displayPageCount;
+      } else {
+        return _pagePlan!.displayPageCount;
+      }
+    }
+    if (reader.isOnChapterCommentsPage || reader.page > reader.maxPage) {
+      return totalVisualImagePages + 1;
+    }
+    final sourceIndex = (reader.page - 1)
+        .clamp(0, math.max(0, (reader.images?.length ?? 1) - 1))
+        .toInt();
+    final firstVisual = _pagePlan!.sourceIndexToFirstVisualIndex(sourceIndex);
+    return firstVisual != -1 ? firstVisual + 1 : 1;
+  }
+
   @override
   void initState() {
     reader = context.reader;
-    controller = PageController(initialPage: reader.page);
+    _attachedChapter = reader.chapter;
+    _initPagePlan();
+    final initialPage = _computeInitialControllerIndex();
+    _currentControllerIndex = initialPage;
+    controller = PageController(initialPage: initialPage);
     reader.imageViewController = this;
     Future.microtask(() {
       context.readerScaffold.setFloatingButton(0);
+      if (mounted) {
+        reader.notifyChapterCompletedIfNeeded();
+      }
     });
     super.initState();
+  }
+
+  @override
+  void dispose() {
+    if (reader.imageViewController == this) {
+      reader.imageViewController = null;
+    }
+    _coalescer.reset();
+    controller.dispose();
+    if (_isAnimatingVisualPage) {
+      _isAnimatingVisualPage = false;
+      reader.endPageAnimation();
+    }
+    _pool.disposeAll();
+    super.dispose();
+  }
+
+  void _onSourceImageSize(int sourceIndex, Size size) {
+    if (!mounted || !isSplitEnabled || _pagePlan == null) return;
+    final wasResolved = _resolvedSourceIndices.contains(sourceIndex);
+    _resolvedSourceIndices.add(sourceIndex);
+
+    final lastSourceIndex = (reader.images?.length ?? 0) - 1;
+    final isLastSource = sourceIndex == lastSourceIndex;
+
+    final isWide = shouldSplitWideImage(size);
+    final wasWide = _pagePlan!.isWide(sourceIndex);
+    final wideChanged = wasWide != isWide;
+
+    if (!wideChanged) {
+      if (isLastSource && reader.targetLastVisualPage) {
+        reader.targetLastVisualPage = false;
+      }
+      if (!wasResolved) {
+        reader.notifyChapterCompletedIfNeeded();
+      }
+      return;
+    }
+
+    if (!_coalescer.hasPendingUpdates) {
+      final current = controller.hasClients && controller.page != null
+          ? controller.page!.round()
+          : _currentControllerIndex;
+      final GalleryVisualLocation loc;
+      if (isChapterCommentsPage(current)) {
+        loc = const GalleryCommentsLocation();
+      } else if (reader.targetLastVisualPage) {
+        loc = const GalleryTargetLastVisualLocation();
+      } else {
+        final currentVisual = (current - 1)
+            .clamp(0, math.max(0, _pagePlan!.displayPageCount - 1))
+            .toInt();
+        loc = GalleryPageLocation(
+          stableId:
+              _pagePlan!.maybeDisplayPageAt(currentVisual)?.stableId ??
+              '$currentVisual:full',
+          fallbackVisualIndex: currentVisual,
+        );
+      }
+      _coalescer.recordInitialLocation(loc);
+    }
+
+    final isCommentsLocation =
+        _coalescer.initialLocation is GalleryCommentsLocation;
+    if (shouldRecoverCommentsToFinalVisualHalf(
+      isCommentsLocation: isCommentsLocation,
+      isLastSource: isLastSource,
+      isWide: isWide,
+      wasWide: wasWide,
+      wasResolved: wasResolved,
+    )) {
+      _coalescer.markCommentsTailGrowth();
+    }
+
+    final modified = _pagePlan!.markWide(sourceIndex, isWide);
+    if (!modified) return;
+
+    _scheduleRecovery();
+  }
+
+  void _scheduleRecovery() {
+    if (_recoveryScheduled) return;
+    _recoveryScheduled = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _recoveryScheduled = false;
+      _applyPendingSizeRecovery();
+    });
+  }
+
+  void _applyPendingSizeRecovery() {
+    if (!mounted) return;
+    final hadCommentsTailGrowth = _coalescer.hasCommentsTailGrowth;
+    final location = _coalescer.flush();
+    if (location == null) return;
+
+    final lastSourceIndex = (reader.images?.length ?? 0) - 1;
+    final isLastResolved = isSourceSizeResolved(lastSourceIndex);
+
+    if (location is GalleryTargetLastVisualLocation && isLastResolved) {
+      reader.targetLastVisualPage = false;
+    }
+
+    final targetIndex = resolveRecoveredControllerIndex(
+      location: location,
+      plan: _pagePlan!,
+      isLastSourceResolved: isLastResolved,
+      totalVisualImagePages: totalVisualImagePages,
+      hasCommentsTailGrowth: hadCommentsTailGrowth,
+    );
+
+    _currentControllerIndex = targetIndex;
+    if (controller.hasClients && controller.page?.round() != targetIndex) {
+      controller.jumpToPage(targetIndex);
+    }
+
+    if (location is GalleryCommentsLocation) {
+      final recoveryTarget = resolveCommentsRecoveryTarget(
+        hasCommentsTailGrowth: hadCommentsTailGrowth,
+        totalVisualImagePages: totalVisualImagePages,
+        maxPage: reader.maxPage,
+      );
+      if (hadCommentsTailGrowth) {
+        reader.setPageSuppressingCompletion(recoveryTarget.targetReaderPage);
+      } else {
+        reader.setPage(recoveryTarget.targetReaderPage);
+      }
+      if (recoveryTarget.notifyChapterCompleted) {
+        reader.notifyChapterCompletedIfNeeded();
+      }
+    } else {
+      reader.notifyChapterCompletedIfNeeded();
+    }
+
+    setState(() {});
+  }
+
+  int controllerIndexToSourcePage(int index) {
+    if (isChapterCommentsPage(index)) {
+      return reader.maxPage + 1;
+    }
+    if (isSplitEnabled && _pagePlan != null) {
+      final visualIndex = index - 1;
+      if (visualIndex >= 0 && visualIndex < _pagePlan!.displayPageCount) {
+        return _pagePlan!.visualIndexToSourcePage(visualIndex);
+      }
+    }
+    return index;
+  }
+
+  int _sourcePageToControllerIndex(int sourcePage) {
+    if (showChapterCommentsAtEnd && sourcePage > reader.maxPage) {
+      return totalVisualImagePages + 1;
+    }
+    if (isSplitEnabled && _pagePlan != null) {
+      final sourceIndex = (sourcePage - 1)
+          .clamp(0, math.max(0, (reader.images?.length ?? 1) - 1))
+          .toInt();
+      final visualIndex = _pagePlan!.sourceIndexToFirstVisualIndex(sourceIndex);
+      if (visualIndex != -1) {
+        return visualIndex + 1;
+      }
+    }
+    return sourcePage;
   }
 
   /// Get the range of images for the given page. [page] is 1-based.
@@ -272,7 +622,11 @@ class GalleryModeState extends State<_GalleryMode>
   /// Get the image indices for current page. Returns null if no images.
   /// Returns a single index if only one image, or a range if multiple images.
   (int, int)? getCurrentPageImageRange() {
-    if (reader.images == null || reader.images!.isEmpty) {
+    if (reader.images == null ||
+        reader.images!.isEmpty ||
+        reader.isOnChapterCommentsPage ||
+        reader.page > reader.maxPage ||
+        reader.page < 1) {
       return null;
     }
     var (startIndex, endIndex) = getPageImagesRange(reader.page);
@@ -293,6 +647,16 @@ class GalleryModeState extends State<_GalleryMode>
 
   void _cachePage(int page, bool shouldPreCache) {
     if (isChapterCommentsPage(page)) return;
+    if (isSplitEnabled && _pagePlan != null) {
+      final visualIndex = page - 1;
+      if (visualIndex >= 0 && visualIndex < _pagePlan!.displayPageCount) {
+        final sourceIndex = _pagePlan!.displayPageAt(visualIndex).sourceIndex;
+        shouldPreCache
+            ? _precacheImage(sourceIndex + 1, context)
+            : _preDownloadImage(sourceIndex + 1, context);
+      }
+      return;
+    }
     var (startIndex, endIndex) = getPageImagesRange(page);
     for (int i = startIndex; i < endIndex; i++) {
       shouldPreCache
@@ -317,6 +681,10 @@ class GalleryModeState extends State<_GalleryMode>
 
   @override
   Widget build(BuildContext context) {
+    if (_attachedChapter != reader.chapter) {
+      _attachedChapter = reader.chapter;
+      _lastVisibleStableIdentity = null;
+    }
     return Listener(
       onPointerDown: (event) {
         fingers++;
@@ -329,10 +697,16 @@ class GalleryModeState extends State<_GalleryMode>
       },
       onPointerMove: (event) {
         if (isLongPressing) {
-          var controller = photoViewControllers[reader.page]!;
+          final currentIndex = controller.hasClients && controller.page != null
+              ? controller.page!.round()
+              : _currentControllerIndex;
+          final key = _controllerKeyForIndex(currentIndex);
+          var currentController = _pool[key];
           Offset value = event.delta;
           if (isLongPressing) {
-            controller.updateMultiple(position: controller.position + value);
+            currentController?.updateMultiple(
+              position: currentController.position + value,
+            );
           }
         }
       },
@@ -342,9 +716,9 @@ class GalleryModeState extends State<_GalleryMode>
         scrollDirection: reader.mode == ReaderMode.galleryTopToBottom
             ? Axis.vertical
             : Axis.horizontal,
-        itemCount: totalPages + 2,
+        itemCount: totalVisualPages + 2,
         builder: (BuildContext context, int index) {
-          if (index == 0 || index == totalPages + 1) {
+          if (index == 0 || index == totalVisualPages + 1) {
             return PhotoViewGalleryPageOptions.customChild(
               child: const SizedBox(),
             );
@@ -353,20 +727,53 @@ class GalleryModeState extends State<_GalleryMode>
               child: _buildChapterCommentsPage(),
             );
           } else {
+            cache(index);
+            final key = _controllerKeyForIndex(index);
+            final photoViewController = _pool.getOrCreate(key);
+
+            if (isSplitEnabled && _pagePlan != null) {
+              final visualIndex = index - 1;
+              final displayPage = _pagePlan![visualIndex];
+              final sourceIndex = displayPage.sourceIndex;
+              final part = displayPage.part;
+              final imageKey = reader.images![sourceIndex];
+              final provider = _createImageProviderFromKey(
+                imageKey,
+                context,
+                sourceIndex + 1,
+              );
+              final viewportSize = MediaQuery.of(context).size;
+              return PhotoViewGalleryPageOptions.customChild(
+                childSize: viewportSize,
+                controller: photoViewController,
+                minScale: PhotoViewComputedScale.contained * 1.0,
+                maxScale: PhotoViewComputedScale.covered * 10.0,
+                child: SizedBox.fromSize(
+                  size: viewportSize,
+                  child: ComicImage(
+                    image: provider,
+                    wideImagePart: part,
+                    onImageSize: (size) =>
+                        _onSourceImageSize(sourceIndex, size),
+                    fit: BoxFit.contain,
+                    width: double.infinity,
+                    height: double.infinity,
+                    onInit: (state) => imageStates.add(state),
+                    onDispose: (state) => imageStates.remove(state),
+                  ),
+                ),
+              );
+            }
             var (startIndex, endIndex) = getPageImagesRange(index);
             List<String> pageImages = reader.images!.sublist(
               startIndex,
               endIndex,
             );
 
-            cache(index);
-
-            photoViewControllers[index] ??= PhotoViewController();
-
             if (reader.imagesPerPage == 1 || pageImages.length == 1) {
               return PhotoViewGalleryPageOptions(
                 filterQuality: FilterQuality.medium,
-                controller: photoViewControllers[index],
+                controller: photoViewController,
                 imageProvider: _createImageProviderFromKey(
                   pageImages[0],
                   context,
@@ -382,7 +789,7 @@ class GalleryModeState extends State<_GalleryMode>
             final viewportSize = MediaQuery.of(context).size;
             return PhotoViewGalleryPageOptions.customChild(
               childSize: viewportSize,
-              controller: photoViewControllers[index],
+              controller: photoViewController,
               minScale: PhotoViewComputedScale.contained * 1.0,
               maxScale: PhotoViewComputedScale.covered * 10.0,
               child: buildPageImages(pageImages, startIndex),
@@ -414,41 +821,59 @@ class GalleryModeState extends State<_GalleryMode>
           );
         },
         onPageChanged: (i) {
-          var shouldRefreshEInk = false;
+          _currentControllerIndex = i;
+          var shouldRefresh = false;
           if (i == 0) {
+            _lastVisibleStableIdentity = null;
             if (reader.isFirstChapterOfGroup ||
                 !reader.toPrevChapter(toLastPage: true)) {
               controller.jumpToPage(1);
             } else {
-              shouldRefreshEInk = true;
+              shouldRefresh = true;
             }
-          } else if (i == totalPages + 1) {
+          } else if (i == totalVisualPages + 1) {
+            _lastVisibleStableIdentity = null;
             if (reader.isLastChapterOfGroup || !reader.toNextChapter()) {
-              controller.jumpToPage(totalPages);
+              controller.jumpToPage(totalVisualPages);
             } else {
-              shouldRefreshEInk = true;
+              shouldRefresh = true;
             }
           } else {
-            final previousPage = reader.page;
-            reader.setPage(i);
+            final targetSourcePage = controllerIndexToSourcePage(i);
+            if (reader.page != targetSourcePage) {
+              if (targetSourcePage < reader.maxPage) {
+                reader.targetLastVisualPage = false;
+              }
+              reader.setPage(targetSourcePage);
+            } else {
+              reader.notifyChapterCompletedIfNeeded();
+            }
             context.readerScaffold.update();
-            shouldRefreshEInk =
-                reader.page != previousPage && !isChapterCommentsPage(i);
+
+            final currentIdentity = _visibleStableIdentityForIndex(i);
+            shouldRefresh = shouldRefreshEInk(
+              previousIdentity: _lastVisibleStableIdentity,
+              currentIdentity: currentIdentity,
+              isCommentsPage: isChapterCommentsPage(i),
+            );
+            if (currentIdentity != null) {
+              _lastVisibleStableIdentity = currentIdentity;
+            }
+
             // Auto close toolbar when entering chapter comments page
             if (isChapterCommentsPage(i) && context.readerScaffold.isOpen) {
               context.readerScaffold.openOrClose();
             }
           }
-          if (shouldRefreshEInk) {
+          if (shouldRefresh) {
             context.readerScaffold.requestEInkRefresh();
           }
-          // Remove other pages' controllers to reset their state.
-          var keys = photoViewControllers.keys.toList();
-          for (var key in keys) {
-            if (key != i) {
-              photoViewControllers.remove(key);
-            }
-          }
+          final keepKeys = resolveKeepControllerKeys(
+            currentIndex: i,
+            totalVisualPages: totalVisualPages,
+            resolveKeyForIndex: _controllerKeyForIndex,
+          );
+          _pool.pruneExcept(keepKeys);
         },
       ),
     );
@@ -528,20 +953,120 @@ class GalleryModeState extends State<_GalleryMode>
   }
 
   @override
-  Future<void> animateToPage(int page) {
-    if ((page - controller.page!.round()).abs() > 1) {
-      controller.jumpToPage(page > controller.page! ? page - 1 : page + 1);
+  bool toNextPage() {
+    return _moveVisualPage(1);
+  }
+
+  @override
+  bool toPrevPage() {
+    reader.targetLastVisualPage = false;
+    return _moveVisualPage(-1);
+  }
+
+  @override
+  bool isAtLastVisualPartOfSource() {
+    if (!isSplitEnabled || _pagePlan == null) return true;
+    if (!isCurrentSourceSizeResolved()) return false;
+    final current = controller.hasClients && controller.page != null
+        ? controller.page!.round()
+        : _currentControllerIndex;
+    if (isChapterCommentsPage(current)) {
+      return isCommentsAtLastVisualPartOfSource(
+        isSplitEnabled: isSplitEnabled,
+        sourcePageCount: reader.images?.length ?? 0,
+        resolvedSourceIndices: _resolvedSourceIndices,
+      );
     }
-    return controller.animateToPage(
-      page,
-      duration: const Duration(milliseconds: 200),
-      curve: Curves.ease,
+    final visualIndex = current - 1;
+    final displayPage = _pagePlan!.maybeDisplayPageAt(visualIndex);
+    if (displayPage == null) return false;
+    return _pagePlan!.isLastVisualPageOfSource(visualIndex);
+  }
+
+  bool _moveVisualPage(int delta) {
+    if (!controller.hasClients) return false;
+    final current = controller.page?.round() ?? _currentControllerIndex;
+    final decision = decideVisualMove(
+      isAnimating: reader.isPageAnimating || _isAnimatingVisualPage,
+      currentIndex: current,
+      delta: delta,
+      totalVisualPages: totalVisualPages,
     );
+    if (!decision.consumed) {
+      return false;
+    }
+    if (!decision.canMove || decision.targetIndex == null) {
+      return true;
+    }
+    final target = decision.targetIndex!;
+    if (reader.enablePageAnimation(reader.cid, reader.type)) {
+      animateToControllerPage(target);
+    } else {
+      controller.jumpToPage(target);
+    }
+    return true;
+  }
+
+  Future<void> animateToControllerPage(int target) async {
+    if (_isAnimatingVisualPage) return;
+    _isAnimatingVisualPage = true;
+    reader.startPageAnimation();
+    try {
+      final current = controller.hasClients && controller.page != null
+          ? controller.page!.round()
+          : _currentControllerIndex;
+      if ((target - current).abs() > 1) {
+        controller.jumpToPage(target > current ? target - 1 : target + 1);
+      }
+      await controller.animateToPage(
+        target,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.ease,
+      );
+    } finally {
+      if (_isAnimatingVisualPage) {
+        _isAnimatingVisualPage = false;
+        reader.endPageAnimation();
+      }
+    }
+  }
+
+  @override
+  Future<void> animateToPage(int page) {
+    if (page < reader.maxPage) {
+      reader.targetLastVisualPage = false;
+    }
+    final target = _sourcePageToControllerIndex(page);
+    return animateToControllerPage(target);
   }
 
   @override
   void toPage(int page) {
-    controller.jumpToPage(page);
+    if (page < reader.maxPage) {
+      reader.targetLastVisualPage = false;
+    }
+    final target = _sourcePageToControllerIndex(page);
+    controller.jumpToPage(target);
+  }
+
+  @override
+  void toVisualEnd() {
+    final result = resolveVisualEndTarget(
+      isSplitEnabled: isSplitEnabled,
+      plan: _pagePlan,
+      sourcePageCount: reader.images?.length ?? 0,
+      isLastSourceResolved: isSourceSizeResolved(
+        (reader.images?.length ?? 0) - 1,
+      ),
+      sourcePageToControllerIndex: _sourcePageToControllerIndex,
+    );
+    reader.targetLastVisualPage = result.retainTargetLastVisualPage;
+    if (controller.hasClients) {
+      controller.jumpToPage(result.targetIndex);
+    } else {
+      _currentControllerIndex = result.targetIndex;
+    }
+    reader.setPage(reader.maxPage);
   }
 
   @override
@@ -555,8 +1080,12 @@ class GalleryModeState extends State<_GalleryMode>
       context.readerScaffold.addImageFavorite();
       return;
     }
-    var controller = photoViewControllers[reader.page]!;
-    controller.onDoubleClick?.call();
+    final currentIndex = controller.hasClients && controller.page != null
+        ? controller.page!.round()
+        : _currentControllerIndex;
+    final key = _controllerKeyForIndex(currentIndex);
+    var controllerForPage = _pool[key];
+    controllerForPage?.onDoubleClick?.call();
   }
 
   @override
@@ -564,8 +1093,13 @@ class GalleryModeState extends State<_GalleryMode>
     if (!appdata.settings['enableLongPressToZoom'] || fingers != 1) {
       return;
     }
-    var photoViewController = photoViewControllers[reader.page]!;
-    double target = photoViewController.getInitialScale!.call()! * 1.75;
+    final currentIndex = controller.hasClients && controller.page != null
+        ? controller.page!.round()
+        : _currentControllerIndex;
+    final key = _controllerKeyForIndex(currentIndex);
+    var photoViewController = _pool[key];
+    if (photoViewController == null) return;
+    double target = (photoViewController.getInitialScale?.call() ?? 1.0) * 1.75;
     var size = reader.size;
     Offset zoomPosition;
     if (appdata.settings['longPressZoomPosition'] != 'center') {
@@ -585,9 +1119,13 @@ class GalleryModeState extends State<_GalleryMode>
     if (!appdata.settings['enableLongPressToZoom'] || !isLongPressing) {
       return;
     }
-    var photoViewController = photoViewControllers[reader.page]!;
-    double target = photoViewController.getInitialScale!.call()!;
-    photoViewController.animateScale?.call(target);
+    final currentIndex = controller.hasClients && controller.page != null
+        ? controller.page!.round()
+        : _currentControllerIndex;
+    final key = _controllerKeyForIndex(currentIndex);
+    var photoViewController = _pool[key];
+    double target = photoViewController?.getInitialScale?.call() ?? 1.0;
+    photoViewController?.animateScale?.call(target);
     isLongPressing = false;
   }
 
@@ -621,9 +1159,9 @@ class GalleryModeState extends State<_GalleryMode>
         keyRepeatTimer = null;
       }
       if (forward == true) {
-        reader.toPage(reader.page + 1);
+        reader.toNextPage();
       } else if (forward == false) {
-        reader.toPage(reader.page - 1);
+        reader.toPrevPage();
       }
     }
     if (event is KeyRepeatEvent && keyRepeatTimer == null) {
@@ -636,9 +1174,9 @@ class GalleryModeState extends State<_GalleryMode>
             timer.cancel();
             return;
           } else if (forward == true) {
-            reader.toPage(reader.page + 1);
+            reader.toNextPage();
           } else if (forward == false) {
-            reader.toPage(reader.page - 1);
+            reader.toPrevPage();
           }
         },
       );
@@ -983,14 +1521,21 @@ class ContinuousModeState extends State<_ContinuousMode>
     required bool toLastPage,
   }) async {
     final needsLoading = _segmentOfChapter(chapter) == null;
-    if (needsLoading) reader.onReaderContentLoading();
+    if (needsLoading) {
+      reader.onReaderContentLoading(keepImageViewController: true);
+    }
     try {
       if (!await _loadWaterfallNavigationChapter(chapter) || !mounted) {
         return;
       }
     } finally {
       if (needsLoading && mounted) reader.onReaderContentReady();
+      if (mounted) {
+        reader.imageViewController ??= this;
+      }
     }
+    if (!mounted) return;
+    reader.imageViewController = this;
     var segment = _segmentOfChapter(chapter);
     if (segment == null || segment.images.isEmpty) return;
     var page = toLastPage ? segment.images.length : 1;
@@ -1020,6 +1565,7 @@ class ContinuousModeState extends State<_ContinuousMode>
   @override
   void initState() {
     reader = context.reader;
+    reader.targetLastVisualPage = false;
     reader.imageViewController = this;
     _initSegments();
     itemPositionsListener.itemPositions.addListener(onPositionChanged);
@@ -1033,6 +1579,9 @@ class ContinuousModeState extends State<_ContinuousMode>
 
   @override
   void dispose() {
+    if (reader.imageViewController == this) {
+      reader.imageViewController = null;
+    }
     itemPositionsListener.itemPositions.removeListener(onPositionChanged);
     super.dispose();
   }
@@ -1595,12 +2144,29 @@ class ContinuousModeState extends State<_ContinuousMode>
   }
 
   @override
+  void toVisualEnd() => toPage(reader.maxPage);
+
+  @override
   bool toChapter(int chapter, {bool toLastPage = false}) {
     if (!crossChapter) return false;
     _navigateToWaterfallChapter(chapter, toLastPage: toLastPage);
     return true;
   }
 
+  @override
+  bool toNextPage() => false;
+
+  @override
+  bool toPrevPage() => false;
+
+  @override
+  bool isAtLastVisualPartOfSource() => true;
+
+  @override
+  bool isCurrentSourceSizeResolved() => true;
+
+  @override
+  bool isReadyForChapter(int chapter) => mounted;
   @override
   void handleKeyEvent(KeyEvent event) {
     if (event.logicalKey == LogicalKeyboardKey.controlLeft ||
