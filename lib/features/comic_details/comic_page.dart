@@ -47,8 +47,6 @@ bool _isReadOnlyComicInfoNamespace(String namespace) {
     '觀看數',
     '阅读量',
     '閱讀量',
-    '作者',
-    '标签',
     '更新',
     '最後更新',
     '最后更新',
