@@ -16,13 +16,13 @@ void main() {
   });
 
   test(
-    'read-only comic info namespaces are not treated as searchable tags',
+    'read-only comic info namespaces exclude searchable author and tag fields',
     () {
       expect(isReadOnlyComicInfoNamespaceForTesting('views'), isTrue);
       expect(isReadOnlyComicInfoNamespaceForTesting('浏览量'), isTrue);
       expect(isReadOnlyComicInfoNamespaceForTesting('last update'), isTrue);
-      expect(isReadOnlyComicInfoNamespaceForTesting('作者'), isTrue);
-      expect(isReadOnlyComicInfoNamespaceForTesting('标签'), isTrue);
+      expect(isReadOnlyComicInfoNamespaceForTesting('作者'), isFalse);
+      expect(isReadOnlyComicInfoNamespaceForTesting('标签'), isFalse);
 
       expect(isReadOnlyComicInfoNamespaceForTesting('artist'), isFalse);
       expect(isReadOnlyComicInfoNamespaceForTesting('language'), isFalse);
