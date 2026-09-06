@@ -99,7 +99,7 @@ Build the APK:
 
 ```bash
 flutter pub get --enforce-lockfile
-flutter build apk --release
+flutter build apk --release --no-pub
 ```
 
 Artifacts are normally written to `build/app/outputs/apk/release/`.
@@ -112,16 +112,16 @@ With the native toolchain installed on the corresponding operating system, run:
 
 ```bash
 flutter pub get --enforce-lockfile
-flutter build windows
-flutter build linux
-flutter build macos
+flutter build windows --no-pub
+flutter build linux --no-pub
+flutter build macos --no-pub
 ```
 
 Use a no-codesign build to validate iOS first:
 
 ```bash
 flutter pub get --enforce-lockfile
-flutter build ios --release --no-codesign
+flutter build ios --release --no-codesign --no-pub
 ```
 
 The release workflow builds the Windows installer and portable package; this repository does not maintain winget manifests or public package-manager entries.
@@ -147,6 +147,8 @@ python .github/scripts/release_version.py --check --tag v1.2.3
 `pubspec.yaml`, the release tag, and the version section in `CHANGELOG.md` must match `release.json`.
 
 The `代码分析` workflow runs version and structure checks, Python script tests, formatting checks for changed Dart files, `flutter analyze`, the full Dart test suite, and coverage reporting. `依赖安全审查` checks dependencies added or upgraded by a pull request, while `PR 平台冒烟构建` verifies Android and Windows compilation when the changed files can affect platform builds. Before starting multi-platform builds, `完整构建` reuses the same quality workflow. Manual platform builds and tag releases both reuse `.github/workflows/build.yml` so their build definitions cannot drift apart.
+
+Native CI build jobs configure compilation and dependency caching: `sccache` caches Rust and supported native compiler invocations, Cargo caches registry and Git downloads, and Android jobs reuse the Gradle build cache. Jobs print statistics via `sccache --show-stats` upon completion to verify warm-cache hits. Final release packages and installers are always rebuilt and are never reused from cache.
 
 Android release workflows require these repository Secrets:
 

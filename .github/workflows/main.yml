@@ -137,6 +137,11 @@ jobs:
   Build_IOS:
     runs-on: macos-15
     needs: Prepare_Release
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -147,6 +152,18 @@ jobs:
           flutter-version-file: pubspec.yaml
           architecture: x64
           cache: true
+      - name: 配置 sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - run: sudo xcode-select --switch /Applications/Xcode_16.4.app
       - name: 准备 Rust 工具链
         run: |
@@ -174,6 +191,7 @@ jobs:
           IOS_VERSION="${IOS_VERSION%%-*}"
           echo "正在根据 ${APP_VERSION} 构建 iOS 包版本 ${IOS_VERSION}+${IOS_BUILD}"
           flutter build ios \
+            --no-pub \
             --release \
             --no-codesign \
             --build-name="$IOS_VERSION" \
@@ -189,6 +207,9 @@ jobs:
           APP_VERSION=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | tr -d '\r\n')
           mkdir -p result
           mv build/ios/iphoneos/VeneraNext-ios.ipa "result/VeneraNext-ios-$APP_VERSION.ipa"
+      - name: sccache 统计
+        if: always()
+        run: sccache --show-stats
       - name: 上传 iOS Workflow Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -228,6 +249,11 @@ jobs:
   Build_Android:
     runs-on: ubuntu-22.04
     needs: Prepare_Release
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -238,6 +264,18 @@ jobs:
           flutter-version-file: pubspec.yaml
           architecture: x64
           cache: true
+      - name: 配置 sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: 解码并安装 Android 证书
         env:
           STORE_FILE: ${{ secrets.ANDROID_KEYSTORE }}
@@ -281,12 +319,15 @@ jobs:
       - name: 检查 rust-toolchain.toml
         run: rustup show
       - run: flutter pub get --enforce-lockfile
-      - run: flutter build apk --release
+      - run: flutter build apk --release --no-pub
       - name: 清理 Android 签名文件
         if: always()
         run: |
           rm -f android/keystore.jks
           rm -f android/key.properties
+      - name: sccache 统计
+        if: always()
+        run: sccache --show-stats
       - name: 上传 Android Workflow Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -328,6 +369,11 @@ jobs:
   Build_Windows:
     runs-on: windows-2025
     needs: Prepare_Release
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -340,6 +386,18 @@ jobs:
           flutter-version-file: pubspec.yaml
           architecture: x64
           cache: true
+      - name: 配置 sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: 构建 Windows 安装包
         run: |
           flutter pub get --enforce-lockfile
@@ -374,6 +432,9 @@ jobs:
             $archive.Dispose()
           }
           $artifacts | Sort-Object Name | ForEach-Object { "$($_.Name) $($_.Length) bytes" }
+      - name: sccache 统计
+        if: always()
+        run: sccache --show-stats
       - name: 上传 Windows Workflow Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -420,6 +481,11 @@ jobs:
   Build_Linux:
     runs-on: ubuntu-22.04
     needs: Prepare_Release
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -430,6 +496,18 @@ jobs:
           flutter-version-file: pubspec.yaml
           architecture: x64
           cache: true
+      - name: 配置 sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: 准备 Rust 工具链
         run: python3 .github/scripts/prepare_rust_toolchain.py
       - name: 安装 Linux 构建依赖
@@ -461,6 +539,9 @@ jobs:
           for file in "${debs[@]}" "${arch_assets[@]}"; do
             [[ -s "$file" ]] || { echo "构建产物为空：$file" >&2; exit 1; }
           done
+      - name: sccache 统计
+        if: always()
+        run: sccache --show-stats
       - name: 上传 Debian x64 Workflow Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -518,6 +599,11 @@ jobs:
   Build_Linux_ARM64:
     runs-on: ubuntu-22.04-arm
     needs: Prepare_Release
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -528,6 +614,18 @@ jobs:
           flutter-version-file: pubspec.yaml
           architecture: arm64
           cache: true
+      - name: 配置 sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: 准备 Rust 工具链
         run: python3 .github/scripts/prepare_rust_toolchain.py
       - name: 安装 Linux ARM64 构建依赖
@@ -550,6 +648,9 @@ jobs:
           for file in "${debs[@]}"; do
             [[ -s "$file" ]] || { echo "构建产物为空：$file" >&2; exit 1; }
           done
+      - name: sccache 统计
+        if: always()
+        run: sccache --show-stats
       - name: 上传 Debian ARM64 Workflow Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

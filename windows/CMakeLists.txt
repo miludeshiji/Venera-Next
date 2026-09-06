@@ -1,14 +1,18 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
+
+# Explicitly opt in to modern CMake behaviors to avoid warnings with recent
+# versions of CMake. CMP0141 must be selected before enabling MSVC.
+cmake_policy(VERSION 3.14...3.25)
+if(POLICY CMP0141)
+  cmake_policy(SET CMP0141 NEW)
+endif()
+
 project(VeneraNext LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
 set(BINARY_NAME "VeneraNext")
-
-# Explicitly opt in to modern CMake behaviors to avoid warnings with recent
-# versions of CMake.
-cmake_policy(VERSION 3.14...3.25)
 
 # Define build configuration option.
 get_property(IS_MULTICONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
@@ -45,6 +49,21 @@ function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_definitions(${TARGET} PRIVATE "_HAS_EXCEPTIONS=0")
   target_compile_definitions(${TARGET} PRIVATE "$<$<CONFIG:Debug>:_DEBUG>")
 endfunction()
+
+# Use sccache if available.
+find_program(SCCACHE_PROGRAM sccache)
+if(SCCACHE_PROGRAM)
+  get_filename_component(SCCACHE_DIR "${SCCACHE_PROGRAM}" DIRECTORY)
+  list(APPEND CMAKE_VS_GLOBALS
+    "CLToolExe=sccache"
+    "CLToolPath=${SCCACHE_DIR}"
+    "UseMultiToolTask=true"
+    "EnforceProcessCountAcrossBuilds=true"
+  )
+  if(POLICY CMP0141)
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+  endif()
+endif()
 
 # Flutter library and tool build rules.
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")

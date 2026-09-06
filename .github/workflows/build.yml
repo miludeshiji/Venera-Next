@@ -78,6 +78,11 @@ jobs:
     if: ${{ inputs.build_android }}
     runs-on: ubuntu-22.04
     timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
@@ -86,6 +91,18 @@ jobs:
           flutter-version-file: pubspec.yaml
           architecture: x64
           cache: true
+      - name: 配置 sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: 解码并安装 Android 证书
         env:
           STORE_FILE: ${{ secrets.ANDROID_KEYSTORE }}
@@ -123,7 +140,10 @@ jobs:
       - name: 检查 rust-toolchain.toml
         run: rustup show
       - run: flutter pub get --enforce-lockfile
-      - run: flutter build apk --release
+      - run: flutter build apk --release --no-pub
+      - name: sccache 统计
+        if: always()
+        run: sccache --show-stats
       - name: 上传 APK (armeabi-v7a)
         uses: actions/upload-artifact@v7
         with:
@@ -157,6 +177,11 @@ jobs:
     if: ${{ inputs.build_windows }}
     runs-on: windows-2025
     timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@v7
       - name: 安装 Inno Setup
@@ -167,6 +192,18 @@ jobs:
           flutter-version-file: pubspec.yaml
           architecture: x64
           cache: true
+      - name: 配置 sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: 构建 Windows 安装包
         run: |
           flutter pub get --enforce-lockfile
@@ -201,6 +238,9 @@ jobs:
             $archive.Dispose()
           }
           $artifacts | Sort-Object Name | ForEach-Object { "$($_.Name) $($_.Length) bytes" }
+      - name: sccache 统计
+        if: always()
+        run: sccache --show-stats
       - uses: actions/upload-artifact@v7
         with:
           name: windows_build
@@ -214,6 +254,11 @@ jobs:
     if: ${{ inputs.build_macos }}
     runs-on: macos-15
     timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
@@ -222,6 +267,18 @@ jobs:
           flutter-version-file: pubspec.yaml
           architecture: x64
           cache: true
+      - name: 配置 sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - run: sudo xcode-select --switch /Applications/Xcode_16.4.app
       - name: 准备 Rust 工具链
         run: |
@@ -240,7 +297,7 @@ jobs:
       - name: 检查 rust-toolchain.toml
         run: rustup show
       - name: 构建 Flutter macOS 应用
-        run: flutter build macos --release
+        run: flutter build macos --release --no-pub
       - name: 创建 DMG
         run: |
           mkdir -p dist
@@ -253,6 +310,9 @@ jobs:
           APP_VERSION=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | tr -d '\r\n')
           mkdir -p result
           mv dist/VeneraNext.dmg "result/VeneraNext-$APP_VERSION.dmg"
+      - name: sccache 统计
+        if: always()
+        run: sccache --show-stats
       - name: 上传 DMG
         uses: actions/upload-artifact@v7
         with:
@@ -265,6 +325,11 @@ jobs:
     if: ${{ inputs.build_ios }}
     runs-on: macos-15
     timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
@@ -273,6 +338,18 @@ jobs:
           flutter-version-file: pubspec.yaml
           architecture: x64
           cache: true
+      - name: 配置 sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - run: sudo xcode-select --switch /Applications/Xcode_16.4.app
       - name: 准备 Rust 工具链
         run: |
@@ -302,7 +379,7 @@ jobs:
           cp pubspec.yaml pubspec.yaml.release
           trap 'mv pubspec.yaml.release pubspec.yaml' EXIT
           perl -0pi -e "s/^version:.*/version: ${IOS_VERSION}+${IOS_BUILD}/m" pubspec.yaml
-          flutter build ios --release --no-codesign
+          flutter build ios --release --no-codesign --no-pub
       - name: 创建 IPA
         run: |
           mkdir -p build/ios/iphoneos/Payload
@@ -314,6 +391,9 @@ jobs:
           APP_VERSION=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | tr -d '\r\n')
           mkdir -p result
           mv build/ios/iphoneos/VeneraNext-ios.ipa "result/VeneraNext-ios-$APP_VERSION.ipa"
+      - name: sccache 统计
+        if: always()
+        run: sccache --show-stats
       - uses: actions/upload-artifact@v7
         with:
           name: ios_build
@@ -325,6 +405,11 @@ jobs:
     if: ${{ inputs.build_linux_x64 }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
@@ -333,6 +418,18 @@ jobs:
           flutter-version-file: pubspec.yaml
           architecture: x64
           cache: true
+      - name: 配置 sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: 准备 Rust 工具链
         run: python3 .github/scripts/prepare_rust_toolchain.py
       - run: flutter pub get --enforce-lockfile
@@ -348,6 +445,9 @@ jobs:
         run: python3 .github/scripts/build_arch_package.py
       - name: 移除 Arch 调试包
         run: rm -f build/linux/arch/*-debug-*.pkg.tar.zst
+      - name: sccache 统计
+        if: always()
+        run: sccache --show-stats
       - uses: actions/upload-artifact@v7
         with:
           name: deb_build
@@ -365,6 +465,11 @@ jobs:
     if: ${{ inputs.build_linux_arm64 }}
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
@@ -372,6 +477,18 @@ jobs:
           channel: 'stable'
           flutter-version-file: pubspec.yaml
           cache: true
+      - name: 配置 sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: 准备 Rust 工具链
         run: python3 .github/scripts/prepare_rust_toolchain.py
       - run: flutter pub get --enforce-lockfile
@@ -385,6 +502,9 @@ jobs:
       - name: 修补字体
         run: dart run patch/font.dart
       - run: python3 debian/build.py arm64
+      - name: sccache 统计
+        if: always()
+        run: sccache --show-stats
       - uses: actions/upload-artifact@v7
         with:
           name: deb_arm64_build

@@ -125,7 +125,7 @@ def main():
     version = read_version()
     validate_icon_resources()
     clean_windows_runner_build()
-    run(["flutter", "build", "windows"])
+    run(["flutter", "build", "windows", "--release", "--no-pub"])
     create_portable_zip(version)
     build_installer(version)
 

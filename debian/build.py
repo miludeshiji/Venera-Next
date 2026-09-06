@@ -27,7 +27,7 @@ try:
     with open('debian/gui/venera-next.desktop', 'w') as f:
         f.write(desktopContent.replace('{{Version}}', version))
 
-    subprocess.run(["flutter", "build", "linux"], check=True)
+    subprocess.run(["flutter", "build", "linux", "--release", "--no-pub"], check=True)
     subprocess.run(
         [str(Path.home() / '.pub-cache' / 'bin' / 'flutter_to_debian')],
         check=True,
