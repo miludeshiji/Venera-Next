@@ -153,6 +153,7 @@ jobs:
           architecture: x64
           cache: true
       - name: 配置 sccache
+        id: sccache
         uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: 缓存 Cargo 依赖
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -208,7 +209,7 @@ jobs:
           mkdir -p result
           mv build/ios/iphoneos/VeneraNext-ios.ipa "result/VeneraNext-ios-$APP_VERSION.ipa"
       - name: sccache 统计
-        if: always()
+        if: ${{ always() && steps.sccache.outcome == 'success' }}
         run: sccache --show-stats
       - name: 上传 iOS Workflow Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -265,6 +266,7 @@ jobs:
           architecture: x64
           cache: true
       - name: 配置 sccache
+        id: sccache
         uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: 缓存 Cargo 依赖
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -326,7 +328,7 @@ jobs:
           rm -f android/keystore.jks
           rm -f android/key.properties
       - name: sccache 统计
-        if: always()
+        if: ${{ always() && steps.sccache.outcome == 'success' }}
         run: sccache --show-stats
       - name: 上传 Android Workflow Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -387,6 +389,7 @@ jobs:
           architecture: x64
           cache: true
       - name: 配置 sccache
+        id: sccache
         uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: 缓存 Cargo 依赖
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -398,10 +401,10 @@ jobs:
           key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
           restore-keys: |
             cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      - name: 获取 Flutter 依赖
+        run: flutter pub get --enforce-lockfile
       - name: 构建 Windows 安装包
-        run: |
-          flutter pub get --enforce-lockfile
-          python windows/build.py
+        run: python windows/build.py
       - name: 校验 Windows 构建产物
         shell: pwsh
         run: |
@@ -433,7 +436,7 @@ jobs:
           }
           $artifacts | Sort-Object Name | ForEach-Object { "$($_.Name) $($_.Length) bytes" }
       - name: sccache 统计
-        if: always()
+        if: ${{ always() && steps.sccache.outcome == 'success' }}
         run: sccache --show-stats
       - name: 上传 Windows Workflow Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -497,6 +500,7 @@ jobs:
           architecture: x64
           cache: true
       - name: 配置 sccache
+        id: sccache
         uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: 缓存 Cargo 依赖
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -540,7 +544,7 @@ jobs:
             [[ -s "$file" ]] || { echo "构建产物为空：$file" >&2; exit 1; }
           done
       - name: sccache 统计
-        if: always()
+        if: ${{ always() && steps.sccache.outcome == 'success' }}
         run: sccache --show-stats
       - name: 上传 Debian x64 Workflow Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -614,7 +618,12 @@ jobs:
           flutter-version-file: pubspec.yaml
           architecture: arm64
           cache: true
+      - name: Flutter 环境诊断
+        run: |
+          flutter --version
+          uname -m
       - name: 配置 sccache
+        id: sccache
         uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: 缓存 Cargo 依赖
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -649,7 +658,7 @@ jobs:
             [[ -s "$file" ]] || { echo "构建产物为空：$file" >&2; exit 1; }
           done
       - name: sccache 统计
-        if: always()
+        if: ${{ always() && steps.sccache.outcome == 'success' }}
         run: sccache --show-stats
       - name: 上传 Debian ARM64 Workflow Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
