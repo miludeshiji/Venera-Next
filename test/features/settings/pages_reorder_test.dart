@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/gestures.dart';
@@ -9,12 +10,31 @@ import 'package:venera_next/foundation/app.dart';
 import 'package:venera_next/foundation/appdata.dart';
 
 List<String> _pageOrder(WidgetTester tester) {
-  final builder = tester.widget<ReorderableBuilder<String>>(
-    find.byType(ReorderableBuilder<String>),
-  );
-  return builder.children!
-      .map((child) => (child.key! as ValueKey<String>).value)
-      .toList();
+  final tiles = tester.widgetList<ListTile>(find.byType(ListTile));
+  final seen = <String>{};
+  final items = <({String id, Offset center})>[];
+  for (final tile in tiles) {
+    final key = tile.key;
+    if (key is! ValueKey<String>) continue;
+    if (!seen.add(key.value)) continue;
+    final finder = find.byKey(key);
+    items.add((id: key.value, center: tester.getCenter(finder)));
+  }
+  items.sort((a, b) => a.center.dy.compareTo(b.center.dy));
+  const rowTolerance = 12.0;
+  final rows = <List<({String id, Offset center})>>[];
+  for (final item in items) {
+    if (rows.isEmpty ||
+        (item.center.dy - rows.last.first.center.dy).abs() > rowTolerance) {
+      rows.add([item]);
+    } else {
+      rows.last.add(item);
+    }
+  }
+  for (final row in rows) {
+    row.sort((a, b) => a.center.dx.compareTo(b.center.dx));
+  }
+  return rows.expand((row) => row).map((item) => item.id).toList();
 }
 
 void _setUpPages(String settingKey, int count) {
@@ -60,6 +80,60 @@ Future<void> _dragPage(
   await gesture.up();
   await tester.pumpAndSettle();
 }
+Future<void> _waitForPersistedSetting(
+  WidgetTester tester,
+  String settingKey,
+  List<String> expected, {
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  final file = File('${App.dataPath}/appdata.json');
+  final stopwatch = Stopwatch()..start();
+  var matched = false;
+
+  while (stopwatch.elapsed < timeout) {
+    await tester.runAsync(() async {
+      if (file.existsSync()) {
+        try {
+          final content = await file.readAsString();
+          final json = jsonDecode(content);
+          if (json is Map<String, dynamic>) {
+            final settings = json['settings'];
+            if (settings is Map<String, dynamic>) {
+              final raw = settings[settingKey];
+              if (raw is List) {
+                final current = raw.map((e) => e.toString()).toList();
+                if (current.length == expected.length) {
+                  var equals = true;
+                  for (var i = 0; i < current.length; i++) {
+                    if (current[i] != expected[i]) {
+                      equals = false;
+                      break;
+                    }
+                  }
+                  if (equals) {
+                    matched = true;
+                  }
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      if (!matched) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
+    if (matched) break;
+    await tester.pump();
+  }
+
+  expect(
+    matched,
+    isTrue,
+    reason:
+        'Timed out waiting for $settingKey in appdata.json to match $expected',
+  );
+}
 
 Future<void> _reloadPages(
   WidgetTester tester,
@@ -69,7 +143,7 @@ Future<void> _reloadPages(
 ) async {
   await tester.pumpWidget(const SizedBox.shrink());
   await tester.pump();
-  await _flushSettings(tester);
+  await _waitForPersistedSetting(tester, settingKey, expected);
   await tester.runAsync(() async {
     appdata.settings[settingKey] = <String>[];
     await appdata.loadDataForTesting(App.dataPath);
@@ -81,27 +155,7 @@ Future<void> _reloadPages(
   expect(tester.takeException(), isNull);
   await tester.pumpWidget(const SizedBox.shrink());
   await tester.pump();
-  await _flushSettings(tester);
 }
-
-Future<void> _flushSettings(WidgetTester tester) async {
-  var completed = false;
-  final saved = appdata.saveData(false).whenComplete(() => completed = true);
-  // File I/O uses real time; its widget callbacks still need the test clock.
-  for (var i = 0; i < 500 && !completed; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 10)),
-    );
-    await tester.pump();
-  }
-  expect(
-    completed,
-    isTrue,
-    reason: 'Settings writes must finish before reload',
-  );
-  await saved;
-}
-
 void main() {
   testWidgets(
     'page selectors persist drag order across input and layout changes',
@@ -158,14 +212,17 @@ void main() {
       expect(controller.offset, greaterThan(0));
       await gesture.up();
       await tester.pumpAndSettle();
+
+      tester.view.physicalSize = const Size(820, 1800);
+      await tester.pumpAndSettle();
+      controller.jumpTo(0);
+      await tester.pumpAndSettle();
       final beforeResize = _pageOrder(tester);
       expect(beforeResize, hasLength(30));
       expect(beforeResize.toSet(), {for (var i = 0; i < 30; i++) 'page-$i'});
       expect(beforeResize.indexOf('page-3'), greaterThan(3));
 
-      tester.view.physicalSize = const Size(820, 500);
-      await tester.pumpAndSettle();
-      controller.jumpTo(0);
+      tester.view.physicalSize = const Size(900, 1800);
       await tester.pumpAndSettle();
       expect(_pageOrder(tester), beforeResize);
       await _dragPage(

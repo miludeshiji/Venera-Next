@@ -14,13 +14,31 @@ import 'package:venera_next/foundation/appdata.dart';
 import 'package:venera_next/foundation/comic_type.dart';
 
 List<String> _comicOrder(WidgetTester tester) {
-  final builder = tester.widget<ReorderableBuilder<FavoriteItem>>(
-    find.byType(ReorderableBuilder<FavoriteItem>),
-  );
-  return builder.children!
-      .cast<ComicTile>()
-      .map((tile) => tile.comic.id)
-      .toList();
+  final tiles = tester.widgetList<ComicTile>(find.byType(ComicTile));
+  final seen = <String>{};
+  final items = <({String id, Offset center})>[];
+  for (final tile in tiles) {
+    if (!seen.add(tile.comic.id)) continue;
+    final finder = find.byWidgetPredicate(
+      (widget) => widget is ComicTile && widget.comic.id == tile.comic.id,
+    );
+    items.add((id: tile.comic.id, center: tester.getCenter(finder)));
+  }
+  items.sort((a, b) => a.center.dy.compareTo(b.center.dy));
+  const rowTolerance = 12.0;
+  final rows = <List<({String id, Offset center})>>[];
+  for (final item in items) {
+    if (rows.isEmpty ||
+        (item.center.dy - rows.last.first.center.dy).abs() > rowTolerance) {
+      rows.add([item]);
+    } else {
+      rows.last.add(item);
+    }
+  }
+  for (final row in rows) {
+    row.sort((a, b) => a.center.dx.compareTo(b.center.dx));
+  }
+  return rows.expand((row) => row).map((item) => item.id).toList();
 }
 
 Future<void> _openReorder(WidgetTester tester) async {
