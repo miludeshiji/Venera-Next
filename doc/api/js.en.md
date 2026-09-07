@@ -444,6 +444,29 @@ function ImageLoadingConfig({url, method, data, headers, onResponse, modifyImage
 }
 ```
 
+### `ComicImageLoadTarget`
+
+```javascript
+/**
+ * Layout target constraints passed as the optional 4th parameter to `comic.onImageLoad(url, comicId, epId, target)`.
+ *
+ * @typedef {Object} ComicImageLoadTarget
+ * @property {number | null} logicalWidth - Display width in Flutter logical pixels (dp). null if unconstrained (e.g. continuous horizontal scroll).
+ * @property {number | null} logicalHeight - Display height in Flutter logical pixels (dp). null if unconstrained (e.g. continuous vertical scroll / waterfall).
+ * @property {number} devicePixelRatio - Screen device pixel ratio (e.g. 1.0, 2.0, 3.0). Multiply logical dimensions by this to compute physical pixels: Math.round(logical * dpr).
+ * @property {"contain" | "fitWidth" | "fitHeight"} fit - Display fitting mode.
+ *   - "contain": bounded in both dimensions (page flip mode, gallery single page, split dual-page).
+ *   - "fitWidth": width is aligned to viewport, height is unbounded (vertical continuous / waterfall).
+ *   - "fitHeight": height is aligned to viewport, width is unbounded (horizontal continuous scroll).
+ *
+ * Notes:
+ * - Null semantics: target is null when loaded outside specific reader layout (e.g. general preloading or legacy callers).
+ * - Compatibility: Existing comic sources with 3 parameters (url, comicId, epId) continue to work without modification.
+ * - Cache isolation: Caches with target constraints are isolated to prevent cross-resolution pollution.
+ * - No prescribed host algorithm: The app provides layout constraints only; comic sources may freely use or ignore them.
+ */
+```
+
 ### `ComicSource`
 ```javascript
 class ComicSource {

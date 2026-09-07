@@ -5,6 +5,7 @@ import 'package:venera_next/foundation/file_system.dart';
 import 'package:venera_next/foundation/init.dart';
 import 'package:venera_next/foundation/js_engine.dart';
 import 'package:venera_next/foundation/log.dart';
+import 'package:venera_next/network/images.dart';
 
 import 'category.dart';
 import 'comic_type_bridge.dart';
@@ -199,10 +200,16 @@ class ComicSourceManager with ChangeNotifier, Init {
     String sourceKey,
     String imageKey,
     String cid,
-    String eid,
-  ) async {
+    String eid, {
+    ComicImageLoadTarget? target,
+  }) async {
     final comicSource = find(sourceKey);
-    return await comicSource?.getImageLoadingConfig?.call(imageKey, cid, eid) ??
+    return await comicSource?.getImageLoadingConfig?.call(
+          imageKey,
+          cid,
+          eid,
+          target: target,
+        ) ??
         {};
   }
 

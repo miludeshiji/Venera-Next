@@ -1,6 +1,9 @@
 import 'package:venera_next/foundation/res.dart';
+import 'package:venera_next/network/images.dart';
 
 import 'models.dart';
+
+export 'package:venera_next/network/images.dart' show ComicImageLoadTarget;
 
 /// build comic list, [Res.subData] should be maxPage or null if there is no limit.
 typedef ComicListBuilder = Future<Res<List<Comic>>> Function(int page);
@@ -63,8 +66,9 @@ typedef GetImageLoadingConfigFunc =
     Future<Map<String, dynamic>> Function(
       String imageKey,
       String comicId,
-      String epId,
-    )?;
+      String epId, {
+      ComicImageLoadTarget? target,
+    })?;
 typedef GetThumbnailLoadingConfigFunc =
     Map<String, dynamic> Function(String imageKey)?;
 

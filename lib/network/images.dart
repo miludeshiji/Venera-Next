@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show immutable, visibleForTesting;
 import 'package:flutter_qjs/flutter_qjs.dart';
 import 'package:venera_next/foundation/cache_manager.dart';
 import 'package:venera_next/foundation/consts.dart';
@@ -15,13 +15,146 @@ typedef ThumbnailLoadingConfigResolver =
 typedef ThumbnailCoverResolver =
     FutureOr<String?> Function(String sourceKey, String cid);
 
+enum ComicImageTargetFit {
+  contain,
+  fitWidth,
+  fitHeight;
+
+  static ComicImageTargetFit fromString(String? value) {
+    return switch (value) {
+      'fitWidth' => ComicImageTargetFit.fitWidth,
+      'fitHeight' => ComicImageTargetFit.fitHeight,
+      _ => ComicImageTargetFit.contain,
+    };
+  }
+}
+
+@immutable
+class ComicImageLoadTarget {
+  final double? logicalWidth;
+  final double? logicalHeight;
+  final double devicePixelRatio;
+  final ComicImageTargetFit fit;
+
+  ComicImageLoadTarget({
+    double? logicalWidth,
+    double? logicalHeight,
+    double devicePixelRatio = 1.0,
+    this.fit = ComicImageTargetFit.contain,
+  }) : logicalWidth =
+           (logicalWidth != null && logicalWidth.isFinite && logicalWidth > 0)
+           ? logicalWidth
+           : null,
+       logicalHeight =
+           (logicalHeight != null &&
+               logicalHeight.isFinite &&
+               logicalHeight > 0)
+           ? logicalHeight
+           : null,
+       devicePixelRatio = (devicePixelRatio.isFinite && devicePixelRatio > 0)
+           ? devicePixelRatio
+           : 1.0;
+
+  const ComicImageLoadTarget.raw({
+    this.logicalWidth,
+    this.logicalHeight,
+    this.devicePixelRatio = 1.0,
+    this.fit = ComicImageTargetFit.contain,
+  });
+
+  int? get physicalWidth {
+    final w = logicalWidth;
+    final dpr = devicePixelRatio;
+    if (w == null || !w.isFinite || w <= 0 || !dpr.isFinite || dpr <= 0) {
+      return null;
+    }
+    final pw = (w * dpr).round();
+    return pw > 0 ? pw : null;
+  }
+
+  int? get physicalHeight {
+    final h = logicalHeight;
+    final dpr = devicePixelRatio;
+    if (h == null || !h.isFinite || h <= 0 || !dpr.isFinite || dpr <= 0) {
+      return null;
+    }
+    final ph = (h * dpr).round();
+    return ph > 0 ? ph : null;
+  }
+
+  String get cacheIdentity {
+    final pw = physicalWidth;
+    final ph = physicalHeight;
+    final wStr = pw != null ? 'w$pw' : 'wnull';
+    final hStr = ph != null ? 'h$ph' : 'hnull';
+    return '$wStr-$hStr-${fit.name}';
+  }
+
+  Map<String, dynamic> toJson() {
+    final w =
+        (logicalWidth != null && logicalWidth!.isFinite && logicalWidth! > 0)
+        ? logicalWidth
+        : null;
+    final h =
+        (logicalHeight != null && logicalHeight!.isFinite && logicalHeight! > 0)
+        ? logicalHeight
+        : null;
+    final dpr = (devicePixelRatio.isFinite && devicePixelRatio > 0)
+        ? devicePixelRatio
+        : 1.0;
+    return {
+      'logicalWidth': w,
+      'logicalHeight': h,
+      'devicePixelRatio': dpr,
+      'fit': fit.name,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is ComicImageLoadTarget &&
+        physicalWidth == other.physicalWidth &&
+        physicalHeight == other.physicalHeight &&
+        (devicePixelRatio.isFinite && devicePixelRatio > 0
+                ? devicePixelRatio
+                : 1.0) ==
+            (other.devicePixelRatio.isFinite && other.devicePixelRatio > 0
+                ? other.devicePixelRatio
+                : 1.0) &&
+        fit == other.fit;
+  }
+
+  @override
+  int get hashCode {
+    final dpr = (devicePixelRatio.isFinite && devicePixelRatio > 0)
+        ? devicePixelRatio
+        : 1.0;
+    return Object.hash(physicalWidth, physicalHeight, dpr, fit);
+  }
+
+  @override
+  String toString() =>
+      'ComicImageLoadTarget(physical: ${physicalWidth}x$physicalHeight, dpr: $devicePixelRatio, fit: ${fit.name})';
+}
+
 typedef ComicImageLoadingConfigResolver =
     FutureOr<Map<String, dynamic>> Function(
       String sourceKey,
       String imageKey,
       String cid,
-      String eid,
-    );
+      String eid, {
+      ComicImageLoadTarget? target,
+    });
+
+typedef ComicImageDebugLoader =
+    Stream<ImageDownloadProgress> Function(
+      String imageKey,
+      String? sourceKey,
+      String cid,
+      String eid, {
+      ComicImageLoadTarget? target,
+    });
 
 abstract class ImageDownloader {
   static ThumbnailLoadingConfigResolver? _thumbnailLoadingConfigResolver;
@@ -33,11 +166,45 @@ abstract class ImageDownloader {
   static void configureSourceImageLoading({
     ThumbnailLoadingConfigResolver? thumbnailLoadingConfig,
     ThumbnailCoverResolver? thumbnailCover,
-    ComicImageLoadingConfigResolver? comicImageLoadingConfig,
+    dynamic comicImageLoadingConfig,
   }) {
     _thumbnailLoadingConfigResolver = thumbnailLoadingConfig;
     _thumbnailCoverResolver = thumbnailCover;
-    _comicImageLoadingConfigResolver = comicImageLoadingConfig;
+    if (comicImageLoadingConfig == null) {
+      _comicImageLoadingConfigResolver = null;
+    } else if (comicImageLoadingConfig is ComicImageLoadingConfigResolver) {
+      _comicImageLoadingConfigResolver = comicImageLoadingConfig;
+    } else if (comicImageLoadingConfig
+        is FutureOr<Map<String, dynamic>> Function(
+          String,
+          String,
+          String,
+          String,
+        )) {
+      _comicImageLoadingConfigResolver =
+          (sourceKey, imageKey, cid, eid, {target}) =>
+              comicImageLoadingConfig(sourceKey, imageKey, cid, eid);
+    } else {
+      _comicImageLoadingConfigResolver =
+          (sourceKey, imageKey, cid, eid, {target}) {
+            try {
+              return (comicImageLoadingConfig as dynamic)(
+                sourceKey,
+                imageKey,
+                cid,
+                eid,
+                target: target,
+              );
+            } on NoSuchMethodError {
+              return (comicImageLoadingConfig as dynamic)(
+                sourceKey,
+                imageKey,
+                cid,
+                eid,
+              );
+            }
+          };
+    }
   }
 
   @visibleForTesting
@@ -45,14 +212,70 @@ abstract class ImageDownloader {
     configureSourceImageLoading();
   }
 
+  static ComicImageDebugLoader? _debugLoadComicImageUnwrapped;
+
   @visibleForTesting
-  static Stream<ImageDownloadProgress> Function(
+  static ComicImageDebugLoader? get debugLoadComicImageUnwrapped =>
+      _debugLoadComicImageUnwrapped;
+
+  @visibleForTesting
+  static set debugLoadComicImageUnwrapped(dynamic loader) {
+    if (loader == null) {
+      _debugLoadComicImageUnwrapped = null;
+    } else if (loader is ComicImageDebugLoader) {
+      _debugLoadComicImageUnwrapped = loader;
+    } else if (loader
+        is Stream<ImageDownloadProgress> Function(
+          String,
+          String?,
+          String,
+          String,
+        )) {
+      _debugLoadComicImageUnwrapped =
+          (imageKey, sourceKey, cid, eid, {target}) =>
+              loader(imageKey, sourceKey, cid, eid);
+    } else {
+      _debugLoadComicImageUnwrapped =
+          (imageKey, sourceKey, cid, eid, {target}) {
+            try {
+              return (loader as dynamic)(
+                imageKey,
+                sourceKey,
+                cid,
+                eid,
+                target: target,
+              );
+            } on NoSuchMethodError {
+              return (loader as dynamic)(imageKey, sourceKey, cid, eid);
+            }
+          };
+    }
+  }
+
+  /// Generate a stable cache key for comic images.
+  /// Used for active deduplication and disk cache.
+  static String getComicImageCacheKey(
     String imageKey,
     String? sourceKey,
     String cid,
-    String eid,
-  )?
-  debugLoadComicImageUnwrapped;
+    String eid, {
+    ComicImageLoadTarget? target,
+  }) {
+    final base = "$imageKey@$sourceKey@$cid@$eid";
+    if (target != null) {
+      return "$base@${target.cacheIdentity}";
+    }
+    return base;
+  }
+
+  /// Alias for building comic image cache key.
+  static String buildComicImageCacheKey(
+    String imageKey,
+    String? sourceKey,
+    String cid,
+    String eid, {
+    ComicImageLoadTarget? target,
+  }) => getComicImageCacheKey(imageKey, sourceKey, cid, eid, target: target);
 
   @visibleForTesting
   static bool debugShouldRetryImageLoad({
@@ -230,15 +453,44 @@ abstract class ImageDownloader {
     _loadingImages.clear();
   }
 
+  /// Preload a comic image from the network or cache.
+  ///
+  /// Consumes the shared stream from [loadComicImage] so that the active
+  /// stream is not cancelled when UI listeners unmount or cancel.
+  static Future<void> preloadComicImage(
+    String imageKey,
+    String? sourceKey,
+    String cid,
+    String eid, {
+    ComicImageLoadTarget? target,
+  }) async {
+    await for (final _ in loadComicImage(
+      imageKey,
+      sourceKey,
+      cid,
+      eid,
+      target: target,
+    )) {
+      // Consume the shared stream until completion.
+    }
+  }
+
   /// Load a comic image from the network or cache.
   /// The function will prevent multiple requests for the same image.
   static Stream<ImageDownloadProgress> loadComicImage(
     String imageKey,
     String? sourceKey,
     String cid,
-    String eid,
-  ) {
-    final cacheKey = "$imageKey@$sourceKey@$cid@$eid";
+    String eid, {
+    ComicImageLoadTarget? target,
+  }) {
+    final cacheKey = getComicImageCacheKey(
+      imageKey,
+      sourceKey,
+      cid,
+      eid,
+      target: target,
+    );
     final activeStream = _loadingImages[cacheKey];
     if (activeStream != null) {
       if (!activeStream.isClosed) {
@@ -248,8 +500,8 @@ abstract class ImageDownloader {
     }
     final debugLoader = debugLoadComicImageUnwrapped;
     final stream = _StreamWrapper<ImageDownloadProgress>(
-      debugLoader?.call(imageKey, sourceKey, cid, eid) ??
-          _loadComicImage(imageKey, sourceKey, cid, eid),
+      debugLoader?.call(imageKey, sourceKey, cid, eid, target: target) ??
+          _loadComicImage(imageKey, sourceKey, cid, eid, target: target),
       (wrapper) {
         if (identical(_loadingImages[cacheKey], wrapper)) {
           _loadingImages.remove(cacheKey);
@@ -264,22 +516,30 @@ abstract class ImageDownloader {
     String imageKey,
     String? sourceKey,
     String cid,
-    String eid,
-  ) {
+    String eid, {
+    ComicImageLoadTarget? target,
+  }) {
     final debugLoader = debugLoadComicImageUnwrapped;
     if (debugLoader != null) {
-      return debugLoader(imageKey, sourceKey, cid, eid);
+      return debugLoader(imageKey, sourceKey, cid, eid, target: target);
     }
-    return _loadComicImage(imageKey, sourceKey, cid, eid);
+    return _loadComicImage(imageKey, sourceKey, cid, eid, target: target);
   }
 
   static Stream<ImageDownloadProgress> _loadComicImage(
     String imageKey,
     String? sourceKey,
     String cid,
-    String eid,
-  ) async* {
-    final cacheKey = "$imageKey@$sourceKey@$cid@$eid";
+    String eid, {
+    ComicImageLoadTarget? target,
+  }) async* {
+    final cacheKey = getComicImageCacheKey(
+      imageKey,
+      sourceKey,
+      cid,
+      eid,
+      target: target,
+    );
     final cache = await CacheManager().findCache(cacheKey);
 
     if (cache != null) {
@@ -302,6 +562,7 @@ abstract class ImageDownloader {
             imageKey,
             cid,
             eid,
+            target: target,
           ) ??
           {};
     }
@@ -397,6 +658,21 @@ abstract class ImageDownloader {
     }
   }
 }
+
+/// Global helper to build comic image cache key.
+String buildComicImageCacheKey(
+  String imageKey,
+  String? sourceKey,
+  String cid,
+  String eid, {
+  ComicImageLoadTarget? target,
+}) => ImageDownloader.getComicImageCacheKey(
+  imageKey,
+  sourceKey,
+  cid,
+  eid,
+  target: target,
+);
 
 /// A wrapper class for a stream that
 /// allows multiple listeners to listen to the same stream.

@@ -32,10 +32,7 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
     Duration duration,
     Future<void> cancelSignal,
   ) {
-    return Future.any([
-      Future<void>.delayed(duration),
-      cancelSignal,
-    ]);
+    return Future.any([Future<void>.delayed(duration), cancelSignal]);
   }
 
   static const int maxImagePixel = 2560 * 1440;
@@ -53,7 +50,10 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
     // resize if too large
     if (width * height > maxImagePixel) {
       final ratio = sqrt(maxImagePixel / (width * height));
-      return TargetImageSize(width: (width * ratio).round(), height: (height * ratio).round());
+      return TargetImageSize(
+        width: (width * ratio).round(),
+        height: (height * ratio).round(),
+      );
     }
     return TargetImageSize(width: width, height: height);
   }
@@ -146,12 +146,13 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
           getTargetSize: enableResize ? _getTargetSize : null,
         );
       } catch (e) {
-        await CacheManager().delete(this.key);
+        await CacheManager().delete(diskCacheKey);
         if (data.length < 2 * 1024) {
           // data is too short, it's likely that the data is text, not image
           try {
-            var text =
-                const Utf8Codec(allowMalformed: false).decoder.convert(data);
+            var text = const Utf8Codec(
+              allowMalformed: false,
+            ).decoder.convert(data);
             throw Exception("Expected image data, but got text: $text");
           } catch (e) {
             // ignore
@@ -178,6 +179,10 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
   );
 
   String get key;
+
+  /// Key used for disk cache operations (e.g. deletion on decode failure).
+  /// Defaults to [key]. Subclasses may override this to return their disk cache key.
+  String get diskCacheKey => key;
 
   @override
   bool operator ==(Object other) {

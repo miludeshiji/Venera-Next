@@ -499,12 +499,31 @@ If `load` function is implemented, `loadNext` function will be ignored.
         },
         /**
          * [Optional] provide configs for an image loading
-         * @param url
-         * @param comicId
-         * @param epId
+         *
+         * The 4th argument `target` is optional and nullable (e.g. `null` when loading outside specific reader layout).
+         * - `logicalWidth` {number | null}: logical width in Flutter dp. `null` if unconstrained (e.g. horizontal continuous scroll).
+         * - `logicalHeight` {number | null}: logical height in Flutter dp. `null` if unconstrained (e.g. vertical continuous scroll / waterfall).
+         * - `devicePixelRatio` {number}: device pixel ratio (DPR, defaults to 1.0). Physical pixels = Math.round(logical * DPR).
+         * - `fit` {"contain" | "fitWidth" | "fitHeight"}:
+         *   - `contain`: bounded in both dimensions (page-by-page, gallery single page, split dual-page).
+         *   - `fitWidth`: width aligned to viewport, unbounded height (vertical continuous scroll).
+         *   - `fitHeight`: height aligned to viewport, unbounded width (horizontal continuous scroll).
+         *
+         * Backward Compatibility:
+         * - Existing sources with `(url, comicId, epId)` continue to work without modification.
+         * - Caches with and without `target` are isolated to prevent cross-resolution pollution.
+         *
+         * No Prescribed Host Algorithm:
+         * - The app only provides objective layout constraints and does not prescribe CDN algorithms or resolution tiers.
+         * - Comic sources may freely use or ignore `target`.
+         *
+         * @param url {string}
+         * @param comicId {string}
+         * @param epId {string?}
+         * @param target {ComicImageLoadTarget?}
          * @returns {ImageLoadingConfig | Promise<ImageLoadingConfig>}
          */
-        onImageLoad: (url, comicId, epId) => {
+        onImageLoad: (url, comicId, epId, target) => {
             return {}
         },
         /**

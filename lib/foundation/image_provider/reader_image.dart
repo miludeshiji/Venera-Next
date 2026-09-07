@@ -55,6 +55,7 @@ class ReaderImageProvider
     this.eid,
     this.page, {
     this.enableResize = false,
+    this.target,
   });
 
   final String imageKey;
@@ -67,9 +68,10 @@ class ReaderImageProvider
 
   final int page;
 
+  final ComicImageLoadTarget? target;
+
   @override
   final bool enableResize;
-
   @override
   Future<Uint8List> load(chunkEvents, checkStop) async {
     Uint8List? imageBytes;
@@ -86,6 +88,7 @@ class ReaderImageProvider
         sourceKey,
         cid,
         eid,
+        target: target,
       )) {
         checkStop();
         chunkEvents.add(
@@ -162,5 +165,16 @@ class ReaderImageProvider
   }
 
   @override
-  String get key => "$imageKey@$sourceKey@$cid@$eid@$enableResize";
+  String get key => target != null
+      ? "$imageKey@$sourceKey@$cid@$eid@$enableResize@${target!.cacheIdentity}"
+      : "$imageKey@$sourceKey@$cid@$eid@$enableResize";
+
+  @override
+  String get diskCacheKey => ImageDownloader.getComicImageCacheKey(
+    imageKey,
+    sourceKey,
+    cid,
+    eid,
+    target: target,
+  );
 }

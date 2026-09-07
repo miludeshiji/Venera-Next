@@ -9,6 +9,7 @@ import 'package:venera_next/features/comic_source/comic_source.dart';
 import 'package:venera_next/foundation/comic_type.dart';
 import 'package:venera_next/foundation/js_engine.dart';
 import 'package:venera_next/foundation/res.dart';
+import 'package:venera_next/network/images.dart';
 
 void main() {
   setUp(() {
@@ -310,6 +311,196 @@ class ExtendedSource extends ComicSource {
         JsEngine().runCode('ComicSource.sources.extended_test_key.replyCount'),
         1,
       );
+    },
+    skip: _qjsAvailable() ? false : 'flutter_qjs native library is unavailable',
+  );
+
+  test(
+    'ComicSourceParser bridges comic.onImageLoad with legacy 3-arg compatibility, target map fields, and null target',
+    () async {
+      final tempDir = Directory.systemTemp.createTempSync(
+        'venera-parser-test-',
+      );
+      addTearDown(() {
+        if (tempDir.existsSync()) {
+          tempDir.deleteSync(recursive: true);
+        }
+      });
+      App.dataPath = tempDir.path;
+
+      final initScript = await File('assets/init.js').readAsBytes();
+      JsEngine.cacheJsInit(initScript);
+      await JsEngine().init();
+      addTearDown(() async {
+        await JsEngine().dispose();
+      });
+
+      const legacyJs = '''
+class LegacyImageSource extends ComicSource {
+  name = "Legacy Image Source"
+  key = "legacy_image_test_key"
+  version = "1.0.0"
+  url = "https://example.com"
+
+  comic = {
+    onImageLoad: (imageKey, comicId, ep) => {
+      this.lastLegacyCall = { imageKey, comicId, ep };
+      return {
+        url: "https://example.com/legacy/" + comicId + "/" + ep + "/" + imageKey,
+        headers: { "Referer": "https://example.com" }
+      };
+    }
+  }
+}
+''';
+
+      final legacySource = await ComicSourceParser().parse(
+        legacyJs,
+        'legacy_image.js',
+      );
+      expect(legacySource.getImageLoadingConfig, isNotNull);
+
+      // Legacy 3-arg call without target
+      final legacyRes1 = await legacySource.getImageLoadingConfig!(
+        '001.jpg',
+        'comic_legacy',
+        'ch_1',
+      );
+      expect(
+        legacyRes1['url'],
+        'https://example.com/legacy/comic_legacy/ch_1/001.jpg',
+      );
+      expect(legacyRes1['headers'], {'Referer': 'https://example.com'});
+
+      final legacyCall1 =
+          JsEngine().runCode(
+                'ComicSource.sources.legacy_image_test_key.lastLegacyCall',
+              )
+              as Map;
+      expect(legacyCall1['imageKey'], '001.jpg');
+      expect(legacyCall1['comicId'], 'comic_legacy');
+      expect(legacyCall1['ep'], 'ch_1');
+
+      // Legacy source called with target: null
+      final legacyResNull = await legacySource.getImageLoadingConfig!(
+        '002.jpg',
+        'comic_legacy',
+        'ch_1',
+        target: null,
+      );
+      expect(
+        legacyResNull['url'],
+        'https://example.com/legacy/comic_legacy/ch_1/002.jpg',
+      );
+
+      // Legacy source called with target object
+      final legacyResWithTarget = await legacySource.getImageLoadingConfig!(
+        '003.jpg',
+        'comic_legacy',
+        'ch_1',
+        target: ComicImageLoadTarget(
+          logicalWidth: 800,
+          logicalHeight: 1200,
+          devicePixelRatio: 2.0,
+          fit: ComicImageTargetFit.contain,
+        ),
+      );
+      expect(
+        legacyResWithTarget['url'],
+        'https://example.com/legacy/comic_legacy/ch_1/003.jpg',
+      );
+
+      const modernJs = '''
+class ModernImageSource extends ComicSource {
+  name = "Modern Image Source"
+  key = "modern_image_test_key"
+  version = "1.0.0"
+  url = "https://example.com"
+
+  comic = {
+    onImageLoad: (imageKey, comicId, ep, target) => {
+      this.lastModernCall = { imageKey, comicId, ep, target };
+      return {
+        url: "https://example.com/modern/" + comicId + "/" + ep + "/" + imageKey,
+        fit: target ? target.fit : null,
+        dpr: target ? target.devicePixelRatio : null,
+        targetReceived: target != null
+      };
+    }
+  }
+}
+''';
+
+      final modernSource = await ComicSourceParser().parse(
+        modernJs,
+        'modern_image.js',
+      );
+      expect(modernSource.getImageLoadingConfig, isNotNull);
+
+      // Modern source with full target fields
+      final modernTarget = ComicImageLoadTarget(
+        logicalWidth: 600,
+        logicalHeight: 900,
+        devicePixelRatio: 1.5,
+        fit: ComicImageTargetFit.fitWidth,
+      );
+      final modernResWithTarget = await modernSource.getImageLoadingConfig!(
+        '004.jpg',
+        'comic_modern',
+        'ch_2',
+        target: modernTarget,
+      );
+      expect(modernResWithTarget['fit'], 'fitWidth');
+      expect(modernResWithTarget['dpr'], 1.5);
+      expect(modernResWithTarget['targetReceived'], isTrue);
+
+      final modernCall1 =
+          JsEngine().runCode(
+                'ComicSource.sources.modern_image_test_key.lastModernCall',
+              )
+              as Map;
+      expect(modernCall1['imageKey'], '004.jpg');
+      expect(modernCall1['comicId'], 'comic_modern');
+      expect(modernCall1['ep'], 'ch_2');
+
+      final targetMap = modernCall1['target'] as Map;
+      expect((targetMap['logicalWidth'] as num).toDouble(), 600.0);
+      expect((targetMap['logicalHeight'] as num).toDouble(), 900.0);
+      expect((targetMap['devicePixelRatio'] as num).toDouble(), 1.5);
+      expect(targetMap['fit'], 'fitWidth');
+
+      // Modern source with explicit null target
+      final modernResNull = await modernSource.getImageLoadingConfig!(
+        '005.jpg',
+        'comic_modern',
+        'ch_2',
+        target: null,
+      );
+      expect(modernResNull['targetReceived'], isFalse);
+      expect(modernResNull['fit'], isNull);
+
+      final modernCallNull =
+          JsEngine().runCode(
+                'ComicSource.sources.modern_image_test_key.lastModernCall',
+              )
+              as Map;
+      expect(modernCallNull['target'], isNull);
+
+      // Modern source with omitted target (defaults to null)
+      final modernResOmitted = await modernSource.getImageLoadingConfig!(
+        '006.jpg',
+        'comic_modern',
+        'ch_2',
+      );
+      expect(modernResOmitted['targetReceived'], isFalse);
+      expect(modernResOmitted['fit'], isNull);
+
+      final modernCallOmitted =
+          JsEngine().runCode(
+                'ComicSource.sources.modern_image_test_key.lastModernCall',
+              )
+              as Map;
+      expect(modernCallOmitted['target'], isNull);
     },
     skip: _qjsAvailable() ? false : 'flutter_qjs native library is unavailable',
   );

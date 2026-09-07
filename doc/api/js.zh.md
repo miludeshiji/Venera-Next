@@ -28,6 +28,25 @@ JavaScript API 主要分为以下几类：
 仅提供文本与二进制 WebSocket transport，不包含 SignalR、重连策略或
 站点认证语义。
 
+
+## 章节图片排版目标（ComicImageLoadTarget）
+
+漫画源实现 `comic.onImageLoad(url, comicId, epId, target)` 时，可接收可选的第四个参数 `target`（类型为 `ComicImageLoadTarget | null`）：
+
+- **字段与单位**：
+  - `logicalWidth` (`number | null`)：目标显示容器的 Flutter 逻辑像素宽度（dp）。当宽度无约束时为 `null`。
+  - `logicalHeight` (`number | null`)：目标显示容器的 Flutter 逻辑像素高度（dp）。当高度无约束时为 `null`。
+  - `devicePixelRatio` (`number`)：设备像素比（DPR，如 1.0、2.0、3.0）。物理像素计算方式为 `Math.round(logicalWidth * devicePixelRatio)`。
+  - `fit` (`"contain" | "fitWidth" | "fitHeight"`)：排版适应模式。
+    - `"contain"`：双向受限（翻页或单图模式），宽高均非 `null`。
+    - `"fitWidth"`：纵向连续滚动（条漫/瀑布流），宽度对齐视口，高度为 `null`。
+    - `"fitHeight"`：横向连续滚动，高度对齐视口，宽度为 `null`。
+- **null 语义与兼容性**：
+  - 在无特定排版约束的上下文（如后台通用预加载或未传递 target 的调用）中，`target` 为 `null`。
+  - 仅接收 `(url, comicId, epId)` 的旧源完全兼容，无需修改。
+  - 缓存机制会依据 `target` 规格进行隔离，避免不同分辨率缓存交叉污染。
+- **应用不规定图床算法**：
+  - 应用仅向扩展提供客观的排版约束信息，不规定也不干预图床 CDN 的分辨率、参数转换或图片格式算法，漫画源可自由按需使用或忽略。
 ## 使用建议
 
 - 新扩展应优先使用稳定 API，避免依赖内部实现细节。

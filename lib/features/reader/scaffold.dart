@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +12,7 @@ import 'package:venera_next/features/history/history.dart';
 import 'package:venera_next/features/reader/brightness.dart';
 import 'package:venera_next/features/reader/chapter_comments.dart';
 import 'package:venera_next/features/reader/chapters.dart';
+import 'package:venera_next/features/reader/comic_image.dart';
 import 'package:venera_next/features/reader/eink_refresh.dart';
 import 'package:venera_next/features/reader/gesture.dart';
 import 'package:venera_next/features/reader/images.dart';
@@ -26,9 +26,12 @@ import 'package:venera_next/foundation/extensions.dart';
 import 'package:venera_next/foundation/file_interaction.dart';
 import 'package:venera_next/foundation/file_type.dart';
 import 'package:venera_next/foundation/log.dart';
+import 'package:venera_next/foundation/image_provider/reader_image.dart';
 import 'package:venera_next/foundation/translations.dart';
 import 'package:venera_next/foundation/widget_utils.dart';
 import 'package:venera_next/routing/settings.dart';
+
+import 'package:venera_next/network/images.dart';
 
 class ReaderScaffold extends StatefulWidget {
   const ReaderScaffold({super.key, required this.child});
@@ -1052,10 +1055,13 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
   /// show an overlay to let the user select an image.
   ///
   /// The return value is the index of the selected image.
-  Future<int?> selectImage() async {
+  Future<
+    ({int index, ReaderImageProvider? provider, ComicImageLoadTarget? target})?
+  >
+  _selectImageDetails() async {
     var reader = context.reader;
     var imageViewController = context.reader.imageViewController;
-    if (imageViewController == null) {
+    if (imageViewController == null || (reader.images?.isEmpty ?? true)) {
       return null;
     }
 
@@ -1079,14 +1085,76 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
       singleImageIndex = reader.page - 1;
     }
 
+    ReaderImageProvider? extractReaderProvider(ImageProvider provider) {
+      var p = provider;
+      if (p is ResizeImage) {
+        p = p.imageProvider;
+      }
+      if (p is ReaderImageProvider) {
+        return p;
+      }
+      return null;
+    }
+
+    Set<State<ComicImage>>? getControllerImageStates() {
+      if (imageViewController is GalleryModeState) {
+        return imageViewController.imageStates;
+      } else if (imageViewController is ContinuousModeState) {
+        return imageViewController.imageStates;
+      }
+      return null;
+    }
+
+    ReaderImageProvider? findProviderByOffset(Offset location) {
+      final states = getControllerImageStates();
+      if (states != null) {
+        for (var imageState in states) {
+          if (imageState is ComicImageState &&
+              imageState.containsPoint(location)) {
+            final p = extractReaderProvider(imageState.widget.image);
+            if (p != null) {
+              return p;
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    ReaderImageProvider? findProviderByIndex(int index) {
+      if (index < 0 || index >= (reader.images?.length ?? 0)) return null;
+      var targetKey = reader.images![index];
+      final states = getControllerImageStates();
+      if (states != null) {
+        for (var imageState in states) {
+          if (imageState is ComicImageState) {
+            final p = extractReaderProvider(imageState.widget.image);
+            if (p != null) {
+              if (p.imageKey == targetKey || p.page == index + 1) {
+                return p;
+              }
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    int? selectedIndex;
+    ReaderImageProvider? selectedProvider;
+
     if (!needsSelection && singleImageIndex != null) {
-      return singleImageIndex;
+      selectedIndex = singleImageIndex;
+      selectedProvider = findProviderByIndex(singleImageIndex);
     } else {
       var location = await _showSelectImageOverlay();
       if (location == null) {
         return null;
       }
-      var imageKey = imageViewController.getImageKeyByOffset(location);
+      selectedProvider = findProviderByOffset(location);
+      var imageKey =
+          selectedProvider?.imageKey ??
+          imageViewController.getImageKeyByOffset(location);
       if (imageKey == null) {
         return null;
       }
@@ -1094,25 +1162,55 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
       if (index == null || index == -1) {
         return null;
       }
-      return index;
+      selectedIndex = index;
+      selectedProvider ??= findProviderByIndex(index);
     }
+
+    if (selectedIndex < 0 || selectedIndex >= (reader.images?.length ?? 0)) {
+      return null;
+    }
+
+    final target =
+        selectedProvider?.target ??
+        calculateReaderImageTargetFromContext(context, selectedIndex + 1);
+
+    return (index: selectedIndex, provider: selectedProvider, target: target);
+  }
+
+  Future<int?> selectImage() async {
+    final selection = await _selectImageDetails();
+    return selection?.index;
   }
 
   /// Same as [selectImage], but return the image data with its index.
   /// Returns (imageIndex, imageData) or null if cancelled.
   Future<(int, Uint8List)?> selectImageToData() async {
-    var i = await selectImage();
-    if (i == null) {
+    final selection = await _selectImageDetails();
+    if (selection == null) {
       return null;
     }
+    final i = selection.index;
     var imageKey = context.reader.images![i];
     Uint8List data;
     if (imageKey.startsWith("file://")) {
-      data = await File(imageKey.substring(7)).readAsBytes();
+      final file = File(imageKey.substring(7));
+      if (!await file.exists()) {
+        return null;
+      }
+      data = await file.readAsBytes();
     } else {
-      data = await (await CacheManager().findCache(
-        "$imageKey@${context.reader.type.sourceKey}@${context.reader.cid}@${context.reader.eid}",
-      ))!.readAsBytes();
+      final cacheKey = ImageDownloader.getComicImageCacheKey(
+        imageKey,
+        context.reader.type.sourceKey,
+        context.reader.cid,
+        context.reader.eid,
+        target: selection.target,
+      );
+      final cache = await CacheManager().findCache(cacheKey);
+      if (cache == null) {
+        return null;
+      }
+      data = await cache.readAsBytes();
     }
     return (i, data);
   }

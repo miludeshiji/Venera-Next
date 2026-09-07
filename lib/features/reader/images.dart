@@ -1192,17 +1192,54 @@ class GalleryModeState extends State<_GalleryMode>
     return false;
   }
 
+  ReaderImageProvider? _findProviderByOffset(Offset offset) {
+    var range = getCurrentPageImageRange();
+    if (range == null) return null;
+
+    var (startIndex, endIndex) = range;
+
+    for (var imageState in imageStates) {
+      if ((imageState as ComicImageState).containsPoint(offset)) {
+        final image = imageState.widget.image;
+        if (image is ReaderImageProvider) {
+          int index = reader.images?.indexOf(image.imageKey) ?? -1;
+          if (index >= startIndex && index < endIndex) {
+            return image;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   @override
   Future<Uint8List?> getImageByOffset(Offset offset) async {
-    var imageKey = getImageKeyByOffset(offset);
+    final provider = _findProviderByOffset(offset);
+    final imageKey = provider?.imageKey ?? getImageKeyByOffset(offset);
     if (imageKey == null) return null;
     if (imageKey.startsWith("file://")) {
       return await File(imageKey.substring(7)).readAsBytes();
-    } else {
-      return (await CacheManager().findCache(
-        "$imageKey@${context.reader.type.sourceKey}@${context.reader.cid}@${context.reader.eid}",
-      ))!.readAsBytes();
     }
+
+    final ComicImageLoadTarget? target;
+    if (provider?.target != null) {
+      target = provider!.target;
+    } else {
+      final index = reader.images?.indexOf(imageKey) ?? -1;
+      target = index >= 0
+          ? calculateReaderImageTargetFromContext(context, index + 1)
+          : null;
+    }
+
+    final cacheKey = ImageDownloader.getComicImageCacheKey(
+      imageKey,
+      provider?.sourceKey ?? context.reader.type.sourceKey,
+      provider?.cid ?? context.reader.cid,
+      provider?.eid ?? context.reader.eid,
+      target: target,
+    );
+    final cache = await CacheManager().findCache(cacheKey);
+    return cache?.readAsBytes();
   }
 
   @override
@@ -2225,17 +2262,46 @@ class ContinuousModeState extends State<_ContinuousMode>
     return false;
   }
 
+  ReaderImageProvider? _findProviderByOffset(Offset offset) {
+    for (var imageState in imageStates) {
+      if ((imageState as ComicImageState).containsPoint(offset)) {
+        final image = imageState.widget.image;
+        if (image is ReaderImageProvider) {
+          return image;
+        }
+      }
+    }
+    return null;
+  }
+
   @override
   Future<Uint8List?> getImageByOffset(Offset offset) async {
-    var imageKey = getImageKeyByOffset(offset);
+    final provider = _findProviderByOffset(offset);
+    final imageKey = provider?.imageKey ?? getImageKeyByOffset(offset);
     if (imageKey == null) return null;
     if (imageKey.startsWith("file://")) {
       return await File(imageKey.substring(7)).readAsBytes();
-    } else {
-      return (await CacheManager().findCache(
-        "$imageKey@${context.reader.type.sourceKey}@${context.reader.cid}@${context.reader.eid}",
-      ))!.readAsBytes();
     }
+
+    final ComicImageLoadTarget? target;
+    if (provider?.target != null) {
+      target = provider!.target;
+    } else {
+      final index = reader.images?.indexOf(imageKey) ?? -1;
+      target = index >= 0
+          ? calculateReaderImageTargetFromContext(context, index + 1)
+          : null;
+    }
+
+    final cacheKey = ImageDownloader.getComicImageCacheKey(
+      imageKey,
+      provider?.sourceKey ?? context.reader.type.sourceKey,
+      provider?.cid ?? context.reader.cid,
+      provider?.eid ?? context.reader.eid,
+      target: target,
+    );
+    final cache = await CacheManager().findCache(cacheKey);
+    return cache?.readAsBytes();
   }
 
   @override
@@ -2250,21 +2316,138 @@ class ContinuousModeState extends State<_ContinuousMode>
   }
 }
 
+/// Pure calculation helper for reader image target.
+ComicImageLoadTarget calculateReaderImageTarget({
+  required ReaderMode mode,
+  required Size viewportSize,
+  required double devicePixelRatio,
+  required int page,
+  required int totalImages,
+  int imagesPerPage = 1,
+  bool showSingleImageOnFirstPage = false,
+}) {
+  if (mode.isContinuous) {
+    if (mode.isTopToBottom) {
+      // 纵向Continuous/Waterfall为fitWidth且高度null
+      return ComicImageLoadTarget(
+        logicalWidth: viewportSize.width,
+        logicalHeight: null,
+        devicePixelRatio: devicePixelRatio,
+        fit: ComicImageTargetFit.fitWidth,
+      );
+    } else {
+      // 横向Continuous为fitHeight且宽度null
+      return ComicImageLoadTarget(
+        logicalWidth: null,
+        logicalHeight: viewportSize.height,
+        devicePixelRatio: devicePixelRatio,
+        fit: ComicImageTargetFit.fitHeight,
+      );
+    }
+  }
+
+  // Gallery mode
+  if (page <= 0) {
+    return ComicImageLoadTarget(
+      logicalWidth: viewportSize.width,
+      logicalHeight: viewportSize.height,
+      devicePixelRatio: devicePixelRatio,
+      fit: ComicImageTargetFit.contain,
+    );
+  }
+
+  if (imagesPerPage == 1) {
+    // Gallery单图全视口
+    return ComicImageLoadTarget(
+      logicalWidth: viewportSize.width,
+      logicalHeight: viewportSize.height,
+      devicePixelRatio: devicePixelRatio,
+      fit: ComicImageTargetFit.contain,
+    );
+  }
+
+  // Gallery dual-page mode (imagesPerPage == 2)
+  bool isSingle = false;
+  if (showSingleImageOnFirstPage) {
+    if (page == 1) {
+      // 封面单图全视口
+      isSingle = true;
+    } else {
+      final pairStart = 2 + ((page - 2) ~/ 2) * 2;
+      if (pairStart == totalImages) {
+        // 奇数单图全视口
+        isSingle = true;
+      }
+    }
+  } else {
+    final pairStart = 1 + ((page - 1) ~/ 2) * 2;
+    if (pairStart == totalImages) {
+      // 奇数单图全视口
+      isSingle = true;
+    }
+  }
+
+  if (isSingle) {
+    return ComicImageLoadTarget(
+      logicalWidth: viewportSize.width,
+      logicalHeight: viewportSize.height,
+      devicePixelRatio: devicePixelRatio,
+      fit: ComicImageTargetFit.contain,
+    );
+  }
+
+  if (mode == ReaderMode.galleryTopToBottom) {
+    // 纵向双图半高
+    return ComicImageLoadTarget(
+      logicalWidth: viewportSize.width,
+      logicalHeight: viewportSize.height / 2,
+      devicePixelRatio: devicePixelRatio,
+      fit: ComicImageTargetFit.contain,
+    );
+  } else {
+    // 横向双图半宽
+    return ComicImageLoadTarget(
+      logicalWidth: viewportSize.width / 2,
+      logicalHeight: viewportSize.height,
+      devicePixelRatio: devicePixelRatio,
+      fit: ComicImageTargetFit.contain,
+    );
+  }
+}
+
+/// Context-based helper for reader image target calculation.
+ComicImageLoadTarget calculateReaderImageTargetFromContext(
+  BuildContext context,
+  int page,
+) {
+  final reader = context.reader;
+  final mediaQuery = MediaQuery.of(context);
+  return calculateReaderImageTarget(
+    mode: reader.mode,
+    viewportSize: mediaQuery.size,
+    devicePixelRatio: mediaQuery.devicePixelRatio,
+    page: page,
+    totalImages: reader.images?.length ?? 0,
+    imagesPerPage: reader.imagesPerPage,
+    showSingleImageOnFirstPage: reader.showSingleImageOnFirstPage(),
+  );
+}
+
 ImageProvider _createImageProviderFromKey(
   String imageKey,
   BuildContext context,
   int page,
 ) {
   var reader = context.reader;
+  final target = calculateReaderImageTargetFromContext(context, page);
   return ReaderImageProvider(
     imageKey,
     reader.type.comicSource?.key,
     reader.cid,
     reader.eid,
     page,
-    enableResize: reader
-        .mode
-        .isContinuous, // For continuous mode, we need to resize the image to improve performance
+    enableResize: reader.mode.isContinuous,
+    target: target,
   );
 }
 
@@ -2273,6 +2456,7 @@ ImageProvider _createImageProviderFromRef(
   BuildContext context,
 ) {
   var reader = context.reader;
+  final target = calculateReaderImageTargetFromContext(context, imageRef.page);
   return ReaderImageProvider(
     imageRef.imageKey,
     reader.type.comicSource?.key,
@@ -2280,6 +2464,7 @@ ImageProvider _createImageProviderFromRef(
     imageRef.eid,
     imageRef.page,
     enableResize: reader.mode.isContinuous,
+    target: target,
   );
 }
 
@@ -2313,7 +2498,18 @@ void _preDownloadImage(int page, BuildContext context) {
   var cid = reader.cid;
   var eid = reader.eid;
   var sourceKey = reader.type.comicSource?.key;
-  ImageDownloader.loadComicImage(imageKey, sourceKey, cid, eid);
+  final target = calculateReaderImageTargetFromContext(context, page);
+  unawaited(
+    ImageDownloader.preloadComicImage(
+      imageKey,
+      sourceKey,
+      cid,
+      eid,
+      target: target,
+    ).catchError((Object error, StackTrace stackTrace) {
+      Log.error('Reader', 'Failed to predownload image: $error\n$stackTrace');
+    }),
+  );
 }
 
 void _preDownloadImageRef(WaterfallImageRef imageRef, BuildContext context) {
@@ -2322,11 +2518,17 @@ void _preDownloadImageRef(WaterfallImageRef imageRef, BuildContext context) {
   }
   var reader = context.reader;
   var sourceKey = reader.type.comicSource?.key;
-  ImageDownloader.loadComicImage(
-    imageRef.imageKey,
-    sourceKey,
-    reader.cid,
-    imageRef.eid,
+  final target = calculateReaderImageTargetFromContext(context, imageRef.page);
+  unawaited(
+    ImageDownloader.preloadComicImage(
+      imageRef.imageKey,
+      sourceKey,
+      reader.cid,
+      imageRef.eid,
+      target: target,
+    ).catchError((Object error, StackTrace stackTrace) {
+      Log.error('Reader', 'Failed to predownload image: $error\n$stackTrace');
+    }),
   );
 }
 

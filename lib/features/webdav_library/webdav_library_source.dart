@@ -2263,8 +2263,9 @@ class WebDavLibrarySource {
   static Future<Map<String, dynamic>> getImageLoadingConfig(
     String imageKey,
     String comicId,
-    String epId,
-  ) async {
+    String epId, {
+    ComicImageLoadTarget? target,
+  }) async {
     final config = WebDavLibraryConfig.fromSettings();
     return {'url': config.fileUrl(imageKey), 'headers': config.authHeaders};
   }

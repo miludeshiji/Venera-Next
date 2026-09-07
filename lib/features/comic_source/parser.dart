@@ -1083,10 +1083,10 @@ class ComicSourceParser {
     if (!_checkExists("comic.onImageLoad")) {
       return null;
     }
-    return (imageKey, comicId, ep) async {
+    return (imageKey, comicId, ep, {ComicImageLoadTarget? target}) async {
       var res = JsEngine().runCode("""
           ComicSource.sources.$_key.comic.onImageLoad(
-            ${jsonEncode(imageKey)}, ${jsonEncode(comicId)}, ${jsonEncode(ep)})
+            ${jsonEncode(imageKey)}, ${jsonEncode(comicId)}, ${jsonEncode(ep)}, ${jsonEncode(target?.toJson())})
         """);
       if (res is Future) {
         res = await res;
