@@ -28,8 +28,6 @@ import 'package:venera_next/foundation/translations.dart';
 import 'package:venera_next/foundation/widget_utils.dart';
 import 'package:venera_next/routing/settings.dart';
 
-import 'package:venera_next/network/images.dart';
-
 class ReaderScaffold extends StatefulWidget {
   const ReaderScaffold({super.key, required this.child});
 
@@ -848,13 +846,17 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
       return;
     }
     var fileType = detectFileType(data);
-    var ep = selection.eid;
+    final chapter = selection.chapter ?? context.reader.chapter;
     var page =
         selection.page ??
         ((context.reader.images?.indexOf(selection.imageKey) ?? -1) + 1);
     if (page <= 0) page = context.reader.page;
-    var filename =
-        "${context.reader.widget.name}_EP${ep}_P$page${fileType.ext}";
+    final filename = buildReaderImageFileName(
+      context.reader.widget.name,
+      chapter,
+      page,
+      fileType.ext,
+    );
     saveFile(data: data, filename: filename);
   }
 
@@ -868,13 +870,17 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
       return;
     }
     var fileType = detectFileType(data);
-    var ep = selection.eid;
+    final chapter = selection.chapter ?? context.reader.chapter;
     var page =
         selection.page ??
         ((context.reader.images?.indexOf(selection.imageKey) ?? -1) + 1);
     if (page <= 0) page = context.reader.page;
-    var filename =
-        "${context.reader.widget.name}_EP${ep}_P$page${fileType.ext}";
+    final filename = buildReaderImageFileName(
+      context.reader.widget.name,
+      chapter,
+      page,
+      fileType.ext,
+    );
     Share.shareFile(data: data, filename: filename, mime: fileType.mime);
   }
 
@@ -1068,27 +1074,9 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
   /// The return value is the index of the selected image.
   Future<Uint8List?> _loadBytesFromReference(ReaderImageReference ref) async {
     try {
-      if (ref.file != null) {
-        if (!await ref.file!.exists()) {
-          context.showMessage(message: "File not found".tl);
-          return null;
-        }
-        return await ref.file!.readAsBytes();
-      }
-      if (ref.imageKey.startsWith("file://")) {
-        final file = File(ref.imageKey.substring(7));
-        if (!await file.exists()) {
-          context.showMessage(message: "File not found".tl);
-          return null;
-        }
-        return await file.readAsBytes();
-      }
-      return await ImageDownloader.loadComicImageBytes(
-        ref.imageKey,
-        ref.sourceKey ?? context.reader.type.sourceKey,
-        ref.cid,
-        ref.eid,
-        target: null,
+      return await loadReaderOriginalImageBytes(
+        ref,
+        fallbackSourceKey: context.reader.type.sourceKey,
       );
     } catch (e) {
       context.showMessage(message: e.toString());
@@ -1144,6 +1132,7 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
         sourceKey: reader.type.sourceKey,
         cid: reader.cid,
         eid: reader.eid,
+        chapter: reader.chapter,
         page: singleImageIndex + 1,
         file: file,
       );
@@ -1169,6 +1158,7 @@ class ReaderScaffoldState extends State<ReaderScaffold> {
         sourceKey: reader.type.sourceKey,
         cid: reader.cid,
         eid: reader.eid,
+        chapter: reader.chapter,
         page: (index != null && index != -1) ? index + 1 : null,
         file: file,
       );

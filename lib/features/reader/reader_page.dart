@@ -1,6 +1,7 @@
 import 'dart:async';
-import 'dart:io';
 
+import 'package:venera_next/foundation/file_system.dart';
+import 'package:venera_next/network/images.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_memory_info/flutter_memory_info.dart';
@@ -161,10 +162,10 @@ class ReaderState extends State<Reader>
 
   @override
   void initState() {
-    page = widget.initialPage ?? 1;
-    if (page < 1) {
-      page = 1;
-    }
+    mode = ReaderMode.fromKey(
+      appdata.settings.getReaderSetting(cid, type.sourceKey, 'readerMode'),
+    );
+    pageValue = normalizeReaderInitialPage(widget.initialPage);
     chapter = widget.initialChapter ?? 1;
     if (chapter < 1) {
       chapter = 1;
@@ -174,16 +175,6 @@ class ReaderState extends State<Reader>
         chapter += widget.chapters!.getGroupByIndex(i).length;
       }
     }
-    if (widget.initialPage != null) {
-      page = widget.initialPage!;
-      if (page < 1) {
-        page = 1;
-      }
-    }
-    // mode = ReaderMode.fromKey(appdata.settings['readerMode']);
-    mode = ReaderMode.fromKey(
-      appdata.settings.getReaderSetting(cid, type.sourceKey, 'readerMode'),
-    );
     history = widget.history;
     _readingSession = ReadingSessionTracker(
       onDuration: (duration) =>
@@ -550,6 +541,9 @@ abstract mixin class ReaderImagePerPageHandler {
   int get page;
 
   set page(int value);
+  int get pageValue;
+
+  set pageValue(int value);
 
   ReaderMode get mode;
 
@@ -571,11 +565,11 @@ abstract mixin class ReaderImagePerPageHandler {
     _lastOrientation = isPortrait;
     _wasOnCommentsPage = false;
     if (imagesPerPage != 1) {
-      if (showSingleImageOnFirstPage()) {
-        page = ((initialPage - 1) / imagesPerPage).ceil() + 1;
-      } else {
-        page = (initialPage / imagesPerPage).ceil();
-      }
+      pageValue = calculateInitialReaderPageForImagesPerPage(
+        initialPage: initialPage,
+        imagesPerPage: imagesPerPage,
+        showSingleImageOnFirstPage: showSingleImageOnFirstPage(),
+      );
     }
   }
 
@@ -994,12 +988,23 @@ enum ReaderMode {
   }
 }
 
+/// Immutable reference to an image within the Reader.
+///
+/// Distinguishes four distinct identity dimensions:
+/// - [imageKey]: image loading identity (URL, `file://`, or cache key).
+/// - [sourceKey]: comic source identifier.
+/// - [cid]: comic identifier.
+/// - [eid]: opaque chapter identifier from comic source.
+/// - [chapter]: 1-based chapter index in Reader.
+/// - [page]: 1-based source image page within chapter.
+/// - [file]: local file handle if backed by a file.
 @immutable
 class ReaderImageReference {
   final String imageKey;
   final String? sourceKey;
   final String cid;
   final String eid;
+  final int? chapter;
   final int? page;
   final File? file;
 
@@ -1008,6 +1013,7 @@ class ReaderImageReference {
     this.sourceKey,
     required this.cid,
     required this.eid,
+    this.chapter,
     this.page,
     this.file,
   });
@@ -1054,4 +1060,85 @@ abstract interface class ReaderImageViewController
   Future<Uint8List?> getImageByOffset(Offset offset);
 
   String? getImageKeyByOffset(Offset offset);
+}
+
+/// Builds a sanitized reader image file name using [sanitizeFileNameWithSuffix].
+String buildReaderImageFileName(
+  String title,
+  int chapter,
+  int page,
+  String extension,
+) {
+  return sanitizeFileNameWithSuffix(
+    title,
+    middle: '_EP${chapter}_P$page',
+    extension: extension,
+  );
+}
+
+typedef ReaderOriginalImageLoader =
+    Future<Uint8List> Function(
+      String imageKey,
+      String? sourceKey,
+      String cid,
+      String eid, {
+      ComicImageLoadTarget? target,
+    });
+
+/// Loads original unscaled image bytes for [ref].
+///
+/// When backed by a local file, reads file directly or throws [FileSystemException]
+/// if it does not exist. For remote images, delegates to [loader] with [target] forced to `null`.
+Future<Uint8List> loadReaderOriginalImageBytes(
+  ReaderImageReference ref, {
+  String? fallbackSourceKey,
+  ReaderOriginalImageLoader loader = ImageDownloader.loadComicImageBytes,
+}) async {
+  if (ref.file != null) {
+    if (!await ref.file!.exists()) {
+      throw FileSystemException("File not found", ref.file!.path);
+    }
+    return await ref.file!.readAsBytes();
+  }
+  if (ref.imageKey.startsWith("file://")) {
+    final file = File(ref.imageKey.substring(7));
+    if (!await file.exists()) {
+      throw FileSystemException("File not found", file.path);
+    }
+    return await file.readAsBytes();
+  }
+  return await loader(
+    ref.imageKey,
+    ref.sourceKey ?? fallbackSourceKey,
+    ref.cid,
+    ref.eid,
+    target: null,
+  );
+}
+
+/// Normalizes reader initial page: null or non-positive values resolve to 1.
+int normalizeReaderInitialPage(int? page) {
+  if (page == null || page < 1) {
+    return 1;
+  }
+  return page;
+}
+
+/// Calculates initial reader page when [imagesPerPage] is configured.
+int calculateInitialReaderPageForImagesPerPage({
+  required int initialPage,
+  required int imagesPerPage,
+  required bool showSingleImageOnFirstPage,
+}) {
+  final normalized = normalizeReaderInitialPage(initialPage);
+  if (imagesPerPage <= 1) {
+    return normalized;
+  }
+  int newPage;
+  if (showSingleImageOnFirstPage) {
+    newPage = ((normalized - 1) / imagesPerPage).ceil() + 1;
+  } else {
+    newPage = (normalized / imagesPerPage).ceil();
+  }
+  return newPage < 1 ? 1 : newPage;
 }

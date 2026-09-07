@@ -709,11 +709,13 @@ void main() {
           sourceKey: 'test-source',
           cid: 'test-comic',
           eid: imageRef.eid,
+          chapter: imageRef.chapter,
           page: imageRef.page,
         );
 
         expect(readerRef.eid, 'ep-chapter-2');
         expect(readerRef.eid, isNot('ep-chapter-1'));
+        expect(readerRef.chapter, 2);
       },
     );
 
@@ -743,9 +745,9 @@ void main() {
             sourceKey: 'test-source',
             cid: 'test-cid',
             eid: 'ep-chapter-2',
+            chapter: 2,
             page: 1,
           );
-
           // Load original image bytes using the original image read path (target: null)
           final bytes = await ImageDownloader.loadComicImageBytes(
             readerRef.imageKey,

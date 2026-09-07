@@ -884,23 +884,24 @@ class GalleryModeState extends State<_GalleryMode>
         ? Axis.vertical
         : Axis.horizontal;
 
-    bool reverse = reader.mode == ReaderMode.galleryRightToLeft;
-    if (reverse) {
-      images = images.reversed.toList();
-    }
+    var entries = buildGalleryPageEntries(
+      images: images,
+      startIndex: startIndex,
+      isRightToLeft: reader.mode == ReaderMode.galleryRightToLeft,
+    );
 
     List<Widget> imageWidgets;
 
-    if (images.length == 2) {
+    if (entries.length == 2) {
       imageWidgets = [
         Expanded(
           child: ComicImage(
             width: double.infinity,
             height: double.infinity,
             image: _createImageProviderFromKey(
-              images[0],
+              entries[0].imageKey,
               context,
-              startIndex + 1,
+              entries[0].sourcePage,
             ),
             fit: BoxFit.contain,
             alignment: axis == Axis.vertical
@@ -915,9 +916,9 @@ class GalleryModeState extends State<_GalleryMode>
             width: double.infinity,
             height: double.infinity,
             image: _createImageProviderFromKey(
-              images[1],
+              entries[1].imageKey,
               context,
-              startIndex + 2,
+              entries[1].sourcePage,
             ),
             fit: BoxFit.contain,
             alignment: axis == Axis.vertical
@@ -929,12 +930,11 @@ class GalleryModeState extends State<_GalleryMode>
         ),
       ];
     } else {
-      imageWidgets = images.map((imageKey) {
-        startIndex++;
+      imageWidgets = entries.map((entry) {
         ImageProvider imageProvider = _createImageProviderFromKey(
-          imageKey,
+          entry.imageKey,
           context,
-          startIndex,
+          entry.sourcePage,
         );
         return Expanded(
           child: ComicImage(
@@ -1202,7 +1202,7 @@ class GalleryModeState extends State<_GalleryMode>
       if ((imageState as ComicImageState).containsPoint(offset)) {
         final image = imageState.widget.image;
         if (image is ReaderImageProvider) {
-          int index = reader.images?.indexOf(image.imageKey) ?? -1;
+          final index = image.page - 1;
           if (index >= startIndex && index < endIndex) {
             return image;
           }
@@ -1215,21 +1215,27 @@ class GalleryModeState extends State<_GalleryMode>
   @override
   ReaderImageReference? getImageReferenceByOffset(Offset offset) {
     final provider = _findProviderByOffset(offset);
-    final imageKey = provider?.imageKey ?? getImageKeyByOffset(offset);
+    if (provider != null) {
+      return createReaderImageReferenceFromProvider(
+        provider,
+        fallbackSourceKey: reader.type.comicSource?.key,
+        fallbackChapter: reader.chapter,
+      );
+    }
+    final imageKey = getImageKeyByOffset(offset);
     if (imageKey == null) return null;
-    final int? page =
-        provider?.page ??
-        ((reader.images?.indexOf(imageKey) ?? -1) >= 0
-            ? reader.images!.indexOf(imageKey) + 1
-            : null);
+    final int? page = (reader.images?.indexOf(imageKey) ?? -1) >= 0
+        ? reader.images!.indexOf(imageKey) + 1
+        : null;
     final File? file = imageKey.startsWith("file://")
         ? File(imageKey.substring(7))
         : null;
     return ReaderImageReference(
       imageKey: imageKey,
-      sourceKey: provider?.sourceKey ?? reader.type.comicSource?.key,
-      cid: provider?.cid ?? reader.cid,
-      eid: provider?.eid ?? reader.eid,
+      sourceKey: reader.type.comicSource?.key,
+      cid: reader.cid,
+      eid: reader.eid,
+      chapter: reader.chapter,
       page: page,
       file: file,
     );
@@ -1247,6 +1253,7 @@ class GalleryModeState extends State<_GalleryMode>
       sourceKey: reader.type.comicSource?.key,
       cid: reader.cid,
       eid: reader.eid,
+      chapter: reader.chapter,
       page: index + 1,
       file: file,
     );
@@ -2304,21 +2311,23 @@ class ContinuousModeState extends State<_ContinuousMode>
     return null;
   }
 
+  WaterfallImageRef? _currentWaterfallImageRef() {
+    final page = reader.page;
+    if (page < 1) return null;
+    final globalIndex = _waterfallIndexOfChapterPage(reader.chapter, page);
+    if (globalIndex == null) return null;
+    return _imageRefAt(globalIndex);
+  }
+
   @override
   ReaderImageReference? getImageReferenceByOffset(Offset offset) {
     final provider = _findProviderByOffset(offset);
     if (provider != null) {
-      final imageKey = provider.imageKey;
-      final file = imageKey.startsWith("file://")
-          ? File(imageKey.substring(7))
-          : null;
-      return ReaderImageReference(
-        imageKey: imageKey,
-        sourceKey: provider.sourceKey ?? reader.type.comicSource?.key,
-        cid: provider.cid,
-        eid: provider.eid,
-        page: provider.page,
-        file: file,
+      return createReaderImageReferenceFromProvider(
+        provider,
+        fallbackSourceKey: reader.type.comicSource?.key,
+        fallbackChapter: reader.chapter,
+        segments: crossChapter ? _waterfallFlow.segments : null,
       );
     }
     final imageKey = getImageKeyByOffset(offset);
@@ -2326,44 +2335,60 @@ class ContinuousModeState extends State<_ContinuousMode>
       final file = imageKey.startsWith("file://")
           ? File(imageKey.substring(7))
           : null;
-      final page = reader.page;
-      final ref = _imageRefAt(page);
+      final ref = _currentWaterfallImageRef();
       return ReaderImageReference(
         imageKey: imageKey,
         sourceKey: reader.type.comicSource?.key,
         cid: reader.cid,
         eid: ref?.eid ?? reader.eid,
-        page: ref?.page ?? page,
+        chapter: ref?.chapter ?? reader.chapter,
+        page: ref?.page ?? reader.page,
+        file: file,
+      );
+    }
+    final ref = _currentWaterfallImageRef();
+    if (ref != null) {
+      final file = ref.imageKey.startsWith("file://")
+          ? File(ref.imageKey.substring(7))
+          : null;
+      return ReaderImageReference(
+        imageKey: ref.imageKey,
+        sourceKey: reader.type.comicSource?.key,
+        cid: reader.cid,
+        eid: ref.eid,
+        chapter: ref.chapter,
+        page: ref.page,
         file: file,
       );
     }
     final page = reader.page;
-    if (page > 0) {
-      final ref = _imageRefAt(page);
-      final key =
-          ref?.imageKey ??
-          (page <= (reader.images?.length ?? 0)
-              ? reader.images![page - 1]
-              : null);
-      if (key != null) {
-        final file = key.startsWith("file://") ? File(key.substring(7)) : null;
-        return ReaderImageReference(
-          imageKey: key,
-          sourceKey: reader.type.comicSource?.key,
-          cid: reader.cid,
-          eid: ref?.eid ?? reader.eid,
-          page: ref?.page ?? page,
-          file: file,
-        );
-      }
+    if (page > 0 && page <= (reader.images?.length ?? 0)) {
+      final key = reader.images![page - 1];
+      final file = key.startsWith("file://") ? File(key.substring(7)) : null;
+      return ReaderImageReference(
+        imageKey: key,
+        sourceKey: reader.type.comicSource?.key,
+        cid: reader.cid,
+        eid: reader.eid,
+        chapter: reader.chapter,
+        page: page,
+        file: file,
+      );
     }
     return null;
   }
 
   @override
   ReaderImageReference? getImageReferenceByIndex(int index) {
+    if (index < 0) return null;
+
     if (crossChapter) {
-      final ref = _imageRefAt(index + 1);
+      final globalIndex = _waterfallIndexOfChapterPage(
+        reader.chapter,
+        index + 1,
+      );
+      if (globalIndex == null) return null;
+      final ref = _imageRefAt(globalIndex);
       if (ref == null) return null;
       final file = ref.imageKey.startsWith("file://")
           ? File(ref.imageKey.substring(7))
@@ -2373,11 +2398,13 @@ class ContinuousModeState extends State<_ContinuousMode>
         sourceKey: reader.type.comicSource?.key,
         cid: reader.cid,
         eid: ref.eid,
+        chapter: ref.chapter,
         page: ref.page,
         file: file,
       );
     }
-    if (index < 0 || index >= (reader.images?.length ?? 0)) return null;
+
+    if (index >= (reader.images?.length ?? 0)) return null;
     final imageKey = reader.images![index];
     final file = imageKey.startsWith("file://")
         ? File(imageKey.substring(7))
@@ -2387,6 +2414,7 @@ class ContinuousModeState extends State<_ContinuousMode>
       sourceKey: reader.type.comicSource?.key,
       cid: reader.cid,
       eid: reader.eid,
+      chapter: reader.chapter,
       page: index + 1,
       file: file,
     );
@@ -2641,6 +2669,7 @@ ImageProvider _createImageProviderFromKey(
     reader.cid,
     reader.eid,
     page,
+    chapter: reader.chapter,
     enableResize: reader.mode.isContinuous,
     target: target,
   );
@@ -2658,6 +2687,7 @@ ImageProvider _createImageProviderFromRef(
     reader.cid,
     imageRef.eid,
     imageRef.page,
+    chapter: imageRef.chapter,
     enableResize: reader.mode.isContinuous,
     target: target,
   );
@@ -2862,4 +2892,61 @@ class _ProgressPainter extends CustomPainter {
         oldDelegate.backgroundColor != backgroundColor ||
         oldDelegate.color != color;
   }
+}
+
+typedef GalleryPageEntry = ({String imageKey, int sourcePage});
+
+/// Sorts gallery page entries based on reading direction.
+List<GalleryPageEntry> sortGalleryPageEntries(
+  List<GalleryPageEntry> entries, {
+  bool isRightToLeft = false,
+}) {
+  if (isRightToLeft) {
+    return entries.reversed.toList();
+  }
+  return List<GalleryPageEntry>.from(entries);
+}
+
+/// Builds and orders gallery page entries from [images] starting at [startIndex].
+List<GalleryPageEntry> buildGalleryPageEntries({
+  required List<String> images,
+  required int startIndex,
+  bool isRightToLeft = false,
+}) {
+  final entries = <GalleryPageEntry>[
+    for (var i = 0; i < images.length; i++)
+      (imageKey: images[i], sourcePage: startIndex + i + 1),
+  ];
+  return sortGalleryPageEntries(entries, isRightToLeft: isRightToLeft);
+}
+
+/// Creates a [ReaderImageReference] from a [ReaderImageProvider] with optional fallbacks.
+ReaderImageReference createReaderImageReferenceFromProvider(
+  ReaderImageProvider provider, {
+  String? fallbackSourceKey,
+  int? fallbackChapter,
+  List<WaterfallChapterSegment>? segments,
+}) {
+  final imageKey = provider.imageKey;
+  final file = imageKey.startsWith("file://")
+      ? File(imageKey.substring(7))
+      : null;
+  int? chapter = provider.chapter ?? fallbackChapter;
+  if (provider.chapter == null && segments != null) {
+    for (var segment in segments) {
+      if (segment.eid == provider.eid) {
+        chapter = segment.chapter;
+        break;
+      }
+    }
+  }
+  return ReaderImageReference(
+    imageKey: imageKey,
+    sourceKey: provider.sourceKey ?? fallbackSourceKey,
+    cid: provider.cid,
+    eid: provider.eid,
+    chapter: chapter,
+    page: provider.page,
+    file: file,
+  );
 }

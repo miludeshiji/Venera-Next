@@ -1,4 +1,3 @@
-import 'package:venera_next/network/images.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -389,27 +388,9 @@ class ReaderGestureDetectorState
     ReaderImageReference ref,
   ) async {
     try {
-      if (ref.file != null) {
-        if (!await ref.file!.exists()) {
-          context.showMessage(message: "File not found".tl);
-          return null;
-        }
-        return await ref.file!.readAsBytes();
-      }
-      if (ref.imageKey.startsWith("file://")) {
-        final file = File(ref.imageKey.substring(7));
-        if (!await file.exists()) {
-          context.showMessage(message: "File not found".tl);
-          return null;
-        }
-        return await file.readAsBytes();
-      }
-      return await ImageDownloader.loadComicImageBytes(
-        ref.imageKey,
-        ref.sourceKey ?? reader.type.sourceKey,
-        ref.cid,
-        ref.eid,
-        target: null,
+      return await loadReaderOriginalImageBytes(
+        ref,
+        fallbackSourceKey: reader.type.sourceKey,
       );
     } catch (e) {
       context.showMessage(message: e.toString());
@@ -443,11 +424,14 @@ class ReaderGestureDetectorState
     if (image != null) {
       var filetype = detectFileType(image);
       var page = ref.page ?? reader.page;
-      var ep = ref.eid;
-      saveFile(
-        filename: "${reader.widget.name}_EP${ep}_P$page${filetype.ext}",
-        data: image,
+      var chapter = ref.chapter ?? reader.chapter;
+      final filename = buildReaderImageFileName(
+        reader.widget.name,
+        chapter,
+        page,
+        filetype.ext,
       );
+      saveFile(filename: filename, data: image);
     }
   }
 }

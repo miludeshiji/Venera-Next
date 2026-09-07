@@ -54,6 +54,7 @@ class ReaderImageProvider
     this.cid,
     this.eid,
     this.page, {
+    this.chapter,
     this.enableResize = false,
     this.target,
   });
@@ -67,6 +68,8 @@ class ReaderImageProvider
   final String eid;
 
   final int page;
+
+  final int? chapter;
 
   final ComicImageLoadTarget? target;
 
