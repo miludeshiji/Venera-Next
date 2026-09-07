@@ -90,6 +90,7 @@ onImageLoad: (url, comicId, epId, target) => {
 ```
 
 - **`target` 参数与字段**：
+  - `target`（类型为 `ComicImageLoadTarget | null`）反映的是阅读器当前的**显示与排版布局约束**（容器视口与排版模式），**而非漫画源原图的固有尺寸、分辨率或期望大小**。
   - `logicalWidth` (`number | null`)：目标显示容器的逻辑像素宽度（dp）。当宽度无约束时为 `null`。
   - `logicalHeight` (`number | null`)：目标显示容器的逻辑像素高度（dp）。当高度无约束时为 `null`。
   - `devicePixelRatio` (`number`)：当前屏幕设备像素比（DPR，如 1.0、2.0、3.0）。物理像素可通过 `Math.round(logicalWidth * devicePixelRatio)` 计算。
@@ -97,17 +98,19 @@ onImageLoad: (url, comicId, epId, target) => {
     - `"contain"`：翻页或单图模式，宽度与高度均受限。
     - `"fitWidth"`：纵向连续滚动（条漫/瀑布流），宽度对齐视口宽度，高度自由延伸（`logicalHeight` 为 `null`）。
     - `"fitHeight"`：横向连续滚动，高度对齐视口高度，宽度自由延伸（`logicalWidth` 为 `null`）。
+  - `splitWideImage` (`boolean`)：当前阅读器是否启用了跨页/双页大图拆分模式。开启时跨页大图会被拆分为两个独立视图分别展示。
 - **字段单位与 `null` 语义**：
   - 尺寸单位均为设备无关逻辑像素（Flutter dp）。
-  - 在无明确排版约束的上下文（如后台通用预加载、导出或旧调用点），`target` 为 `null`。
   - 连续滚动模式中，无边界滚动的维度其对应字段始终为 `null`。
+  - **`target: null` 语义**：`target` 为 `null` 表示当前请求**无特定 Reader 排版布局约束**。
+  - **原图操作**：阅读器内的“保存原图”、“复制原图”、“分享原图”、导出或无特定排版的通用预加载均会传入 `target: null`。
+  - **最终策略由源决定**：应用通过 `target: null` 表达无视口约束或请求原图的意图，但最终的网络请求配置、图床选择与返回 URL 完全由漫画源的 `onImageLoad` 逻辑自行决定（漫画源可选择返回高画质原图链接，也可保留默认 CDN 策略）。
 - **旧源兼容**：
   - 仅声明三个参数 `(url, comicId, epId)` 的旧漫画源无需修改，JavaScript 运行时会正常忽略多余实参。
   - 缓存系统对携带 `target` 与未携带 `target` 的请求进行隔离缓存，保障旧缓存与新自适应图片互不污染。
 - **应用不规定图床算法**：
-  - 应用仅向漫画源透传客观的视口与排版信息，不规定、不建议、也不绑定任何图床质量梯队、缩放公式或 CDN 查询参数。
+  - VeneraNext 仅向漫画源透传客观的视口与排版信息，不规定、不建议、也不绑定任何图床质量梯队、缩放公式或 CDN 查询参数。
   - 漫画源可根据目标站点的 CDN 能力自行决定如何使用该参数（例如请求不同分辨率或格式），或完全忽略该参数。
-
 ## 兼容性
 
 VeneraNext 会尽量在实际可行的范围内保持 JavaScript 漫画源扩展接口兼容。这里的兼容只指扩展接口和运行时契约，不代表本仓库提供、推荐或验证任何第三方源。

@@ -448,7 +448,8 @@ function ImageLoadingConfig({url, method, data, headers, onResponse, modifyImage
 
 ```javascript
 /**
- * Layout target constraints passed as the optional 4th parameter to `comic.onImageLoad(url, comicId, epId, target)`.
+ * Display and layout target constraints passed as the optional 4th parameter to `comic.onImageLoad(url, comicId, epId, target)`.
+ * Note: `target` reflects reader layout/viewport constraints, NOT the intrinsic dimensions or original size of the comic image.
  *
  * @typedef {Object} ComicImageLoadTarget
  * @property {number | null} logicalWidth - Display width in Flutter logical pixels (dp). null if unconstrained (e.g. continuous horizontal scroll).
@@ -458,12 +459,14 @@ function ImageLoadingConfig({url, method, data, headers, onResponse, modifyImage
  *   - "contain": bounded in both dimensions (page flip mode, gallery single page, split dual-page).
  *   - "fitWidth": width is aligned to viewport, height is unbounded (vertical continuous / waterfall).
  *   - "fitHeight": height is aligned to viewport, width is unbounded (horizontal continuous scroll).
+ * @property {boolean} splitWideImage - Whether wide image / dual-page spread splitting is enabled in the reader.
  *
  * Notes:
- * - Null semantics: target is null when loaded outside specific reader layout (e.g. general preloading or legacy callers).
+ * - Null semantics & Original images: `target` is null when loaded outside specific reader layout constraints. Original image operations (Save Image, Copy Image, Share Image, export, or generic background preloading) pass `target: null`.
+ * - Final strategy decided by the source: The app signals unconstrained/original intent via `target: null`, but the comic source's `onImageLoad` ultimately decides the final request headers, CDN selection, and returned URL (e.g. returning uncompressed original images or maintaining default CDN strategy).
  * - Compatibility: Existing comic sources with 3 parameters (url, comicId, epId) continue to work without modification.
- * - Cache isolation: Caches with target constraints are isolated to prevent cross-resolution pollution.
- * - No prescribed host algorithm: The app provides layout constraints only; comic sources may freely use or ignore them.
+ * - Cache isolation: Caches with target constraints (including `splitWideImage`) are isolated to prevent cross-resolution pollution.
+ * - No prescribed host algorithm: Venera does not prescribe CDN algorithms, resolution tiers, or scaling formulas. The app provides layout constraints only; comic sources may freely use or ignore them.
  */
 ```
 

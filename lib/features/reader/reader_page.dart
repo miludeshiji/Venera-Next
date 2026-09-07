@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -993,6 +994,25 @@ enum ReaderMode {
   }
 }
 
+@immutable
+class ReaderImageReference {
+  final String imageKey;
+  final String? sourceKey;
+  final String cid;
+  final String eid;
+  final int? page;
+  final File? file;
+
+  const ReaderImageReference({
+    required this.imageKey,
+    this.sourceKey,
+    required this.cid,
+    required this.eid,
+    this.page,
+    this.file,
+  });
+}
+
 abstract interface class ReaderImageViewController
     implements ChapterCompletionSourceController {
   void toPage(int page);
@@ -1026,6 +1046,10 @@ abstract interface class ReaderImageViewController
 
   /// Returns true if the event is handled.
   bool handleOnTap(Offset location);
+
+  ReaderImageReference? getImageReferenceByOffset(Offset offset);
+
+  ReaderImageReference? getImageReferenceByIndex(int index);
 
   Future<Uint8List?> getImageByOffset(Offset offset);
 

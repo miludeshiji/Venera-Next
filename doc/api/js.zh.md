@@ -33,6 +33,8 @@ JavaScript API 主要分为以下几类：
 
 漫画源实现 `comic.onImageLoad(url, comicId, epId, target)` 时，可接收可选的第四个参数 `target`（类型为 `ComicImageLoadTarget | null`）：
 
+- **排版约束定位**：
+  - `target` 严格代表当前阅读器显示视口与排版容器的**布局约束**，**而非漫画源原图的原始尺寸或固有分辨率**。
 - **字段与单位**：
   - `logicalWidth` (`number | null`)：目标显示容器的 Flutter 逻辑像素宽度（dp）。当宽度无约束时为 `null`。
   - `logicalHeight` (`number | null`)：目标显示容器的 Flutter 逻辑像素高度（dp）。当高度无约束时为 `null`。
@@ -41,12 +43,16 @@ JavaScript API 主要分为以下几类：
     - `"contain"`：双向受限（翻页或单图模式），宽高均非 `null`。
     - `"fitWidth"`：纵向连续滚动（条漫/瀑布流），宽度对齐视口，高度为 `null`。
     - `"fitHeight"`：横向连续滚动，高度对齐视口，宽度为 `null`。
-- **null 语义与兼容性**：
-  - 在无特定排版约束的上下文（如后台通用预加载或未传递 target 的调用）中，`target` 为 `null`。
+  - `splitWideImage` (`boolean`)：当前阅读器是否开启了大图/跨页双页拆分模式。
+- **`null` 语义与原图操作**：
+  - 在无特定 Reader 排版约束的上下文（如通用预加载、未传递 target 的调用），`target` 为 `null`。
+  - **原图操作**：保存原图、复制原图、分享原图或导出等操作均显式传入 `target: null`。
+  - **最终策略由源决定**：应用通过 `target: null` 表达请求无视口限制原图的意图，但最终的实际加载策略、分流 CDN 和返回 URL 完全由漫画源的 `onImageLoad` 自行决定。
+- **兼容性与缓存隔离**：
   - 仅接收 `(url, comicId, epId)` 的旧源完全兼容，无需修改。
-  - 缓存机制会依据 `target` 规格进行隔离，避免不同分辨率缓存交叉污染。
+  - 缓存机制会依据 `target` 规格（包括 `splitWideImage`）进行隔离，避免不同分辨率缓存交叉污染。
 - **应用不规定图床算法**：
-  - 应用仅向扩展提供客观的排版约束信息，不规定也不干预图床 CDN 的分辨率、参数转换或图片格式算法，漫画源可自由按需使用或忽略。
+  - VeneraNext 仅向扩展提供客观的排版约束信息，不规定、不建议也不干预图床 CDN 的分辨率档位、参数转换或图片格式算法，漫画源可自由按需使用或忽略。
 ## 使用建议
 
 - 新扩展应优先使用稳定 API，避免依赖内部实现细节。

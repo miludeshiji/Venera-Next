@@ -7,9 +7,10 @@
 ### 新增
 
 - **漫画源图片排版约束与自适应加载 (ComicImageLoadTarget)**：
-  - `comic.onImageLoad` 新增可选第四参数 `target`，传递目标容器逻辑宽高、设备像素比（DPR）与排版模式（`contain` / `fitWidth` / `fitHeight`）。
-  - 支持无约束维度的 `null` 语义（如纵向条漫/瀑布流高度为 `null`，横向连续滚动宽度为 `null`）；应用仅提供排版约束，不强制规定任何特定图床分辨率或 CDN 算法。
-  - 图片下载器与缓存系统引入基于排版规格的缓存隔离键（`getComicImageCacheKey` / `preloadComicImage`），避免多分辨率交叉污染，并全面向后兼容不使用 target 的旧版漫画源。
+  - `comic.onImageLoad` 新增可选第四参数 `target`，传递目标容器逻辑宽高、设备像素比（DPR）、排版模式（`contain` / `fitWidth` / `fitHeight`）及跨页拆分标识（`splitWideImage`）。
+  - 明确 `target` 为阅读器显示视口与排版布局约束而非原图固有尺寸；支持无约束维度的 `null` 语义（如纵向条漫/瀑布流高度为 `null`，横向连续滚动宽度为 `null`）。
+  - 明确 `target: null` 表示无 Reader 排版约束，原图保存、复制、分享、导出与通用预加载均使用 `target: null`，最终网络请求配置与返回 URL 策略完全由漫画源自行决定；Venera 不强制规定任何特定图床分辨率或 CDN 算法。
+  - 图片下载器（`loadComicImageBytes`）与缓存系统引入基于完整排版规格的缓存隔离键（包含 `splitWideImage`），避免多分辨率交叉污染，并全面向后兼容不使用 target 的旧版漫画源。
 - **Gallery 大跨页自动拆分与阅读器体验增强**：
   - 阅读器开启“拆分双页”后，在 Gallery 单图模式中将横向跨页自动拆分成两个可独立翻阅的视觉页，并支持按阅读方向自动交换翻阅顺序。
   - 两个半页始终映射至同一真实源页，历史记录、远端阅读进度、收藏、保存和分享功能保持使用完整源图；每屏多图模式下保留原有排版。

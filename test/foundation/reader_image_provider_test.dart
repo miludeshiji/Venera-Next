@@ -108,7 +108,20 @@ void main() {
           devicePixelRatio: 2.0,
           fit: ComicImageTargetFit.fitWidth,
         );
-
+        final targetSplit = ComicImageLoadTarget(
+          logicalWidth: 200,
+          logicalHeight: 300,
+          devicePixelRatio: 2.0,
+          fit: ComicImageTargetFit.contain,
+          splitWideImage: true,
+        );
+        final targetDiffDpr = ComicImageLoadTarget(
+          logicalWidth: 400,
+          logicalHeight: 600,
+          devicePixelRatio: 1.0,
+          fit: ComicImageTargetFit.contain,
+          splitWideImage: false,
+        );
         final provider1 = ReaderImageProvider(
           'img-1',
           'source-1',
@@ -133,6 +146,22 @@ void main() {
           1,
           target: target3,
         );
+        final providerSplit = ReaderImageProvider(
+          'img-1',
+          'source-1',
+          'comic-1',
+          'chapter-1',
+          1,
+          target: targetSplit,
+        );
+        final providerDiffDpr = ReaderImageProvider(
+          'img-1',
+          'source-1',
+          'comic-1',
+          'chapter-1',
+          1,
+          target: targetDiffDpr,
+        );
         const providerNull = ReaderImageProvider(
           'img-1',
           'source-1',
@@ -150,6 +179,19 @@ void main() {
         expect(provider1.key, isNot(equals(provider3.key)));
         expect(provider1.diskCacheKey, isNot(equals(provider3.diskCacheKey)));
 
+        expect(provider1, isNot(equals(providerSplit)));
+        expect(provider1.key, isNot(equals(providerSplit.key)));
+        expect(
+          provider1.diskCacheKey,
+          isNot(equals(providerSplit.diskCacheKey)),
+        );
+
+        expect(provider1, isNot(equals(providerDiffDpr)));
+        expect(provider1.key, isNot(equals(providerDiffDpr.key)));
+        expect(
+          provider1.diskCacheKey,
+          isNot(equals(providerDiffDpr.diskCacheKey)),
+        );
         expect(provider1, isNot(equals(providerNull)));
         expect(provider1.key, isNot(equals(providerNull.key)));
         expect(
@@ -167,6 +209,18 @@ void main() {
           'img-1@source-1@comic-1@chapter-1@${target1.cacheIdentity}',
         );
         expect(providerNull.diskCacheKey, 'img-1@source-1@comic-1@chapter-1');
+
+        expect(provider1.key, contains('splitfalse'));
+        expect(providerSplit.key, contains('splittrue'));
+        expect(provider1.diskCacheKey, contains('splitfalse'));
+        expect(providerSplit.diskCacheKey, contains('splittrue'));
+
+        expect(target1.physicalWidth, equals(targetDiffDpr.physicalWidth));
+        expect(target1.physicalHeight, equals(targetDiffDpr.physicalHeight));
+        expect(provider1.key, contains('dpr2.0'));
+        expect(providerDiffDpr.key, contains('dpr1.0'));
+        expect(provider1.diskCacheKey, contains('dpr2.0'));
+        expect(providerDiffDpr.diskCacheKey, contains('dpr1.0'));
       },
     );
 

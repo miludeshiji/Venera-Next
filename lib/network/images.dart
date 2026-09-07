@@ -35,12 +35,14 @@ class ComicImageLoadTarget {
   final double? logicalHeight;
   final double devicePixelRatio;
   final ComicImageTargetFit fit;
+  final bool splitWideImage;
 
   ComicImageLoadTarget({
     double? logicalWidth,
     double? logicalHeight,
     double devicePixelRatio = 1.0,
     this.fit = ComicImageTargetFit.contain,
+    this.splitWideImage = false,
   }) : logicalWidth =
            (logicalWidth != null && logicalWidth.isFinite && logicalWidth > 0)
            ? logicalWidth
@@ -60,25 +62,29 @@ class ComicImageLoadTarget {
     this.logicalHeight,
     this.devicePixelRatio = 1.0,
     this.fit = ComicImageTargetFit.contain,
+    this.splitWideImage = false,
   });
+
+  double get normalizedDevicePixelRatio =>
+      (devicePixelRatio.isFinite && devicePixelRatio > 0)
+      ? devicePixelRatio
+      : 1.0;
 
   int? get physicalWidth {
     final w = logicalWidth;
-    final dpr = devicePixelRatio;
-    if (w == null || !w.isFinite || w <= 0 || !dpr.isFinite || dpr <= 0) {
+    if (w == null || !w.isFinite || w <= 0) {
       return null;
     }
-    final pw = (w * dpr).round();
+    final pw = (w * normalizedDevicePixelRatio).round();
     return pw > 0 ? pw : null;
   }
 
   int? get physicalHeight {
     final h = logicalHeight;
-    final dpr = devicePixelRatio;
-    if (h == null || !h.isFinite || h <= 0 || !dpr.isFinite || dpr <= 0) {
+    if (h == null || !h.isFinite || h <= 0) {
       return null;
     }
-    final ph = (h * dpr).round();
+    final ph = (h * normalizedDevicePixelRatio).round();
     return ph > 0 ? ph : null;
   }
 
@@ -87,7 +93,7 @@ class ComicImageLoadTarget {
     final ph = physicalHeight;
     final wStr = pw != null ? 'w$pw' : 'wnull';
     final hStr = ph != null ? 'h$ph' : 'hnull';
-    return '$wStr-$hStr-${fit.name}';
+    return '$wStr-$hStr-dpr$normalizedDevicePixelRatio-${fit.name}-split$splitWideImage';
   }
 
   Map<String, dynamic> toJson() {
@@ -99,14 +105,12 @@ class ComicImageLoadTarget {
         (logicalHeight != null && logicalHeight!.isFinite && logicalHeight! > 0)
         ? logicalHeight
         : null;
-    final dpr = (devicePixelRatio.isFinite && devicePixelRatio > 0)
-        ? devicePixelRatio
-        : 1.0;
     return {
       'logicalWidth': w,
       'logicalHeight': h,
-      'devicePixelRatio': dpr,
+      'devicePixelRatio': normalizedDevicePixelRatio,
       'fit': fit.name,
+      'splitWideImage': splitWideImage,
     };
   }
 
@@ -116,26 +120,25 @@ class ComicImageLoadTarget {
     return other is ComicImageLoadTarget &&
         physicalWidth == other.physicalWidth &&
         physicalHeight == other.physicalHeight &&
-        (devicePixelRatio.isFinite && devicePixelRatio > 0
-                ? devicePixelRatio
-                : 1.0) ==
-            (other.devicePixelRatio.isFinite && other.devicePixelRatio > 0
-                ? other.devicePixelRatio
-                : 1.0) &&
-        fit == other.fit;
+        normalizedDevicePixelRatio == other.normalizedDevicePixelRatio &&
+        fit == other.fit &&
+        splitWideImage == other.splitWideImage;
   }
 
   @override
   int get hashCode {
-    final dpr = (devicePixelRatio.isFinite && devicePixelRatio > 0)
-        ? devicePixelRatio
-        : 1.0;
-    return Object.hash(physicalWidth, physicalHeight, dpr, fit);
+    return Object.hash(
+      physicalWidth,
+      physicalHeight,
+      normalizedDevicePixelRatio,
+      fit,
+      splitWideImage,
+    );
   }
 
   @override
   String toString() =>
-      'ComicImageLoadTarget(physical: ${physicalWidth}x$physicalHeight, dpr: $devicePixelRatio, fit: ${fit.name})';
+      'ComicImageLoadTarget(physical: ${physicalWidth}x$physicalHeight, dpr: $normalizedDevicePixelRatio, fit: ${fit.name}, split: $splitWideImage)';
 }
 
 typedef ComicImageLoadingConfigResolver =
@@ -155,6 +158,8 @@ typedef ComicImageDebugLoader =
       String eid, {
       ComicImageLoadTarget? target,
     });
+typedef ComicImageTransport =
+    FutureOr<dynamic> Function(String url, Map<String, dynamic> configs);
 
 abstract class ImageDownloader {
   static ThumbnailLoadingConfigResolver? _thumbnailLoadingConfigResolver;
@@ -166,50 +171,29 @@ abstract class ImageDownloader {
   static void configureSourceImageLoading({
     ThumbnailLoadingConfigResolver? thumbnailLoadingConfig,
     ThumbnailCoverResolver? thumbnailCover,
-    dynamic comicImageLoadingConfig,
+    ComicImageLoadingConfigResolver? comicImageLoadingConfig,
   }) {
     _thumbnailLoadingConfigResolver = thumbnailLoadingConfig;
     _thumbnailCoverResolver = thumbnailCover;
-    if (comicImageLoadingConfig == null) {
-      _comicImageLoadingConfigResolver = null;
-    } else if (comicImageLoadingConfig is ComicImageLoadingConfigResolver) {
-      _comicImageLoadingConfigResolver = comicImageLoadingConfig;
-    } else if (comicImageLoadingConfig
-        is FutureOr<Map<String, dynamic>> Function(
-          String,
-          String,
-          String,
-          String,
-        )) {
-      _comicImageLoadingConfigResolver =
-          (sourceKey, imageKey, cid, eid, {target}) =>
-              comicImageLoadingConfig(sourceKey, imageKey, cid, eid);
-    } else {
-      _comicImageLoadingConfigResolver =
-          (sourceKey, imageKey, cid, eid, {target}) {
-            try {
-              return (comicImageLoadingConfig as dynamic)(
-                sourceKey,
-                imageKey,
-                cid,
-                eid,
-                target: target,
-              );
-            } on NoSuchMethodError {
-              return (comicImageLoadingConfig as dynamic)(
-                sourceKey,
-                imageKey,
-                cid,
-                eid,
-              );
-            }
-          };
-    }
+    _comicImageLoadingConfigResolver = comicImageLoadingConfig;
   }
 
   @visibleForTesting
   static void debugResetSourceImageLoading() {
     configureSourceImageLoading();
+    _debugLoadComicImageUnwrapped = null;
+    _debugComicImageTransport = null;
+  }
+
+  static ComicImageTransport? _debugComicImageTransport;
+
+  @visibleForTesting
+  static ComicImageTransport? get debugComicImageTransport =>
+      _debugComicImageTransport;
+
+  @visibleForTesting
+  static set debugComicImageTransport(ComicImageTransport? transport) {
+    _debugComicImageTransport = transport;
   }
 
   static ComicImageDebugLoader? _debugLoadComicImageUnwrapped;
@@ -219,37 +203,8 @@ abstract class ImageDownloader {
       _debugLoadComicImageUnwrapped;
 
   @visibleForTesting
-  static set debugLoadComicImageUnwrapped(dynamic loader) {
-    if (loader == null) {
-      _debugLoadComicImageUnwrapped = null;
-    } else if (loader is ComicImageDebugLoader) {
-      _debugLoadComicImageUnwrapped = loader;
-    } else if (loader
-        is Stream<ImageDownloadProgress> Function(
-          String,
-          String?,
-          String,
-          String,
-        )) {
-      _debugLoadComicImageUnwrapped =
-          (imageKey, sourceKey, cid, eid, {target}) =>
-              loader(imageKey, sourceKey, cid, eid);
-    } else {
-      _debugLoadComicImageUnwrapped =
-          (imageKey, sourceKey, cid, eid, {target}) {
-            try {
-              return (loader as dynamic)(
-                imageKey,
-                sourceKey,
-                cid,
-                eid,
-                target: target,
-              );
-            } on NoSuchMethodError {
-              return (loader as dynamic)(imageKey, sourceKey, cid, eid);
-            }
-          };
-    }
+  static set debugLoadComicImageUnwrapped(ComicImageDebugLoader? loader) {
+    _debugLoadComicImageUnwrapped = loader;
   }
 
   /// Generate a stable cache key for comic images.
@@ -475,6 +430,38 @@ abstract class ImageDownloader {
     }
   }
 
+  /// Load comic image bytes from the network or cache.
+  ///
+  /// Consumes the shared stream from [loadComicImage] and returns the
+  /// final non-null [Uint8List]. Throws a [StateError] if the stream
+  /// finishes without delivering image bytes.
+  static Future<Uint8List> loadComicImageBytes(
+    String imageKey,
+    String? sourceKey,
+    String cid,
+    String eid, {
+    ComicImageLoadTarget? target,
+  }) async {
+    Uint8List? result;
+    await for (final progress in loadComicImage(
+      imageKey,
+      sourceKey,
+      cid,
+      eid,
+      target: target,
+    )) {
+      if (progress.imageBytes != null) {
+        result = progress.imageBytes;
+      }
+    }
+    if (result != null) {
+      return result;
+    }
+    throw StateError(
+      'Comic image stream finished without delivering image bytes for $imageKey',
+    );
+  }
+
   /// Load a comic image from the network or cache.
   /// The function will prevent multiple requests for the same image.
   static Stream<ImageDownloadProgress> loadComicImage(
@@ -576,22 +563,47 @@ abstract class ImageDownloader {
             ? onLoadFailedConfig
             : null;
 
-        var dio = AppDio(
-          BaseOptions(
-            headers: configs['headers'],
-            method: configs['method'] ?? 'GET',
-            responseType: ResponseType.stream,
-          ),
-        );
+        Stream<List<int>> stream;
+        int? expectedBytes;
 
-        var req = await dio.request<ResponseBody>(
-          configs['url'] ?? imageKey,
-          data: configs['data'],
-        );
-        var stream = req.data?.stream ?? (throw "Error: Empty response body.");
-        int? expectedBytes = req.data!.contentLength;
-        if (expectedBytes == -1) {
-          expectedBytes = null;
+        final transport = _debugComicImageTransport;
+        if (transport != null) {
+          final transportResult = await transport(
+            configs['url'] ?? imageKey,
+            configs,
+          );
+          if (transportResult is Stream<List<int>>) {
+            stream = transportResult;
+            expectedBytes = null;
+          } else if (transportResult is List<int>) {
+            stream = Stream.value(transportResult);
+            expectedBytes = transportResult.length;
+          } else if (transportResult is ResponseBody) {
+            stream = transportResult.stream;
+            expectedBytes = transportResult.contentLength == -1
+                ? null
+                : transportResult.contentLength;
+          } else {
+            throw StateError('Unsupported transport result: $transportResult');
+          }
+        } else {
+          var dio = AppDio(
+            BaseOptions(
+              headers: configs['headers'],
+              method: configs['method'] ?? 'GET',
+              responseType: ResponseType.stream,
+            ),
+          );
+
+          var req = await dio.request<ResponseBody>(
+            configs['url'] ?? imageKey,
+            data: configs['data'],
+          );
+          stream = req.data?.stream ?? (throw "Error: Empty response body.");
+          expectedBytes = req.data!.contentLength;
+          if (expectedBytes == -1) {
+            expectedBytes = null;
+          }
         }
         var buffer = <int>[];
         await for (var data in stream) {
@@ -667,6 +679,21 @@ String buildComicImageCacheKey(
   String eid, {
   ComicImageLoadTarget? target,
 }) => ImageDownloader.getComicImageCacheKey(
+  imageKey,
+  sourceKey,
+  cid,
+  eid,
+  target: target,
+);
+
+/// Global helper to load comic image bytes from the shared stream.
+Future<Uint8List> loadComicImageBytes(
+  String imageKey,
+  String? sourceKey,
+  String cid,
+  String eid, {
+  ComicImageLoadTarget? target,
+}) => ImageDownloader.loadComicImageBytes(
   imageKey,
   sourceKey,
   cid,

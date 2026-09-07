@@ -1,3 +1,4 @@
+import 'package:venera_next/network/images.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -384,26 +385,69 @@ class ReaderGestureDetectorState
   @override
   Object? get key => "reader_gesture";
 
+  Future<Uint8List?> _loadImageBytesFromReference(
+    ReaderImageReference ref,
+  ) async {
+    try {
+      if (ref.file != null) {
+        if (!await ref.file!.exists()) {
+          context.showMessage(message: "File not found".tl);
+          return null;
+        }
+        return await ref.file!.readAsBytes();
+      }
+      if (ref.imageKey.startsWith("file://")) {
+        final file = File(ref.imageKey.substring(7));
+        if (!await file.exists()) {
+          context.showMessage(message: "File not found".tl);
+          return null;
+        }
+        return await file.readAsBytes();
+      }
+      return await ImageDownloader.loadComicImageBytes(
+        ref.imageKey,
+        ref.sourceKey ?? reader.type.sourceKey,
+        ref.cid,
+        ref.eid,
+        target: null,
+      );
+    } catch (e) {
+      context.showMessage(message: e.toString());
+      return null;
+    }
+  }
+
   void copyImage(Offset location) async {
     var controller = reader.imageViewController;
     if (controller == null) return;
-    var image = await controller.getImageByOffset(location);
+    final ref = controller.getImageReferenceByOffset(location);
+    if (ref == null) {
+      context.showMessage(message: "No Image".tl);
+      return;
+    }
+    var image = await _loadImageBytesFromReference(ref);
     if (image != null) {
       writeImageToClipboard(image);
-    } else {
-      context.showMessage(message: "No Image".tl);
     }
   }
 
   void saveImage(Offset location) async {
     var controller = reader.imageViewController;
     if (controller == null) return;
-    var image = await controller.getImageByOffset(location);
+    final ref = controller.getImageReferenceByOffset(location);
+    if (ref == null) {
+      context.showMessage(message: "No Image".tl);
+      return;
+    }
+    var image = await _loadImageBytesFromReference(ref);
     if (image != null) {
       var filetype = detectFileType(image);
-      saveFile(filename: "image${filetype.ext}", data: image);
-    } else {
-      context.showMessage(message: "No Image".tl);
+      var page = ref.page ?? reader.page;
+      var ep = ref.eid;
+      saveFile(
+        filename: "${reader.widget.name}_EP${ep}_P$page${filetype.ext}",
+        data: image,
+      );
     }
   }
 }

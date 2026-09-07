@@ -71,7 +71,7 @@ void main() {
     });
 
     ImageDownloader.debugLoadComicImageUnwrapped =
-        (imageKey, sourceKey, cid, eid) {
+        (imageKey, sourceKey, cid, eid, {target}) {
           return controller.stream;
         };
 
@@ -164,7 +164,7 @@ void main() {
     App.dataPath = dataDir.path;
     App.cachePath = cacheDir.path;
     ImageDownloader.debugLoadComicImageUnwrapped =
-        (imageKey, sourceKey, cid, eid) => Stream.value(
+        (imageKey, sourceKey, cid, eid, {target}) => Stream.value(
           ImageDownloadProgress(
             currentBytes: 1,
             totalBytes: 1,

@@ -500,7 +500,8 @@ If `load` function is implemented, `loadNext` function will be ignored.
         /**
          * [Optional] provide configs for an image loading
          *
-         * The 4th argument `target` is optional and nullable (e.g. `null` when loading outside specific reader layout).
+         * The 4th argument `target` is optional and nullable (`ComicImageLoadTarget | null`).
+         * Note that `target` represents the reader's display and layout constraints (viewport and fitting mode), NOT the intrinsic dimensions, resolution, or original file size of the comic image.
          * - `logicalWidth` {number | null}: logical width in Flutter dp. `null` if unconstrained (e.g. horizontal continuous scroll).
          * - `logicalHeight` {number | null}: logical height in Flutter dp. `null` if unconstrained (e.g. vertical continuous scroll / waterfall).
          * - `devicePixelRatio` {number}: device pixel ratio (DPR, defaults to 1.0). Physical pixels = Math.round(logical * DPR).
@@ -508,15 +509,20 @@ If `load` function is implemented, `loadNext` function will be ignored.
          *   - `contain`: bounded in both dimensions (page-by-page, gallery single page, split dual-page).
          *   - `fitWidth`: width aligned to viewport, unbounded height (vertical continuous scroll).
          *   - `fitHeight`: height aligned to viewport, unbounded width (horizontal continuous scroll).
+         * - `splitWideImage` {boolean}: whether wide image / dual-page spread splitting is enabled in the reader.
+         *
+         * Target Null Semantics & Original Image Operations:
+         * - `target: null` indicates that the request has no specific Reader layout or viewport constraints.
+         * - Original image operations (such as Save Image, Copy Image, Share Image, export, and generic background preloading) pass `target: null`.
+         * - Final strategy decided by the source: The app signals unconstrained/original intent via `target: null`, but the comic source's `onImageLoad` ultimately decides the final request headers, CDN selection, and returned URL (e.g. returning uncompressed original images or maintaining default CDN strategy).
          *
          * Backward Compatibility:
          * - Existing sources with `(url, comicId, epId)` continue to work without modification.
          * - Caches with and without `target` are isolated to prevent cross-resolution pollution.
          *
          * No Prescribed Host Algorithm:
-         * - The app only provides objective layout constraints and does not prescribe CDN algorithms or resolution tiers.
-         * - Comic sources may freely use or ignore `target`.
-         *
+         * - Venera does not prescribe CDN algorithms, resolution tiers, or scaling formulas.
+         * - The app only provides objective layout constraints; comic sources may freely use or ignore `target`.
          * @param url {string}
          * @param comicId {string}
          * @param epId {string?}

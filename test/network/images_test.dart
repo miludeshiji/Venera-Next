@@ -337,7 +337,10 @@ void main() {
       expect(normalizedTarget.devicePixelRatio, 1.0);
       expect(normalizedTarget.physicalWidth, isNull);
       expect(normalizedTarget.physicalHeight, isNull);
-      expect(normalizedTarget.cacheIdentity, 'wnull-hnull-contain');
+      expect(
+        normalizedTarget.cacheIdentity,
+        'wnull-hnull-dpr1.0-contain-splitfalse',
+      );
 
       final validTarget = ComicImageLoadTarget(
         logicalWidth: 360.4,
@@ -350,7 +353,10 @@ void main() {
       expect(validTarget.devicePixelRatio, 2.0);
       expect(validTarget.physicalWidth, 721);
       expect(validTarget.physicalHeight, 1280);
-      expect(validTarget.cacheIdentity, 'w721-h1280-fitWidth');
+      expect(
+        validTarget.cacheIdentity,
+        'w721-h1280-dpr2.0-fitWidth-splitfalse',
+      );
 
       expect(
         ComicImageTargetFit.fromString('fitWidth'),
@@ -427,6 +433,54 @@ void main() {
       expect(keyA1, isNot(equals(keyNull)));
       expect(keyNull, 'img@src@cid@eid');
       expect(keyA1, 'img@src@cid@eid@${targetA1.cacheIdentity}');
+    });
+
+    test('ComicImageLoadTarget splitWideImage and DPR identity behavior', () {
+      final targetDefault = ComicImageLoadTarget(
+        logicalWidth: 100,
+        logicalHeight: 200,
+        devicePixelRatio: 2.0,
+        fit: ComicImageTargetFit.contain,
+        splitWideImage: false,
+      );
+      final targetSplit = ComicImageLoadTarget(
+        logicalWidth: 100,
+        logicalHeight: 200,
+        devicePixelRatio: 2.0,
+        fit: ComicImageTargetFit.contain,
+        splitWideImage: true,
+      );
+      final targetSamePhysicalDiffDpr = ComicImageLoadTarget(
+        logicalWidth: 200,
+        logicalHeight: 400,
+        devicePixelRatio: 1.0,
+        fit: ComicImageTargetFit.contain,
+        splitWideImage: false,
+      );
+
+      expect(targetDefault.toJson()['splitWideImage'], isFalse);
+      expect(targetSplit.toJson()['splitWideImage'], isTrue);
+
+      expect(targetDefault, isNot(equals(targetSplit)));
+      expect(targetDefault.hashCode, isNot(equals(targetSplit.hashCode)));
+      expect(targetDefault.cacheIdentity, contains('splitfalse'));
+      expect(targetSplit.cacheIdentity, contains('splittrue'));
+
+      expect(
+        targetDefault.physicalWidth,
+        equals(targetSamePhysicalDiffDpr.physicalWidth),
+      );
+      expect(
+        targetDefault.physicalHeight,
+        equals(targetSamePhysicalDiffDpr.physicalHeight),
+      );
+      expect(targetDefault, isNot(equals(targetSamePhysicalDiffDpr)));
+      expect(
+        targetDefault.cacheIdentity,
+        isNot(equals(targetSamePhysicalDiffDpr.cacheIdentity)),
+      );
+      expect(targetDefault.cacheIdentity, contains('dpr2.0'));
+      expect(targetSamePhysicalDiffDpr.cacheIdentity, contains('dpr1.0'));
     });
 
     test(
@@ -773,6 +827,268 @@ void main() {
 
         ImageDownloader.debugLoadComicImageUnwrapped = null;
       },
+    );
+
+    test('loadComicImageBytes returns final bytes on completion', () async {
+      final source = StreamController<ImageDownloadProgress>();
+      addTearDown(() async {
+        if (!source.isClosed) await source.close();
+      });
+
+      ImageDownloader.debugLoadComicImageUnwrapped =
+          (imageKey, sourceKey, cid, eid, {target}) => source.stream;
+
+      final expectedBytes = Uint8List.fromList([10, 20, 30]);
+      final future = ImageDownloader.loadComicImageBytes(
+        'img-bytes',
+        'src',
+        'cid',
+        'eid',
+      );
+
+      source.add(
+        const ImageDownloadProgress(currentBytes: 10, totalBytes: 100),
+      );
+      source.add(
+        ImageDownloadProgress(
+          currentBytes: 50,
+          totalBytes: 100,
+          imageBytes: Uint8List.fromList([1, 2]),
+        ),
+      );
+      source.add(
+        ImageDownloadProgress(
+          currentBytes: 100,
+          totalBytes: 100,
+          imageBytes: expectedBytes,
+        ),
+      );
+      await source.close();
+
+      final bytes = await future;
+      expect(bytes, orderedEquals(expectedBytes));
+    });
+
+    test(
+      'loadComicImageBytes throws StateError when stream finishes without bytes',
+      () async {
+        final source = StreamController<ImageDownloadProgress>();
+        addTearDown(() async {
+          if (!source.isClosed) await source.close();
+        });
+
+        ImageDownloader.debugLoadComicImageUnwrapped =
+            (imageKey, sourceKey, cid, eid, {target}) => source.stream;
+
+        final future = loadComicImageBytes('empty-bytes', 'src', 'cid', 'eid');
+
+        source.add(
+          const ImageDownloadProgress(currentBytes: 10, totalBytes: 100),
+        );
+        await source.close();
+
+        await expectLater(
+          future,
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('without delivering image bytes'),
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'loadComicImageBytes shares active stream across concurrent calls',
+      () async {
+        final source = StreamController<ImageDownloadProgress>();
+        addTearDown(() async {
+          if (!source.isClosed) await source.close();
+        });
+
+        var loaderCalls = 0;
+        ImageDownloader.debugLoadComicImageUnwrapped =
+            (imageKey, sourceKey, cid, eid, {target}) {
+              loaderCalls++;
+              return source.stream;
+            };
+
+        final target = ComicImageLoadTarget(logicalWidth: 100);
+        final future1 = loadComicImageBytes(
+          'shared-bytes-image',
+          'src',
+          'cid',
+          'eid',
+          target: target,
+        );
+        final future2 = loadComicImageBytes(
+          'shared-bytes-image',
+          'src',
+          'cid',
+          'eid',
+          target: target,
+        );
+
+        await pumpEventQueue();
+        expect(loaderCalls, 1);
+
+        final expected = Uint8List.fromList([99, 100]);
+        source.add(
+          ImageDownloadProgress(
+            currentBytes: 2,
+            totalBytes: 2,
+            imageBytes: expected,
+          ),
+        );
+        await source.close();
+
+        final r1 = await future1;
+        final r2 = await future2;
+        expect(r1, orderedEquals(expected));
+        expect(r2, orderedEquals(expected));
+      },
+    );
+
+    test(
+      'strongly typed comicImageLoadingConfig NoSuchMethodError executes once and propagates',
+      () async {
+        final dataDir = Directory.systemTemp.createTempSync('venera-nsm-data-');
+        final cacheDir = Directory.systemTemp.createTempSync(
+          'venera-nsm-cache-',
+        );
+        addTearDown(() {
+          CacheManager.resetForTesting();
+          ImageDownloader.debugResetSourceImageLoading();
+          if (dataDir.existsSync()) dataDir.deleteSync(recursive: true);
+          if (cacheDir.existsSync()) cacheDir.deleteSync(recursive: true);
+        });
+
+        App.dataPath = dataDir.path;
+        App.cachePath = cacheDir.path;
+        CacheManager.debugDisableInitialScan = true;
+
+        final cacheKey = ImageDownloader.getComicImageCacheKey(
+          'err-img',
+          'some-source',
+          'cid',
+          'eid',
+        );
+        expect(await CacheManager().findCache(cacheKey), isNull);
+
+        var resolverCalls = 0;
+        ImageDownloader.configureSourceImageLoading(
+          comicImageLoadingConfig: (sourceKey, imageKey, cid, eid, {target}) {
+            resolverCalls++;
+            (null as dynamic).unimplementedMethod();
+            return {};
+          },
+        );
+
+        final stream = ImageDownloader.loadComicImage(
+          'err-img',
+          'some-source',
+          'cid',
+          'eid',
+        );
+
+        await expectLater(stream, emitsError(isA<NoSuchMethodError>()));
+        expect(resolverCalls, 1);
+      },
+    );
+
+    test(
+      'real _loadComicImage writes to disk cache on preload and reuses for same target while isolating different target',
+      () async {
+        final dataDir = Directory.systemTemp.createTempSync(
+          'venera-real-data-',
+        );
+        final cacheDir = Directory.systemTemp.createTempSync(
+          'venera-real-cache-',
+        );
+        addTearDown(() {
+          CacheManager.resetForTesting();
+          ImageDownloader.debugResetSourceImageLoading();
+          if (dataDir.existsSync()) dataDir.deleteSync(recursive: true);
+          if (cacheDir.existsSync()) cacheDir.deleteSync(recursive: true);
+        });
+
+        App.dataPath = dataDir.path;
+        App.cachePath = cacheDir.path;
+        CacheManager.debugDisableInitialScan = true;
+
+        var transportCalls = 0;
+        final servedBytesA = Uint8List.fromList([1, 2, 3, 4]);
+        final servedBytesB = Uint8List.fromList([5, 6, 7, 8]);
+
+        ImageDownloader.debugComicImageTransport = (url, configs) {
+          transportCalls++;
+          final uri = Uri.parse(url);
+          final target = uri.queryParameters['target'];
+          final bytes = target?.contains('dpr1.0') == true
+              ? servedBytesB
+              : servedBytesA;
+          return bytes;
+        };
+
+        ImageDownloader.configureSourceImageLoading(
+          comicImageLoadingConfig: (sourceKey, imageKey, cid, eid, {target}) {
+            return {
+              'url':
+                  'https://example.com/image?key=$imageKey&target=${target?.cacheIdentity}',
+            };
+          },
+        );
+
+        final targetA = ComicImageLoadTarget(
+          logicalWidth: 100,
+          logicalHeight: 150,
+          devicePixelRatio: 2.0,
+          fit: ComicImageTargetFit.contain,
+        );
+        final targetB = ComicImageLoadTarget(
+          logicalWidth: 200,
+          logicalHeight: 300,
+          devicePixelRatio: 1.0,
+          fit: ComicImageTargetFit.contain,
+        );
+
+        // Preload targetA: writes disk cache
+        await ImageDownloader.preloadComicImage(
+          'real-image-1',
+          'test-src',
+          'cid',
+          'eid',
+          target: targetA,
+        );
+        expect(transportCalls, 1);
+
+        // Second load with same targetA: hits disk cache, no additional transport call
+        final cachedResult = await ImageDownloader.loadComicImageBytes(
+          'real-image-1',
+          'test-src',
+          'cid',
+          'eid',
+          target: targetA,
+        );
+        expect(cachedResult, orderedEquals(servedBytesA));
+        expect(transportCalls, 1);
+
+        // Load with different targetB: misses disk cache, makes second transport call
+        final resultB = await ImageDownloader.loadComicImageBytes(
+          'real-image-1',
+          'test-src',
+          'cid',
+          'eid',
+          target: targetB,
+        );
+        expect(resultB, orderedEquals(servedBytesB));
+        expect(transportCalls, 2);
+      },
+      skip: _sqliteAvailable()
+          ? false
+          : 'sqlite3 native library is unavailable',
     );
   });
 

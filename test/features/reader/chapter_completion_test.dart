@@ -655,6 +655,11 @@ class _FakeReaderImageViewController implements ReaderImageViewController {
   String? getImageKeyByOffset(dynamic offset) => null;
 
   @override
+  ReaderImageReference? getImageReferenceByOffset(Offset offset) => null;
+
+  @override
+  ReaderImageReference? getImageReferenceByIndex(int index) => null;
+  @override
   void handleDoubleTap(dynamic location) {}
 
   @override

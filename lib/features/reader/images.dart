@@ -1213,33 +1213,62 @@ class GalleryModeState extends State<_GalleryMode>
   }
 
   @override
-  Future<Uint8List?> getImageByOffset(Offset offset) async {
+  ReaderImageReference? getImageReferenceByOffset(Offset offset) {
     final provider = _findProviderByOffset(offset);
     final imageKey = provider?.imageKey ?? getImageKeyByOffset(offset);
     if (imageKey == null) return null;
-    if (imageKey.startsWith("file://")) {
-      return await File(imageKey.substring(7)).readAsBytes();
-    }
-
-    final ComicImageLoadTarget? target;
-    if (provider?.target != null) {
-      target = provider!.target;
-    } else {
-      final index = reader.images?.indexOf(imageKey) ?? -1;
-      target = index >= 0
-          ? calculateReaderImageTargetFromContext(context, index + 1)
-          : null;
-    }
-
-    final cacheKey = ImageDownloader.getComicImageCacheKey(
-      imageKey,
-      provider?.sourceKey ?? context.reader.type.sourceKey,
-      provider?.cid ?? context.reader.cid,
-      provider?.eid ?? context.reader.eid,
-      target: target,
+    final int? page =
+        provider?.page ??
+        ((reader.images?.indexOf(imageKey) ?? -1) >= 0
+            ? reader.images!.indexOf(imageKey) + 1
+            : null);
+    final File? file = imageKey.startsWith("file://")
+        ? File(imageKey.substring(7))
+        : null;
+    return ReaderImageReference(
+      imageKey: imageKey,
+      sourceKey: provider?.sourceKey ?? reader.type.comicSource?.key,
+      cid: provider?.cid ?? reader.cid,
+      eid: provider?.eid ?? reader.eid,
+      page: page,
+      file: file,
     );
-    final cache = await CacheManager().findCache(cacheKey);
-    return cache?.readAsBytes();
+  }
+
+  @override
+  ReaderImageReference? getImageReferenceByIndex(int index) {
+    if (index < 0 || index >= (reader.images?.length ?? 0)) return null;
+    final imageKey = reader.images![index];
+    final File? file = imageKey.startsWith("file://")
+        ? File(imageKey.substring(7))
+        : null;
+    return ReaderImageReference(
+      imageKey: imageKey,
+      sourceKey: reader.type.comicSource?.key,
+      cid: reader.cid,
+      eid: reader.eid,
+      page: index + 1,
+      file: file,
+    );
+  }
+
+  @override
+  Future<Uint8List?> getImageByOffset(Offset offset) async {
+    final ref = getImageReferenceByOffset(offset);
+    if (ref == null) return null;
+    if (ref.file != null) {
+      if (await ref.file!.exists()) {
+        return await ref.file!.readAsBytes();
+      }
+      return null;
+    }
+    return await ImageDownloader.loadComicImageBytes(
+      ref.imageKey,
+      ref.sourceKey,
+      ref.cid,
+      ref.eid,
+      target: null,
+    );
   }
 
   @override
@@ -2070,17 +2099,18 @@ class ContinuousModeState extends State<_ContinuousMode>
       },
       child: widget,
     );
-    var width = reader.size.width;
-    var height = reader.size.height;
-    if (appdata.settings['limitImageWidth'] &&
-        width / height > 0.7 &&
-        reader.mode.isTopToBottom) {
-      width = height * 0.7;
-    }
+    final safeSize = _getSafeReaderViewportSize(context, reader);
+    final contentSize = calculateReaderContentSize(
+      mode: reader.mode,
+      viewportSize: safeSize,
+      limitImageWidth: appdata.settings['limitImageWidth'] == true,
+    );
+    final width = contentSize.width;
+    final height = contentSize.height;
 
     return PhotoView.customChild(
       backgroundDecoration: BoxDecoration(color: context.colorScheme.surface),
-      childSize: Size(width, height),
+      childSize: contentSize,
       minScale: 1.0,
       maxScale: 2.5,
       strictScale: true,
@@ -2275,33 +2305,110 @@ class ContinuousModeState extends State<_ContinuousMode>
   }
 
   @override
-  Future<Uint8List?> getImageByOffset(Offset offset) async {
+  ReaderImageReference? getImageReferenceByOffset(Offset offset) {
     final provider = _findProviderByOffset(offset);
-    final imageKey = provider?.imageKey ?? getImageKeyByOffset(offset);
-    if (imageKey == null) return null;
-    if (imageKey.startsWith("file://")) {
-      return await File(imageKey.substring(7)).readAsBytes();
-    }
-
-    final ComicImageLoadTarget? target;
-    if (provider?.target != null) {
-      target = provider!.target;
-    } else {
-      final index = reader.images?.indexOf(imageKey) ?? -1;
-      target = index >= 0
-          ? calculateReaderImageTargetFromContext(context, index + 1)
+    if (provider != null) {
+      final imageKey = provider.imageKey;
+      final file = imageKey.startsWith("file://")
+          ? File(imageKey.substring(7))
           : null;
+      return ReaderImageReference(
+        imageKey: imageKey,
+        sourceKey: provider.sourceKey ?? reader.type.comicSource?.key,
+        cid: provider.cid,
+        eid: provider.eid,
+        page: provider.page,
+        file: file,
+      );
     }
+    final imageKey = getImageKeyByOffset(offset);
+    if (imageKey != null) {
+      final file = imageKey.startsWith("file://")
+          ? File(imageKey.substring(7))
+          : null;
+      final page = reader.page;
+      final ref = _imageRefAt(page);
+      return ReaderImageReference(
+        imageKey: imageKey,
+        sourceKey: reader.type.comicSource?.key,
+        cid: reader.cid,
+        eid: ref?.eid ?? reader.eid,
+        page: ref?.page ?? page,
+        file: file,
+      );
+    }
+    final page = reader.page;
+    if (page > 0) {
+      final ref = _imageRefAt(page);
+      final key =
+          ref?.imageKey ??
+          (page <= (reader.images?.length ?? 0)
+              ? reader.images![page - 1]
+              : null);
+      if (key != null) {
+        final file = key.startsWith("file://") ? File(key.substring(7)) : null;
+        return ReaderImageReference(
+          imageKey: key,
+          sourceKey: reader.type.comicSource?.key,
+          cid: reader.cid,
+          eid: ref?.eid ?? reader.eid,
+          page: ref?.page ?? page,
+          file: file,
+        );
+      }
+    }
+    return null;
+  }
 
-    final cacheKey = ImageDownloader.getComicImageCacheKey(
-      imageKey,
-      provider?.sourceKey ?? context.reader.type.sourceKey,
-      provider?.cid ?? context.reader.cid,
-      provider?.eid ?? context.reader.eid,
-      target: target,
+  @override
+  ReaderImageReference? getImageReferenceByIndex(int index) {
+    if (crossChapter) {
+      final ref = _imageRefAt(index + 1);
+      if (ref == null) return null;
+      final file = ref.imageKey.startsWith("file://")
+          ? File(ref.imageKey.substring(7))
+          : null;
+      return ReaderImageReference(
+        imageKey: ref.imageKey,
+        sourceKey: reader.type.comicSource?.key,
+        cid: reader.cid,
+        eid: ref.eid,
+        page: ref.page,
+        file: file,
+      );
+    }
+    if (index < 0 || index >= (reader.images?.length ?? 0)) return null;
+    final imageKey = reader.images![index];
+    final file = imageKey.startsWith("file://")
+        ? File(imageKey.substring(7))
+        : null;
+    return ReaderImageReference(
+      imageKey: imageKey,
+      sourceKey: reader.type.comicSource?.key,
+      cid: reader.cid,
+      eid: reader.eid,
+      page: index + 1,
+      file: file,
     );
-    final cache = await CacheManager().findCache(cacheKey);
-    return cache?.readAsBytes();
+  }
+
+  @override
+  Future<Uint8List?> getImageByOffset(Offset offset) async {
+    final ref = getImageReferenceByOffset(offset);
+    if (ref == null) return null;
+    if (ref.file != null) {
+      if (await ref.file!.exists()) {
+        return await ref.file!.readAsBytes();
+      }
+      return null;
+    }
+    return await ImageDownloader.loadComicImageBytes(
+      ref.imageKey,
+      ref.sourceKey,
+      ref.cid,
+      ref.eid,
+      target: null,
+    );
   }
 
   @override
@@ -2316,6 +2423,69 @@ class ContinuousModeState extends State<_ContinuousMode>
   }
 }
 
+/// Pure calculation helper for reader content size.
+///
+/// Safely handles invalid/zero size by clamping to >= 0 and finite numbers.
+/// For vertical Continuous/Waterfall mode, limits width according to
+/// [limitImageWidth] setting (width = height * 0.7 when width / height > 0.7).
+/// Gallery mode maintains real viewport dimensions without limiting width.
+Size calculateReaderContentSize({
+  required ReaderMode mode,
+  required Size viewportSize,
+  bool limitImageWidth = false,
+}) {
+  var width = viewportSize.width;
+  var height = viewportSize.height;
+  if (!width.isFinite || width < 0) width = 0;
+  if (!height.isFinite || height < 0) height = 0;
+
+  if (mode.isContinuous &&
+      mode.isTopToBottom &&
+      limitImageWidth &&
+      height > 0) {
+    if (width / height > 0.7) {
+      width = height * 0.7;
+    }
+  }
+
+  return Size(width, height);
+}
+
+Size _getSafeReaderViewportSize(BuildContext context, ReaderState reader) {
+  if (reader.mode.isGallery) {
+    return MediaQuery.of(context).size;
+  }
+  try {
+    final renderBox = reader.context.findRenderObject();
+    if (renderBox is RenderBox && renderBox.hasSize) {
+      final size = renderBox.size;
+      if (size.width > 0 &&
+          size.height > 0 &&
+          size.width.isFinite &&
+          size.height.isFinite) {
+        return size;
+      }
+    }
+  } catch (_) {}
+  return MediaQuery.of(context).size;
+}
+
+bool _isSplitWideImagesEnabled(ReaderState reader) {
+  final setting =
+      appdata.settings.getReaderSetting(
+        reader.cid,
+        reader.type.sourceKey,
+        'splitDualPage',
+      ) ==
+      true;
+  if (reader.mode.isGallery) {
+    return reader.imagesPerPage == 1 && setting;
+  } else if (reader.mode.isContinuous) {
+    return reader.mode.isTopToBottom && setting;
+  }
+  return false;
+}
+
 /// Pure calculation helper for reader image target.
 ComicImageLoadTarget calculateReaderImageTarget({
   required ReaderMode mode,
@@ -2325,44 +2495,60 @@ ComicImageLoadTarget calculateReaderImageTarget({
   required int totalImages,
   int imagesPerPage = 1,
   bool showSingleImageOnFirstPage = false,
+  bool splitWideImage = false,
+  bool limitImageWidth = false,
 }) {
+  final contentSize = calculateReaderContentSize(
+    mode: mode,
+    viewportSize: viewportSize,
+    limitImageWidth: limitImageWidth,
+  );
+
+  final dpr = (devicePixelRatio.isFinite && devicePixelRatio > 0)
+      ? devicePixelRatio
+      : 1.0;
+
   if (mode.isContinuous) {
     if (mode.isTopToBottom) {
-      // 纵向Continuous/Waterfall为fitWidth且高度null
+      // 纵向Continuous/Waterfall为fitWidth且高度null，受limitImageWidth约束contentSize.width
       return ComicImageLoadTarget(
-        logicalWidth: viewportSize.width,
+        logicalWidth: contentSize.width,
         logicalHeight: null,
-        devicePixelRatio: devicePixelRatio,
+        devicePixelRatio: dpr,
         fit: ComicImageTargetFit.fitWidth,
+        splitWideImage: splitWideImage,
       );
     } else {
       // 横向Continuous为fitHeight且宽度null
       return ComicImageLoadTarget(
         logicalWidth: null,
-        logicalHeight: viewportSize.height,
-        devicePixelRatio: devicePixelRatio,
+        logicalHeight: contentSize.height,
+        devicePixelRatio: dpr,
         fit: ComicImageTargetFit.fitHeight,
+        splitWideImage: splitWideImage,
       );
     }
   }
 
-  // Gallery mode
+  // Gallery mode保持真实viewport规则
   if (page <= 0) {
     return ComicImageLoadTarget(
-      logicalWidth: viewportSize.width,
-      logicalHeight: viewportSize.height,
-      devicePixelRatio: devicePixelRatio,
+      logicalWidth: contentSize.width,
+      logicalHeight: contentSize.height,
+      devicePixelRatio: dpr,
       fit: ComicImageTargetFit.contain,
+      splitWideImage: splitWideImage,
     );
   }
 
   if (imagesPerPage == 1) {
     // Gallery单图全视口
     return ComicImageLoadTarget(
-      logicalWidth: viewportSize.width,
-      logicalHeight: viewportSize.height,
-      devicePixelRatio: devicePixelRatio,
+      logicalWidth: contentSize.width,
+      logicalHeight: contentSize.height,
+      devicePixelRatio: dpr,
       fit: ComicImageTargetFit.contain,
+      splitWideImage: splitWideImage,
     );
   }
 
@@ -2389,28 +2575,31 @@ ComicImageLoadTarget calculateReaderImageTarget({
 
   if (isSingle) {
     return ComicImageLoadTarget(
-      logicalWidth: viewportSize.width,
-      logicalHeight: viewportSize.height,
-      devicePixelRatio: devicePixelRatio,
+      logicalWidth: contentSize.width,
+      logicalHeight: contentSize.height,
+      devicePixelRatio: dpr,
       fit: ComicImageTargetFit.contain,
+      splitWideImage: splitWideImage,
     );
   }
 
   if (mode == ReaderMode.galleryTopToBottom) {
     // 纵向双图半高
     return ComicImageLoadTarget(
-      logicalWidth: viewportSize.width,
-      logicalHeight: viewportSize.height / 2,
-      devicePixelRatio: devicePixelRatio,
+      logicalWidth: contentSize.width,
+      logicalHeight: contentSize.height / 2,
+      devicePixelRatio: dpr,
       fit: ComicImageTargetFit.contain,
+      splitWideImage: splitWideImage,
     );
   } else {
     // 横向双图半宽
     return ComicImageLoadTarget(
-      logicalWidth: viewportSize.width / 2,
-      logicalHeight: viewportSize.height,
-      devicePixelRatio: devicePixelRatio,
+      logicalWidth: contentSize.width / 2,
+      logicalHeight: contentSize.height,
+      devicePixelRatio: dpr,
       fit: ComicImageTargetFit.contain,
+      splitWideImage: splitWideImage,
     );
   }
 }
@@ -2418,18 +2607,24 @@ ComicImageLoadTarget calculateReaderImageTarget({
 /// Context-based helper for reader image target calculation.
 ComicImageLoadTarget calculateReaderImageTargetFromContext(
   BuildContext context,
-  int page,
-) {
+  int page, {
+  bool? splitWideImage,
+}) {
   final reader = context.reader;
+  final safeSize = _getSafeReaderViewportSize(context, reader);
   final mediaQuery = MediaQuery.of(context);
+  final split = splitWideImage ?? _isSplitWideImagesEnabled(reader);
+  final limitImageWidth = appdata.settings['limitImageWidth'] == true;
   return calculateReaderImageTarget(
     mode: reader.mode,
-    viewportSize: mediaQuery.size,
+    viewportSize: safeSize,
     devicePixelRatio: mediaQuery.devicePixelRatio,
     page: page,
     totalImages: reader.images?.length ?? 0,
     imagesPerPage: reader.imagesPerPage,
     showSingleImageOnFirstPage: reader.showSingleImageOnFirstPage(),
+    splitWideImage: split,
+    limitImageWidth: limitImageWidth,
   );
 }
 
