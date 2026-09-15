@@ -312,6 +312,42 @@ abstract class ImageDownloader {
     return config;
   }
 
+  @visibleForTesting
+  static Map<String, dynamic> debugResolveImageHeaders(
+    Map<String, dynamic> configs,
+  ) {
+    return _resolveImageHeaders(configs['headers']);
+  }
+
+  static Map<String, dynamic> _resolveImageHeaders(dynamic rawHeaders) {
+    if (rawHeaders == null) {
+      return <String, dynamic>{'user-agent': webUA};
+    }
+    if (rawHeaders is! Map) {
+      throw ArgumentError(
+        'Invalid image headers: expected Map<String, dynamic>?, got ${rawHeaders.runtimeType}',
+      );
+    }
+    final headers = <String, dynamic>{};
+    var hasUserAgent = false;
+    for (final entry in rawHeaders.entries) {
+      final key = entry.key;
+      if (key is! String) {
+        throw ArgumentError(
+          'Invalid header key: expected String, got $key (${key.runtimeType})',
+        );
+      }
+      if (key.toLowerCase() == 'user-agent') {
+        hasUserAgent = true;
+      }
+      headers[key] = entry.value;
+    }
+    if (!hasUserAgent) {
+      headers['user-agent'] = webUA;
+    }
+    return headers;
+  }
+
   static Stream<ImageDownloadProgress> loadThumbnail(
     String url,
     String? sourceKey, [
@@ -334,11 +370,7 @@ abstract class ImageDownloader {
       configs =
           await _thumbnailLoadingConfigResolver?.call(sourceKey, url) ?? {};
     }
-    configs['headers'] ??= {};
-    if (configs['headers']['user-agent'] == null &&
-        configs['headers']['User-Agent'] == null) {
-      configs['headers']['user-agent'] = webUA;
-    }
+    final headers = _resolveImageHeaders(configs['headers']);
 
     if (((configs['url'] as String?) ?? url).startsWith('cover.') &&
         sourceKey != null &&
@@ -352,7 +384,7 @@ abstract class ImageDownloader {
 
     var dio = AppDio(
       BaseOptions(
-        headers: Map<String, dynamic>.from(configs['headers']),
+        headers: headers,
         method: configs['method'] ?? 'GET',
         responseType: ResponseType.stream,
       ),
@@ -556,9 +588,13 @@ abstract class ImageDownloader {
     var retriesRemaining = 5;
     while (true) {
       try {
-        configs['headers'] ??= {'user-agent': webUA};
+        final headers = _resolveImageHeaders(configs['headers']);
+        final effectiveConfigs = <String, dynamic>{
+          ...configs,
+          'headers': headers,
+        };
 
-        final onLoadFailedConfig = configs['onLoadFailed'];
+        final onLoadFailedConfig = effectiveConfigs['onLoadFailed'];
         onLoadFailed = onLoadFailedConfig is JSInvokable
             ? onLoadFailedConfig
             : null;
@@ -569,8 +605,8 @@ abstract class ImageDownloader {
         final transport = _debugComicImageTransport;
         if (transport != null) {
           final transportResult = await transport(
-            configs['url'] ?? imageKey,
-            configs,
+            effectiveConfigs['url'] ?? imageKey,
+            effectiveConfigs,
           );
           if (transportResult is Stream<List<int>>) {
             stream = transportResult;
@@ -589,15 +625,15 @@ abstract class ImageDownloader {
         } else {
           var dio = AppDio(
             BaseOptions(
-              headers: configs['headers'],
-              method: configs['method'] ?? 'GET',
+              headers: headers,
+              method: effectiveConfigs['method'] ?? 'GET',
               responseType: ResponseType.stream,
             ),
           );
 
           var req = await dio.request<ResponseBody>(
-            configs['url'] ?? imageKey,
-            data: configs['data'],
+            effectiveConfigs['url'] ?? imageKey,
+            data: effectiveConfigs['data'],
           );
           stream = req.data?.stream ?? (throw "Error: Empty response body.");
           expectedBytes = req.data!.contentLength;
@@ -614,9 +650,9 @@ abstract class ImageDownloader {
           );
         }
 
-        if (configs['onResponse'] is JSInvokable) {
+        if (effectiveConfigs['onResponse'] is JSInvokable) {
           buffer = await _applyImageResponseCallback(
-            configs['onResponse'] as JSInvokable,
+            effectiveConfigs['onResponse'] as JSInvokable,
             buffer,
           );
         }
@@ -629,10 +665,10 @@ abstract class ImageDownloader {
           buffer.clear();
         }
 
-        if (configs['modifyImage'] != null) {
+        if (effectiveConfigs['modifyImage'] != null) {
           var newData = await modifyImageWithScript(
             data,
-            configs['modifyImage'],
+            effectiveConfigs['modifyImage'],
           );
           data = newData;
         }

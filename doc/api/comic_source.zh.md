@@ -75,19 +75,57 @@ class NewComicSource extends ComicSource {
 
 具体函数签名和运行时对象请参考 [js.zh.md](js.zh.md) 与 [js.en.md](js.en.md)。
 
-## 章节图片加载与 onImageLoad
+## 图片加载与网络配置（onImageLoad 与 onThumbnailLoad）
 
-漫画源可以在 `comic.onImageLoad(url, comicId, epId, target)` 中为章节图片提供自定义网络请求配置（如 Headers、Referer 或分流地址），并可选接收第四个参数 `target`：
+漫画源可以通过 `comic.onImageLoad` 与 `comic.onThumbnailLoad` 为图片请求提供自定义网络配置（如 Headers、Referer 或分流地址）。两者返回的配置对象遵循通用的 Header 处理与回退契约。
 
-```javascript
-onImageLoad: (url, comicId, epId, target) => {
-    // target 为可选的排版约束对象，不传或无约束时为 null / undefined
-    return {
-        url: url,
-        headers: {}
-    }
-}
-```
+### 适用范围与功能差异
+
+1. **章节正文图片（`comic.onImageLoad`）**：
+   ```javascript
+   onImageLoad: (url, comicId, epId, target) => {
+       return {
+           url: url,
+           headers: {
+               "User-Agent": "CustomUA/1.0"
+           },
+           onLoadFailed: () => {
+               // 加载失败时可返回新的 ImageLoadingConfig 进行重试
+               return { url: retryUrl, headers: { "User-Agent": "CustomUA/1.0" } };
+           }
+       }
+   }
+   ```
+   - 适用于章节正文图片的请求配置。
+   - 支持完整 `ImageLoadingConfig` 字段（`url`、`headers`、`method`、`data`、`onResponse`、`modifyImage`、`onLoadFailed`）。
+   - 可选接收第四个参数 `target`（类型为 `ComicImageLoadTarget | null`），用于获取当前阅读器的排版约束。
+   - 当章节图片加载失败触发 `onLoadFailed` 时，返回的新配置同样受到统一的 Header 回退规则约束。
+
+2. **缩略图与封面图片（`comic.onThumbnailLoad`）**：
+   ```javascript
+   onThumbnailLoad: (url) => {
+       return {
+           url: url,
+           headers: {
+               "User-Agent": "CustomUA/1.0"
+           }
+       }
+   }
+   ```
+   - 适用于首页推荐、探索/分类列表、搜索结果等列表中的缩略图，以及漫画详情页封面图片。
+   - 仅使用基础网络请求配置（如 `url`、`headers`、`method`、`data` 等）。
+   - `modifyImage` 与 `onLoadFailed` 在缩略图场景下不生效（运行时会自动忽略）。
+
+### Header 解析与 User-Agent 回退规则
+
+无论在 `onImageLoad`、`onThumbnailLoad` 还是章节重试 `onLoadFailed` 中，VeneraNext 均遵循统一的 Header 处理契约：
+
+- **Source UA 优先**：漫画源通过 `headers` 显式声明的请求头优先级最高。
+- **Header 名大小写不敏感**：根据 HTTP 标准，Header 名称判定大小写不敏感（如 `User-Agent`、`user-agent`、`USER-AGENT`）。只要源返回的 headers 中存在任意大小写形态的 User-Agent，运行时均视为源已指定客户端标识，会严格保留源指定的值，绝不会被默认 UA 覆盖，也不会重复追加小写 `user-agent`。
+- **缺省 UA fallback**：当漫画源未提供 `headers`、`headers` 为空对象，或者其中不包含任何形式的 `User-Agent` 时，运行时会自动回退补入默认的浏览器标识（`user-agent: webUA`）。
+- **独立映射与类型安全**：解析后的 headers 均为独立的新可修改 Map；若传入了非 Map/Object 等非法 headers 类型，运行时会抛出明确异常。
+
+### `target` 排版约束参数说明（仅用于 onImageLoad）
 
 - **`target` 参数与字段**：
   - `target`（类型为 `ComicImageLoadTarget | null`）反映的是阅读器当前的**显示与排版布局约束**（容器视口与排版模式），**而非漫画源原图的固有尺寸、分辨率或期望大小**。
@@ -111,6 +149,7 @@ onImageLoad: (url, comicId, epId, target) => {
 - **应用不规定图床算法**：
   - VeneraNext 仅向漫画源透传客观的视口与排版信息，不规定、不建议、也不绑定任何图床质量梯队、缩放公式或 CDN 查询参数。
   - 漫画源可根据目标站点的 CDN 能力自行决定如何使用该参数（例如请求不同分辨率或格式），或完全忽略该参数。
+
 ## 兼容性
 
 VeneraNext 会尽量在实际可行的范围内保持 JavaScript 漫画源扩展接口兼容。这里的兼容只指扩展接口和运行时契约，不代表本仓库提供、推荐或验证任何第三方源。

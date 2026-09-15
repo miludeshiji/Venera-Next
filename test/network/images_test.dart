@@ -6,6 +6,7 @@ import 'package:flutter_qjs/flutter_qjs.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:venera_next/foundation/app.dart';
+import 'package:venera_next/foundation/consts.dart';
 import 'package:venera_next/foundation/cache_manager.dart';
 import 'package:venera_next/network/images.dart';
 
@@ -1144,4 +1145,290 @@ void main() {
     },
     skip: _sqliteAvailable() ? false : 'sqlite3 native library is unavailable',
   );
+
+  group('ImageDownloader header fallback and normalization', () {
+    test('falls back to default webUA when headers are missing or null', () {
+      final fromMissing = ImageDownloader.debugResolveImageHeaders({});
+      expect(fromMissing, {'user-agent': webUA});
+
+      final fromNull = ImageDownloader.debugResolveImageHeaders({
+        'headers': null,
+      });
+      expect(fromNull, {'user-agent': webUA});
+    });
+
+    test('falls back to default webUA when headers map is empty', () {
+      final resolved = ImageDownloader.debugResolveImageHeaders({
+        'headers': <String, dynamic>{},
+      });
+      expect(resolved, {'user-agent': webUA});
+    });
+
+    test(
+      'preserves existing lowercase user-agent without appending fallback',
+      () {
+        final resolved = ImageDownloader.debugResolveImageHeaders({
+          'headers': {'user-agent': 'custom-ua/1.0'},
+        });
+        expect(resolved, {'user-agent': 'custom-ua/1.0'});
+        expect(
+          resolved.keys.where((k) => k.toLowerCase() == 'user-agent'),
+          hasLength(1),
+        );
+      },
+    );
+
+    test(
+      'preserves existing standard User-Agent without injecting lowercase fallback',
+      () {
+        final resolved = ImageDownloader.debugResolveImageHeaders({
+          'headers': {'User-Agent': 'custom-ua/2.0'},
+        });
+        expect(resolved, {'User-Agent': 'custom-ua/2.0'});
+        expect(resolved.containsKey('user-agent'), isFalse);
+      },
+    );
+
+    test(
+      'preserves mixed-case and uppercase User-Agent without duplicating fallback',
+      () {
+        final mixed = ImageDownloader.debugResolveImageHeaders({
+          'headers': {'uSeR-AgEnT': 'mixed-ua/1.0'},
+        });
+        expect(mixed, {'uSeR-AgEnT': 'mixed-ua/1.0'});
+        expect(mixed.containsKey('user-agent'), isFalse);
+
+        final upper = ImageDownloader.debugResolveImageHeaders({
+          'headers': {'USER-AGENT': 'upper-ua/2.0'},
+        });
+        expect(upper, {'USER-AGENT': 'upper-ua/2.0'});
+        expect(upper.containsKey('user-agent'), isFalse);
+      },
+    );
+
+    test('preserves other headers and case while adding fallback webUA', () {
+      final resolved = ImageDownloader.debugResolveImageHeaders({
+        'headers': {
+          'Referer': 'https://comic.test/read',
+          'Authorization': 'Bearer secret-token',
+          'X-Custom-Header': 'custom-value',
+        },
+      });
+      expect(resolved, {
+        'Referer': 'https://comic.test/read',
+        'Authorization': 'Bearer secret-token',
+        'X-Custom-Header': 'custom-value',
+        'user-agent': webUA,
+      });
+    });
+
+    test(
+      'returns new mutable map and does not mutate input configs or original headers',
+      () {
+        final originalHeaders = <String, dynamic>{
+          'Referer': 'https://comic.test/view',
+        };
+        final configs = <String, dynamic>{'headers': originalHeaders};
+
+        final resolved = ImageDownloader.debugResolveImageHeaders(configs);
+
+        // Original headers and input configs are not modified in-place
+        expect(originalHeaders, {'Referer': 'https://comic.test/view'});
+        expect(configs['headers'], same(originalHeaders));
+
+        // Resolved map is a new independent mutable map
+        resolved['user-agent'] = 'mutated-ua';
+        resolved['X-New'] = 'added';
+        expect(originalHeaders, {'Referer': 'https://comic.test/view'});
+        expect(configs['headers'], {'Referer': 'https://comic.test/view'});
+      },
+    );
+
+    test('rejects illegal non-map headers with ArgumentError', () {
+      expect(
+        () =>
+            ImageDownloader.debugResolveImageHeaders({'headers': 'not-a-map'}),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => ImageDownloader.debugResolveImageHeaders({'headers': 123}),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => ImageDownloader.debugResolveImageHeaders({
+          'headers': ['user-agent'],
+        }),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('rejects non-string header keys with ArgumentError', () {
+      expect(
+        () => ImageDownloader.debugResolveImageHeaders({
+          'headers': <dynamic, dynamic>{1: 'value'},
+        }),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test(
+      'chapter loading through debugComicImageTransport applies fallback and re-applies on onLoadFailed replacement',
+      () async {
+        final dataDir = Directory.systemTemp.createTempSync(
+          'venera-header-data-',
+        );
+        final cacheDir = Directory.systemTemp.createTempSync(
+          'venera-header-cache-',
+        );
+        addTearDown(() {
+          CacheManager.resetForTesting();
+          ImageDownloader.debugResetSourceImageLoading();
+          if (dataDir.existsSync()) dataDir.deleteSync(recursive: true);
+          if (cacheDir.existsSync()) cacheDir.deleteSync(recursive: true);
+        });
+
+        App.dataPath = dataDir.path;
+        App.cachePath = cacheDir.path;
+        CacheManager.debugDisableInitialScan = true;
+
+        final attempts = <Map<String, dynamic>>[];
+        final servedBytes = Uint8List.fromList([10, 20, 30, 40]);
+
+        final failCallback = _FakeJSInvokable((args) {
+          // onLoadFailed provides a replacement config with empty headers map
+          return <String, dynamic>{
+            'url': 'https://example.com/chapter-image-retry.jpg',
+            'headers': <String, dynamic>{},
+          };
+        });
+
+        ImageDownloader.debugComicImageTransport = (url, configs) {
+          final headers = configs['headers'];
+          attempts.add(
+            headers is Map
+                ? Map<String, dynamic>.from(headers)
+                : <String, dynamic>{},
+          );
+
+          if (attempts.length == 1) {
+            throw Exception('First transport attempt failed');
+          }
+          return servedBytes;
+        };
+
+        // Initial config specifies custom Referer without any user-agent
+        ImageDownloader.configureSourceImageLoading(
+          comicImageLoadingConfig: (sourceKey, imageKey, cid, eid, {target}) {
+            return {
+              'url': 'https://example.com/chapter-image-init.jpg',
+              'headers': {'Referer': 'https://example.com/chapter-page'},
+              'onLoadFailed': failCallback,
+            };
+          },
+        );
+
+        final resultBytes = await ImageDownloader.loadComicImageBytes(
+          'https://example.com/chapter-image-init.jpg',
+          'test-src',
+          'cid-fallback',
+          'eid-fallback',
+        );
+
+        expect(resultBytes, orderedEquals(servedBytes));
+        expect(attempts, hasLength(2));
+
+        // First attempt preserved Referer and applied fallback webUA
+        expect(attempts[0], {
+          'Referer': 'https://example.com/chapter-page',
+          'user-agent': webUA,
+        });
+
+        // Second attempt re-applied fallback webUA after onLoadFailed replaced config with empty headers
+        expect(attempts[1], {'user-agent': webUA});
+
+        expect(failCallback.destroyCount, 1);
+      },
+      skip: _sqliteAvailable()
+          ? false
+          : 'sqlite3 native library is unavailable',
+    );
+
+    test(
+      'chapter loading preserves custom User-Agent across onLoadFailed replacement config',
+      () async {
+        final dataDir = Directory.systemTemp.createTempSync(
+          'venera-header-custom-data-',
+        );
+        final cacheDir = Directory.systemTemp.createTempSync(
+          'venera-header-custom-cache-',
+        );
+        addTearDown(() {
+          CacheManager.resetForTesting();
+          ImageDownloader.debugResetSourceImageLoading();
+          if (dataDir.existsSync()) dataDir.deleteSync(recursive: true);
+          if (cacheDir.existsSync()) cacheDir.deleteSync(recursive: true);
+        });
+
+        App.dataPath = dataDir.path;
+        App.cachePath = cacheDir.path;
+        CacheManager.debugDisableInitialScan = true;
+
+        final attempts = <Map<String, dynamic>>[];
+        final servedBytes = Uint8List.fromList([50, 60, 70, 80]);
+
+        final failCallback = _FakeJSInvokable((args) {
+          // onLoadFailed provides a replacement config with explicit User-Agent
+          return <String, dynamic>{
+            'url': 'https://example.com/chapter-image-retry-ua.jpg',
+            'headers': <String, dynamic>{'User-Agent': 'CustomRetryAgent/2.0'},
+          };
+        });
+
+        ImageDownloader.debugComicImageTransport = (url, configs) {
+          final headers = configs['headers'];
+          attempts.add(
+            headers is Map
+                ? Map<String, dynamic>.from(headers)
+                : <String, dynamic>{},
+          );
+
+          if (attempts.length == 1) {
+            throw Exception('First transport attempt failed');
+          }
+          return servedBytes;
+        };
+
+        // Initial config has missing headers
+        ImageDownloader.configureSourceImageLoading(
+          comicImageLoadingConfig: (sourceKey, imageKey, cid, eid, {target}) {
+            return {
+              'url': 'https://example.com/chapter-image-no-headers.jpg',
+              'onLoadFailed': failCallback,
+            };
+          },
+        );
+
+        final resultBytes = await ImageDownloader.loadComicImageBytes(
+          'https://example.com/chapter-image-no-headers.jpg',
+          'test-src',
+          'cid-custom-ua',
+          'eid-custom-ua',
+        );
+
+        expect(resultBytes, orderedEquals(servedBytes));
+        expect(attempts, hasLength(2));
+
+        // First attempt got fallback webUA because headers were missing
+        expect(attempts[0], {'user-agent': webUA});
+
+        // Second attempt preserved custom User-Agent from onLoadFailed without adding duplicate lowercase user-agent
+        expect(attempts[1], {'User-Agent': 'CustomRetryAgent/2.0'});
+
+        expect(failCallback.destroyCount, 1);
+      },
+      skip: _sqliteAvailable()
+          ? false
+          : 'sqlite3 native library is unavailable',
+    );
+  });
 }

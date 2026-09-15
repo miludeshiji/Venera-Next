@@ -28,6 +28,26 @@ JavaScript API 主要分为以下几类：
 仅提供文本与二进制 WebSocket transport，不包含 SignalR、重连策略或
 站点认证语义。
 
+## 图片加载配置与 Header 处理契约（ImageLoadingConfig）
+
+漫画源通过 `comic.onImageLoad` 与 `comic.onThumbnailLoad` 返回 `ImageLoadingConfig` 对象，为图片网络请求提供自定义配置。
+
+### 适用范围与字段支持
+
+| 钩子函数 | 适用场景 | 支持字段 | 特殊说明 |
+|---|---|---|---|
+| `comic.onImageLoad` | 章节正文图片加载 | `url`, `headers`, `method`, `data`, `onResponse`, `modifyImage`, `onLoadFailed` | 支持失败重试；`onLoadFailed` 返回的新配置同样遵循统一 Header fallback 规则；可选接收 `target` 排版约束参数 |
+| `comic.onThumbnailLoad` | 缩略图与封面图片（首页推荐、分类浏览、搜索结果、详情页封面） | `url`, `headers`, `method`, `data` | 仅使用基础网络请求配置；`modifyImage` 与 `onLoadFailed` 在缩略图场景下不生效（被运行时忽略） |
+
+### Header 解析与 User-Agent 回退规则
+
+在所有图片请求（缩略图、封面、章节正文及章节重试）中，VeneraNext 统一遵循以下 Header 解析与 fallback 契约：
+
+1. **Source UA 优先**：漫画源通过 `headers` 显式指定的 Header 拥有最高优先级。
+2. **Header 名大小写不敏感**：根据 HTTP 规范，Header 名称判定大小写不敏感（例如 `User-Agent`、`user-agent`、`USER-AGENT`）。只要源返回的 `headers` 中包含任意大小写形式的 `User-Agent`，运行时均严格保留源指定的 UA，绝不会被默认浏览器 UA 覆盖，也不会重复追加默认 UA。
+3. **缺省 UA fallback**：当漫画源未提供 `headers`、`headers` 为空对象，或者其中未包含任何形式的 `User-Agent` 时，运行时会自动回退补入默认客户端标识（`user-agent: webUA`）。
+4. **独立可变映射与防御校验**：解析后的 headers 统一输出为独立的新可变 Map，避免直接污染原对象；若传入了非 Map/Object 等非法 headers 类型，运行时会抛出清晰明确的异常。
+
 
 ## 章节图片排版目标（ComicImageLoadTarget）
 

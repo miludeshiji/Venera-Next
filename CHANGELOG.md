@@ -2,6 +2,19 @@
 
 本项目遵循语义化版本，记录 fork 后的主要变更。
 
+## v2.1.0
+
+### 新增
+
+- **图片网络请求 Header 处理机制与 User-Agent 规范化**：
+  - 规范 `comic.onImageLoad` 与 `comic.onThumbnailLoad` 返回的 `ImageLoadingConfig` 请求头解析规则，明确漫画源自定义 headers 拥有最高优先级。
+  - 支持大小写不敏感（case-insensitive）检测，兼容 `User-Agent`、`user-agent` 等任意大小写形式，仅在漫画源未提供任何 UA 时安全回退默认 `webUA`。
+  - 保证入参配置对象的不可变性，杜绝原地修改副作用；在章节图片 `onLoadFailed` 失败重试时严格遵循相同的 Header 合并与回退逻辑。
+  - 增强防御性类型校验，防止非法的非字符串键或异常结构进入底层网络请求管线。
+- **API 文档与兼容性技术预研**：
+  - 更新中英文扩展文档，详尽说明 `ImageLoadingConfig` 的适用范围、字段支持、大小写无关匹配规则及缩略图/章节图差异。
+  - 新增通用图片请求 Header 机制的兼容性审查与实验预研文档。
+
 ## v2.0.3
 
 ### 新增

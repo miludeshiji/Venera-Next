@@ -498,7 +498,17 @@ If `load` function is implemented, `loadNext` function will be ignored.
 
         },
         /**
-         * [Optional] provide configs for an image loading
+         * [Optional] provide configs for chapter image loading
+         *
+         * Header Resolution & User-Agent Fallback:
+         * - Source headers take precedence: Headers provided by the comic source have highest priority.
+         * - Case-insensitive header matching: HTTP header names are case-insensitive (e.g. `User-Agent`, `user-agent`).
+         *   If any casing of `User-Agent` is provided by the comic source, it is preserved and will NOT be overwritten
+         *   or duplicated by the default User-Agent.
+         * - Default UA fallback: If `headers` is missing, empty, or does not include any `User-Agent`, VeneraNext falls
+         *   back to injecting `user-agent: webUA`.
+         * - Failure retries: When chapter image loading fails, `onLoadFailed` can return a new `ImageLoadingConfig`,
+         *   which is resolved under the exact same header fallback rules.
          *
          * The 4th argument `target` is optional and nullable (`ComicImageLoadTarget | null`).
          * Note that `target` represents the reader's display and layout constraints (viewport and fitting mode), NOT the intrinsic dimensions, resolution, or original file size of the comic image.
@@ -533,12 +543,21 @@ If `load` function is implemented, `loadNext` function will be ignored.
             return {}
         },
         /**
-         * [Optional] provide configs for a thumbnail loading
+         * [Optional] provide configs for thumbnail and cover loading
+         *
+         * Applies to thumbnails in explore/recommendation pages, category/browse lists, search results,
+         * as well as comic detail page covers.
+         *
+         * Header Resolution & User-Agent Fallback:
+         * - Follows the same header fallback rules as `onImageLoad`: source headers take precedence,
+         *   header names are case-insensitive, and default `webUA` is only used when no `User-Agent` is specified.
+         *
+         * Supported fields:
+         * - Only network request fields (`url`, `headers`, `method`, `data`) are used.
+         * - `ImageLoadingConfig.modifyImage` and `ImageLoadingConfig.onLoadFailed` will be ignored.
+         *   They are not supported for thumbnails.
          * @param url {string}
          * @returns {ImageLoadingConfig | Promise<ImageLoadingConfig>}
-         *
-         * `ImageLoadingConfig.modifyImage` and `ImageLoadingConfig.onLoadFailed` will be ignored.
-         * They are not supported for thumbnails.
          */
         onThumbnailLoad: (url) => {
             return {}

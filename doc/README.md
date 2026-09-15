@@ -36,6 +36,7 @@
 ## 实验和任务跟踪
 
 - [图片增强实验](experiments/image_enhancement.zh.md)
+- [CopyManga 图片请求兼容性技术预研](experiments/copy_manga_compatibility.zh.md)
 
 ## 维护原则
 

@@ -418,6 +418,24 @@ function Comment({userName, avatar, content, time, replyCount, id, isLiked, scor
 ```javascript
 /**
  * Create image loading config
+ *
+ * Applicable Scopes:
+ * - `comic.onImageLoad(url, comicId, epId, target)`: Used for chapter images. Supports all fields.
+ *   When chapter loading fails, `onLoadFailed` can return a new `ImageLoadingConfig` to retry,
+ *   which follows the exact same header fallback rules.
+ * - `comic.onThumbnailLoad(url)`: Used for thumbnails and covers (explore/recommendations,
+ *   category/browse lists, search results, and comic detail covers). Only network request fields
+ *   (`url`, `headers`, `method`, `data`) are supported; `modifyImage` and `onLoadFailed` are ignored.
+ *
+ * Header Resolution & User-Agent Fallback Contract:
+ * - Source headers take precedence: Headers explicitly provided by the comic source have highest priority.
+ * - Case-insensitive header matching: HTTP header names are case-insensitive (e.g. `User-Agent`, `user-agent`).
+ *   If any casing of `User-Agent` is specified in `headers`, VeneraNext preserves the source-specified UA and will
+ *   NOT overwrite or duplicate it with the default User-Agent.
+ * - Default UA fallback: When `headers` is missing, empty, or does not include any `User-Agent`, VeneraNext falls
+ *   back to adding `user-agent: webUA`.
+ * - Parsed headers are normalized into a new mutable map. Invalid non-map headers types will throw an exception.
+ *
  * @param url {string?}
  * @param method {string?} - http method, uppercase
  * @param data {any} - request data, may be null
@@ -427,7 +445,7 @@ function Comment({userName, avatar, content, time, replyCount, id, isLiked, scor
  *  A js script string.
  *  The script will be executed in a new Isolate.
  *  A function named `modifyImage` should be defined in the script, which receives an [Image] as the only argument, and returns an [Image]..
- * @param onLoadFailed {(() => ImageLoadingConfig)?} - called when the image loading failed
+ * @param onLoadFailed {(() => ImageLoadingConfig)?} - called when the image loading failed (supported in chapter images only)
  * @constructor
  * @since 1.0.5
  *
