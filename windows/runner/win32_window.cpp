@@ -4,6 +4,7 @@
 #include <flutter_windows.h>
 
 #include "resource.h"
+#include "startup_log.h"
 
 namespace {
 
@@ -17,6 +18,16 @@ namespace {
 #endif
 
 constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
+
+std::wstring GetStartupReadyEventName(const std::wstring& title) {
+  std::wstring sanitized = title;
+  for (auto& ch : sanitized) {
+    if (ch == L'\\' || ch == L'/') {
+      ch = L'_';
+    }
+  }
+  return L"Local\\" + sanitized + L"_ReadyEvent";
+}
 
 /// Registry key for app theme preference.
 ///
@@ -100,7 +111,10 @@ const wchar_t* WindowClassRegistrar::GetWindowClass() {
     window_class.hbrBackground = 0;
     window_class.lpszMenuName = nullptr;
     window_class.lpfnWndProc = Win32Window::WndProc;
-    RegisterClass(&window_class);
+    if (!RegisterClass(&window_class)) {
+      LogWindowsStartup("Window class registration failed", GetLastError());
+      return nullptr;
+    }
     class_registered_ = true;
   }
   return kWindowClassName;
@@ -120,33 +134,82 @@ Win32Window::~Win32Window() {
   Destroy();
 }
 
-bool Win32Window::Create(const std::wstring& title,
-                         const Point& origin,
-                         const Size& size) {
+Win32Window::CreateResult Win32Window::Create(const std::wstring& title,
+                                             const Point& origin,
+                                             const Size& size) {
+  const std::wstring event_name = GetStartupReadyEventName(title);
   HWND hwnd = ::FindWindow(kWindowClassName, title.c_str());
   if (hwnd) {
-    WINDOWPLACEMENT place = { sizeof(WINDOWPLACEMENT) };
-    GetWindowPlacement(hwnd, &place);
-    SetForegroundWindow(hwnd);
-    switch (place.showCmd) {
-    case SW_SHOWMAXIMIZED:
-        ShowWindow(hwnd, SW_SHOWMAXIMIZED);
-        break;
-    case SW_SHOWMINIMIZED:
-        ShowWindow(hwnd, SW_RESTORE);
-        break;
-    default:
-        ShowWindow(hwnd, SW_NORMAL);
-        break;
+    LogWindowsStartup("Existing window found; checking readiness");
+    HANDLE ready_event = OpenEventW(SYNCHRONIZE, FALSE, event_name.c_str());
+    bool is_ready = false;
+    if (ready_event != nullptr) {
+      DWORD pid = 0;
+      GetWindowThreadProcessId(hwnd, &pid);
+      HANDLE process = nullptr;
+      if (pid != 0 && pid != GetCurrentProcessId()) {
+        process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+      }
+      if (process != nullptr) {
+        HANDLE handles[2] = {ready_event, process};
+        const DWORD wait = WaitForMultipleObjects(2, handles, FALSE,
+                                                  readiness_timeout_ms_);
+        if (wait == WAIT_OBJECT_0) {
+          is_ready = true;
+        } else if (wait == WAIT_OBJECT_0 + 1) {
+          LogWindowsStartup("Existing instance exited before becoming ready");
+        } else if (wait == WAIT_TIMEOUT) {
+          LogWindowsStartup("Existing instance readiness check timed out");
+        } else {
+          LogWindowsStartup("Wait for existing instance failed", GetLastError());
+        }
+        CloseHandle(process);
+      } else {
+        const DWORD wait =
+            WaitForSingleObject(ready_event, readiness_timeout_ms_);
+        if (wait == WAIT_OBJECT_0) {
+          is_ready = true;
+        } else if (wait == WAIT_TIMEOUT) {
+          LogWindowsStartup("Existing instance readiness check timed out");
+        } else {
+          LogWindowsStartup("Wait for existing instance failed", GetLastError());
+        }
+      }
+      CloseHandle(ready_event);
+    } else {
+      LogWindowsStartup("Existing window found but readiness event unavailable");
     }
 
-    SetWindowPos(0, HWND_TOP, 0, 0, 0, 0, SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE);
-    return false;
+    if (!is_ready) {
+      LogWindowsStartup("Existing instance not ready; startup failed");
+      return CreateResult::kFailed;
+    }
+
+    LogWindowsStartup("Existing instance found");
+    ShowWindow(hwnd, IsIconic(hwnd) ? SW_RESTORE : SW_SHOW);
+    if (!SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                      SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE)) {
+      LogWindowsStartup("Existing window activation failed", GetLastError());
+    }
+    // Windows may deny foreground focus; that does not require a second app.
+    if (!SetForegroundWindow(hwnd)) {
+      LogWindowsStartup("Foreground focus was not granted");
+    }
+    return CreateResult::kExistingInstance;
   }
   Destroy();
 
   const wchar_t* window_class =
       WindowClassRegistrar::GetInstance()->GetWindowClass();
+  if (!window_class) {
+    return CreateResult::kFailed;
+  }
+
+  ready_event_ = CreateEventW(nullptr, TRUE, FALSE, event_name.c_str());
+  if (!ready_event_) {
+    LogWindowsStartup("Failed to create startup readiness event", GetLastError());
+    return CreateResult::kFailed;
+  }
 
   const POINT target_point = {static_cast<LONG>(origin.x),
                               static_cast<LONG>(origin.y)};
@@ -161,12 +224,27 @@ bool Win32Window::Create(const std::wstring& title,
       nullptr, nullptr, GetModuleHandle(nullptr), this);
 
   if (!window) {
-    return false;
+    LogWindowsStartup("Native window creation failed", GetLastError());
+    Destroy();
+    return CreateResult::kFailed;
   }
 
+  LogWindowsStartup("Native window created");
   UpdateTheme(window);
 
-  return OnCreate();
+  if (!OnCreate()) {
+    LogWindowsStartup("Window initialization failed");
+    Destroy();
+    return CreateResult::kFailed;
+  }
+
+  if (!SetEvent(ready_event_)) {
+    LogWindowsStartup("Failed to signal startup readiness event", GetLastError());
+    Destroy();
+    return CreateResult::kFailed;
+  }
+
+  return CreateResult::kCreated;
 }
 
 bool Win32Window::Show() {
@@ -244,6 +322,11 @@ Win32Window::MessageHandler(HWND hwnd,
 void Win32Window::Destroy() {
   OnDestroy();
 
+  if (ready_event_) {
+    CloseHandle(ready_event_);
+    ready_event_ = nullptr;
+  }
+
   if (window_handle_) {
     DestroyWindow(window_handle_);
     window_handle_ = nullptr;
@@ -275,8 +358,12 @@ RECT Win32Window::GetClientArea() {
   return frame;
 }
 
-HWND Win32Window::GetHandle() {
+HWND Win32Window::GetHandle() const {
   return window_handle_;
+}
+
+void Win32Window::SetReadinessTimeoutMs(DWORD timeout_ms) {
+  readiness_timeout_ms_ = timeout_ms;
 }
 
 void Win32Window::SetQuitOnClose(bool quit_on_close) {

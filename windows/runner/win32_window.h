@@ -12,6 +12,7 @@
 // rendering and input handling
 class Win32Window {
  public:
+  enum class CreateResult { kCreated, kExistingInstance, kFailed };
   struct Point {
     unsigned int x;
     unsigned int y;
@@ -33,8 +34,10 @@ class Win32Window {
   // sizes are specified to the OS in physical pixels, hence to ensure a
   // consistent size this function will scale the inputted width and height as
   // as appropriate for the default monitor. The window is invisible until
-  // |Show| is called. Returns true if the window was created successfully.
-  bool Create(const std::wstring& title, const Point& origin, const Size& size);
+  // |Show| is called. An existing instance is activated without creating a
+  // second window; this is distinct from a failed initialization.
+  CreateResult Create(const std::wstring& title, const Point& origin,
+                      const Size& size);
 
   // Show the current window. Returns true if the window was successfully shown.
   bool Show();
@@ -47,10 +50,13 @@ class Win32Window {
 
   // Returns the backing Window handle to enable clients to set icon and other
   // window properties. Returns nullptr if the window has been destroyed.
-  HWND GetHandle();
+  HWND GetHandle() const;
 
   // If true, closing this window will quit the application.
   void SetQuitOnClose(bool quit_on_close);
+  // Configures timeout in milliseconds for waiting on an existing instance readiness.
+  void SetReadinessTimeoutMs(DWORD timeout_ms);
+
 
   // Return a RECT representing the bounds of the current client area.
   RECT GetClientArea();
@@ -97,6 +103,8 @@ class Win32Window {
 
   // window handle for hosted content.
   HWND child_content_ = nullptr;
+  HANDLE ready_event_ = nullptr;
+  DWORD readiness_timeout_ms_ = 5000;
 };
 
 #endif  // RUNNER_WIN32_WINDOW_H_
