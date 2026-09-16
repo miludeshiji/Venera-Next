@@ -521,10 +521,16 @@ Future<void> _pumpUntil(WidgetTester tester, bool Function() condition) async {
 }
 
 Future<void> _flushSettings(WidgetTester tester) async {
-  var saved = false;
-  final saving = appdata.saveData(false).then((_) => saved = true);
-  await _pumpUntil(tester, () => saved);
-  await saving;
+  var flushed = false;
+  final pending = appdata.saveData(false).whenComplete(() => flushed = true);
+  while (!flushed) {
+    await tester.pump(const Duration(milliseconds: 10));
+    await tester.runAsync(() => pumpEventQueue());
+  }
+  await pending;
+  await tester.runAsync(() async {
+    await appdata.saveData(false);
+  });
 }
 
 class _PendingRequest {
