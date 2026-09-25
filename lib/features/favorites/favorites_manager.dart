@@ -387,7 +387,6 @@ class LocalFavoritesManager with ChangeNotifier {
     await appdata.saveData();
   }
 
-
   List<String> _ensureTrackingFolder(
     List<String> folderNames, {
     required bool createIfMissing,

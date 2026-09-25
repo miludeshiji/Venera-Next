@@ -172,7 +172,9 @@ void main() {
 
       // Test with moveFavoriteAfterRead = 'end'
       final db2 = sqlite3.open('${root.path}/local_favorite.db');
-      db2.execute('UPDATE "$folder" SET has_new_update = 1 WHERE id = ?', ['2']);
+      db2.execute('UPDATE "$folder" SET has_new_update = 1 WHERE id = ?', [
+        '2',
+      ]);
       db2.dispose();
       manager.refreshUpdateIds();
       expect(manager.hasNewUpdate('2', ComicType.local), isTrue);

@@ -80,6 +80,7 @@ Future<void> _dragPage(
   await gesture.up();
   await tester.pumpAndSettle();
 }
+
 Future<void> _waitForPersistedSetting(
   WidgetTester tester,
   String settingKey,
@@ -156,6 +157,7 @@ Future<void> _reloadPages(
   await tester.pumpWidget(const SizedBox.shrink());
   await tester.pump();
 }
+
 void main() {
   testWidgets(
     'page selectors persist drag order across input and layout changes',

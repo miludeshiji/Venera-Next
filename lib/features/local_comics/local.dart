@@ -480,6 +480,7 @@ class LocalManager with ChangeNotifier {
     files.sort((a, b) => compareComicFileNames(a.name, b.name));
     return files.map((e) => "file://${e.path}").toList();
   }
+
   /// Preserve the actual saved image on the first read after the sort upgrade.
   /// Record the mapping before writing history so an interrupted migration can
   /// be resumed without interpreting an already converted page a second time.
@@ -501,7 +502,9 @@ class LocalManager with ChangeNotifier {
           final comic = find(history.id, history.type);
           if (comic != null) {
             final chapters = comic.chapters;
-            if (chapters != null && chapters.isGrouped && history.group != null) {
+            if (chapters != null &&
+                chapters.isGrouped &&
+                history.group != null) {
               for (var group = 0; group < history.group! - 1; group++) {
                 chapter += chapters.getGroupByIndex(group).length;
               }
@@ -511,7 +514,8 @@ class LocalManager with ChangeNotifier {
         }
         if (images != null) {
           final legacy = images.toList()..sort(compareLegacyComicFileNames);
-          if (page <= legacy.length) page = images.indexOf(legacy[page - 1]) + 1;
+          if (page <= legacy.length)
+            page = images.indexOf(legacy[page - 1]) + 1;
         }
       }
       _db.execute('INSERT INTO natural_sort_migration VALUES (?, ?, ?, ?, ?)', [
@@ -533,7 +537,6 @@ class LocalManager with ChangeNotifier {
       HistoryManager().addHistory(history);
     }
   }
-
 
   bool isDownloaded(
     String id,

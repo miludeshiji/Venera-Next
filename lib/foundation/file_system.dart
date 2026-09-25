@@ -42,6 +42,7 @@ Future<Uint8List> readFileBytesChecked(
     }
   }
 }
+
 class FilePath {
   const FilePath._();
 

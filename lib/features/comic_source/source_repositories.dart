@@ -210,10 +210,7 @@ class SourceRepositories extends ChangeNotifier {
       if (ownsClient) dio.close();
     }
     if (response.statusCode != 200) throw 'Unable to load repository.'.tl;
-    return parseCatalog(
-      response.data!,
-      baseUrl: response.realUri.toString(),
-    );
+    return parseCatalog(response.data!, baseUrl: response.realUri.toString());
   }
 
   static SourceCatalog parseCatalog(String contents, {String? baseUrl}) {
