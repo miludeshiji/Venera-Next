@@ -53,26 +53,30 @@ void main() {
     skip: sqliteAvailable ? false : 'sqlite3 native library is unavailable',
   );
 
-  test('withDatabase opens, executes, and disposes', () async {
-    final dir = Directory.systemTemp.createTempSync('venera-sqlite-withdb-');
-    addTearDown(() {
-      if (dir.existsSync()) {
-        dir.deleteSync(recursive: true);
-      }
-    });
+  test(
+    'withDatabase opens, executes, and disposes',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('venera-sqlite-withdb-');
+      addTearDown(() {
+        if (dir.existsSync()) {
+          dir.deleteSync(recursive: true);
+        }
+      });
 
-    final dbPath = '${dir.path}/test.db';
-    _initializeDatabase(dbPath);
+      final dbPath = '${dir.path}/test.db';
+      _initializeDatabase(dbPath);
 
-    final count = await withDatabase<int>(dbPath, (db) async {
-      final res = db
-          .select('SELECT count(*) AS count FROM items;')
-          .first['count'];
-      return res as int;
-    });
+      final count = await withDatabase<int>(dbPath, (db) async {
+        final res = db
+            .select('SELECT count(*) AS count FROM items;')
+            .first['count'];
+        return res as int;
+      });
 
-    expect(count, 1);
-  }, skip: sqliteAvailable ? false : 'sqlite3 native library is unavailable');
+      expect(count, 1);
+    },
+    skip: sqliteAvailable ? false : 'sqlite3 native library is unavailable',
+  );
 
   test(
     'plain sqlite3 connections hit a read-then-write lock on the same file',

@@ -36,34 +36,36 @@ void main() {
         .setMockMethodCallHandler(SystemChannels.platform, null);
   });
 
-  testWidgets('automatic reader orientation defers to the operating system', (
-    tester,
-  ) async {
-    await _openReader(tester);
-    expect(find.text('system'), findsOneWidget);
-    expect(orientationRequests, [<String>[]]);
+  testWidgets(
+    'automatic reader orientation defers to the operating system',
+    (tester) async {
+      await _openReader(tester);
+      expect(find.text('system'), findsOneWidget);
+      expect(orientationRequests, [<String>[]]);
 
-    await tester.tap(find.text('Rotate'));
-    await tester.pump();
-    expect(find.text('portrait'), findsOneWidget);
+      await tester.tap(find.text('Rotate'));
+      await tester.pump();
+      expect(find.text('portrait'), findsOneWidget);
 
-    await tester.tap(find.text('Rotate'));
-    await tester.pump();
-    expect(find.text('landscape'), findsOneWidget);
+      await tester.tap(find.text('Rotate'));
+      await tester.pump();
+      expect(find.text('landscape'), findsOneWidget);
 
-    await tester.tap(find.text('Rotate'));
-    await tester.pump();
-    expect(find.text('system'), findsOneWidget);
-    expect(orientationRequests, [
-      <String>[],
-      _portrait,
-      _landscape,
-      <String>[],
-    ]);
+      await tester.tap(find.text('Rotate'));
+      await tester.pump();
+      expect(find.text('system'), findsOneWidget);
+      expect(orientationRequests, [
+        <String>[],
+        _portrait,
+        _landscape,
+        <String>[],
+      ]);
 
-    await tester.pumpWidget(const SizedBox());
-    expect(orientationRequests.last, isEmpty);
-  }, variant: android);
+      await tester.pumpWidget(const SizedBox());
+      expect(orientationRequests.last, isEmpty);
+    },
+    variant: android,
+  );
 
   for (final turns in [1, 2]) {
     for (final systemBack in [false, true]) {
@@ -186,51 +188,55 @@ void main() {
     expect(tester.takeException(), isNull);
   }, variant: android);
 
-  testWidgets('returning to an existing reader restores its temporary lock', (
-    tester,
-  ) async {
-    await _openReader(tester);
-    await tester.tap(find.text('Rotate'));
-    await tester.pump();
-    expect(orientationRequests.last, _portrait);
-
-    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
-    unawaited(
-      navigator.push(
-        MaterialPageRoute<void>(builder: (_) => const _TestReader()),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(orientationRequests.last, isEmpty);
-    for (var i = 0; i < 2; i++) {
-      await tester.tap(find.text('Rotate'));
-      await tester.pump();
-    }
-    expect(orientationRequests.last, _landscape);
-
-    await tester.tap(find.byType(BackButton));
-    await tester.pumpAndSettle();
-    expect(find.text('portrait'), findsOneWidget);
-    expect(orientationRequests.last, _portrait);
-
-    await tester.tap(find.byType(BackButton));
-    await tester.pumpAndSettle();
-    expect(find.text('Open reader'), findsOneWidget);
-    expect(orientationRequests.last, isEmpty);
-    await tester.pumpWidget(const SizedBox());
-  }, variant: android);
-
-  for (final platform in [TargetPlatform.iOS, TargetPlatform.windows]) {
-    testWidgets('does not request reader orientation on ${platform.name}', (
-      tester,
-    ) async {
+  testWidgets(
+    'returning to an existing reader restores its temporary lock',
+    (tester) async {
       await _openReader(tester);
       await tester.tap(find.text('Rotate'));
       await tester.pump();
-      expect(find.text('system'), findsOneWidget);
+      expect(orientationRequests.last, _portrait);
+
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      unawaited(
+        navigator.push(
+          MaterialPageRoute<void>(builder: (_) => const _TestReader()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(orientationRequests.last, isEmpty);
+      for (var i = 0; i < 2; i++) {
+        await tester.tap(find.text('Rotate'));
+        await tester.pump();
+      }
+      expect(orientationRequests.last, _landscape);
+
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+      expect(find.text('portrait'), findsOneWidget);
+      expect(orientationRequests.last, _portrait);
+
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+      expect(find.text('Open reader'), findsOneWidget);
+      expect(orientationRequests.last, isEmpty);
       await tester.pumpWidget(const SizedBox());
-      expect(orientationRequests, isEmpty);
-    }, variant: TargetPlatformVariant.only(platform));
+    },
+    variant: android,
+  );
+
+  for (final platform in [TargetPlatform.iOS, TargetPlatform.windows]) {
+    testWidgets(
+      'does not request reader orientation on ${platform.name}',
+      (tester) async {
+        await _openReader(tester);
+        await tester.tap(find.text('Rotate'));
+        await tester.pump();
+        expect(find.text('system'), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+        expect(orientationRequests, isEmpty);
+      },
+      variant: TargetPlatformVariant.only(platform),
+    );
   }
 }
 
