@@ -22,6 +22,24 @@ void main() {
 
       expect(names, ['01.jpg', '1.jpg', '2.jpg', '10.jpg', 'page.jpg']);
     });
+    test('naturally sorts prefixed and multi-part page numbers', () {
+      final pages = ['图片_10.jpg', '图片_2.jpg', '图片_1.jpg']
+        ..sort(compareComicFileNames);
+      expect(pages, ['图片_1.jpg', '图片_2.jpg', '图片_10.jpg']);
+      final chapters = ['vol10_p2', 'vol2_p10', 'vol2_p2']
+        ..sort(compareComicFileNames);
+      expect(chapters, ['vol2_p2', 'vol2_p10', 'vol10_p2']);
+      final numbers = [
+        'page_10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.jpg',
+        'page_2.jpg',
+        'page_10.jpg',
+      ]..sort(compareComicFileNames);
+      expect(numbers, [
+        'page_2.jpg',
+        'page_10.jpg',
+        'page_10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.jpg',
+      ]);
+    });
 
     test('filters non-images and optionally excludes named covers', () {
       final entries = ['2.jpg', 'metadata.json', 'cover.png', '1.JPG'];

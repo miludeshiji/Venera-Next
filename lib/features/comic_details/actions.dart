@@ -127,6 +127,17 @@ abstract mixin class ComicPageActions {
       message: "Added to @folder".tlParams({"folder": folder}),
     );
   }
+  Widget buildReadLaterAction() => ReadLaterButton(
+    comic: _toFavoriteItem(),
+    onChanged: () {
+      isAddToLocalFav = LocalFavoritesManager().isExist(
+        comic.id,
+        comic.comicType,
+      );
+      update();
+    },
+  );
+
 
   void share() {
     var text = comic.title;

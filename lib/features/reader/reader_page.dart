@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:venera_next/features/reader/auto_reading.dart';
 
 import 'package:venera_next/foundation/file_system.dart';
 import 'package:venera_next/network/images.dart';
@@ -79,6 +80,12 @@ class ReaderState extends State<Reader>
         ReaderVolumeListener,
         ReaderImagePerPageHandler,
         WidgetsBindingObserver {
+  late final AutoReadingController autoReadingController;
+  @override
+  AutoReadingController get autoReading => autoReadingController;
+
+  dynamic readerSetting(String key) =>
+      appdata.settings.getReaderSetting(cid, type.sourceKey, key);
   @override
   void update() {
     setState(() {});
@@ -149,6 +156,7 @@ class ReaderState extends State<Reader>
       MediaQuery.of(context).orientation == Orientation.portrait;
 
   History? history;
+  bool localPageOrderChecked = false;
 
   late final ReadingSessionTracker _readingSession;
   final _chapterCompletionNotifier = ReaderChapterCompletionNotifier();
@@ -164,6 +172,31 @@ class ReaderState extends State<Reader>
   void initState() {
     mode = ReaderMode.fromKey(
       appdata.settings.getReaderSetting(cid, type.sourceKey, 'readerMode'),
+    );
+    autoReadingController = AutoReadingController(
+      settings: () => AutoReadingSettings(
+        gallery: mode.isGallery,
+        pageInterval: (appdata.settings.getReaderSetting(
+          cid,
+          type.sourceKey,
+          'autoPageTurningInterval',
+        ) as num).toDouble(),
+      ),
+      canAdvance: () =>
+          _readerContentReady &&
+          !isLoading &&
+          !isPageAnimating &&
+          imageViewController?.isCurrentSourceSizeResolved() == true,
+      advance: (_) {
+        final controller = imageViewController;
+        if (controller == null || isLoading) return AutoReadingStep.waiting;
+        if (toNextPage()) return AutoReadingStep.advanced;
+        if (!controller.isAtLastVisualPartOfSource()) {
+          return AutoReadingStep.waiting;
+        }
+        if (toNextChapter()) return AutoReadingStep.advanced;
+        return AutoReadingStep.finished;
+      },
     );
     pageValue = normalizeReaderInitialPage(widget.initialPage);
     chapter = widget.initialChapter ?? 1;
@@ -260,6 +293,7 @@ class ReaderState extends State<Reader>
     PaintingBinding.instance.imageCache.maximumSizeBytes = maxImageCacheSize;
   }
 
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -267,6 +301,7 @@ class ReaderState extends State<Reader>
       fullscreen();
     }
     autoPageTurningTimer?.cancel();
+    autoReadingController.dispose();
     _flushPendingHistoryUpdate();
     unawaited(_remoteProgressTracker?.dispose());
     unawaited(
@@ -331,20 +366,14 @@ class ReaderState extends State<Reader>
       focusNode: focusNode,
       autofocus: true,
       onKeyEvent: onKeyEvent,
-      child: Overlay(
-        initialEntries: [
-          OverlayEntry(
-            builder: (context) {
-              return ReaderScaffold(
-                child: ReaderGestureDetector(
-                  child: ReaderImages(
-                    key: Key(mode.isWaterfall ? mode.key : chapter.toString()),
-                  ),
-                ),
-              );
-            },
+      child: Overlay.wrap(
+        child: ReaderScaffold(
+          child: ReaderGestureDetector(
+            child: ReaderImages(
+              key: Key(mode.isWaterfall ? mode.key : chapter.toString()),
+            ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -379,6 +408,7 @@ class ReaderState extends State<Reader>
   }
 
   Future<void> _notifyChapterCompletedIfNeeded() async {
+    if (!mounted) return;
     final chapters = widget.chapters;
     if (chapters == null) return;
     final lifecycleState = WidgetsBinding.instance.lifecycleState;
@@ -438,6 +468,9 @@ class ReaderState extends State<Reader>
   }
 
   void updateHistory() {
+    // Initial layout and orientation can update the viewport before images
+    // arrive. Keep the saved image index intact until loading/migration ends.
+    if (isLoading || images == null) return;
     if (history != null) {
       // page >= maxPage handles both last image page and chapter comments page
       if (page >= maxPage) {
@@ -896,23 +929,9 @@ abstract mixin class ReaderLocation {
   Timer? autoPageTurningTimer;
 
   void autoPageTurning(String cid, ComicType type) {
-    if (autoPageTurningTimer != null) {
-      autoPageTurningTimer!.cancel();
-      autoPageTurningTimer = null;
-    } else {
-      int interval = appdata.settings.getReaderSetting(
-        cid,
-        type.sourceKey,
-        'autoPageTurningInterval',
-      );
-      autoPageTurningTimer = Timer.periodic(Duration(seconds: interval), (_) {
-        if (!toNextPage()) {
-          autoPageTurningTimer?.cancel();
-          autoPageTurningTimer = null;
-          update();
-        }
-      });
-    }
+    final reader = this as ReaderState;
+    reader.autoReading.toggle();
+    update();
   }
 }
 

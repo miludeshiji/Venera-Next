@@ -1,4 +1,5 @@
 import 'dart:async' show Completer, Future, StreamController, scheduleMicrotask;
+import 'dart:io' show FileSystemException;
 import 'dart:convert';
 import 'dart:math';
 import 'dart:ui' as ui show Codec;
@@ -102,13 +103,28 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
       BaseImageProvider._cancelSignals[checkStop] = stopCompleter.future;
 
       Uint8List? data;
+      var emptyRetries = 0;
 
       while (data == null && !stop) {
         try {
-          data = await load(chunkEvents, checkStop);
+          final loaded = await load(chunkEvents, checkStop);
+          if (loaded.isEmpty) {
+            if (emptyRetries++ >= 2) throw const _EmptyImageDataException();
+            await _waitForRetryDelay(
+              Duration(milliseconds: 150 * emptyRetries),
+              stopCompleter.future,
+            );
+            continue;
+          }
+          data = loaded;
         } on _ImageLoadingStopException {
           rethrow;
+        } on _EmptyImageDataException {
+          rethrow;
         } catch (e) {
+          // Local IO already has bounded retries. Network cache failures keep
+          // the existing retry policy.
+          if (e is FileSystemException && !retryFileSystemErrors) rethrow;
           if (e.toString().contains("Invalid Status Code: 404")) {
             rethrow;
           }
@@ -135,24 +151,22 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
         throw const _ImageLoadingStopException();
       }
 
-      if (data!.isEmpty) {
-        throw Exception("Empty image data");
-      }
+      final bytes = data!;
 
       try {
-        final buffer = await ImmutableBuffer.fromUint8List(data);
+        final buffer = await ImmutableBuffer.fromUint8List(bytes);
         return await decode(
           buffer,
           getTargetSize: enableResize ? _getTargetSize : null,
         );
       } catch (e) {
         await CacheManager().delete(diskCacheKey);
-        if (data.length < 2 * 1024) {
+        if (bytes.length < 2 * 1024) {
           // data is too short, it's likely that the data is text, not image
           try {
             var text = const Utf8Codec(
               allowMalformed: false,
-            ).decoder.convert(data);
+            ).decoder.convert(bytes);
             throw Exception("Expected image data, but got text: $text");
           } catch (e) {
             // ignore
@@ -198,10 +212,19 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
   }
 
   bool get enableResize => false;
+
+  bool get retryFileSystemErrors => true;
 }
 
 typedef FileDecoderCallback = Future<ui.Codec> Function(Uint8List);
 
 class _ImageLoadingStopException implements Exception {
   const _ImageLoadingStopException();
+}
+
+class _EmptyImageDataException implements Exception {
+  const _EmptyImageDataException();
+
+  @override
+  String toString() => 'Empty image data after 3 attempts';
 }
