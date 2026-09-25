@@ -323,44 +323,52 @@ LoadingDialogController showLoadingDialog(
     context: context,
     barrierDismissible: barrierDismissible,
     builder: (BuildContext context) {
-      return StatefulBuilder(
-        builder: (context, setState) {
-          controller._serProgress = (value) {
-            setState(() {
-              controller._progress = value;
-            });
-          };
-          controller._setMessage = (message) {
-            setState(() {
-              controller._message = message;
-            });
-          };
-          return ContentDialog(
-            title: controller._message ?? 'Loading'.tl,
-            content: LinearProgressIndicator(
-              value: controller._progress,
-              backgroundColor: context.colorScheme.surfaceContainer,
-            ).paddingHorizontal(16).paddingVertical(16),
-            actions: [
-              FilledButton(
-                onPressed: allowCancel
-                    ? () {
-                        controller.close();
-                        onCancel?.call();
-                      }
-                    : null,
-                child: Text(cancelButtonText.tl),
-              ),
-            ],
-          );
-        },
+      return PopScope(
+        canPop: barrierDismissible,
+        child: StatefulBuilder(
+          builder: (context, setState) {
+            controller._serProgress = (value) {
+              setState(() {
+                controller._progress = value;
+              });
+            };
+            controller._setMessage = (message) {
+              setState(() {
+                controller._message = message;
+              });
+            };
+            return ContentDialog(
+              title: controller._message ?? 'Loading'.tl,
+              content: LinearProgressIndicator(
+                value: controller._progress,
+                backgroundColor: context.colorScheme.surfaceContainer,
+              ).paddingHorizontal(16).paddingVertical(16),
+              actions: [
+                FilledButton(
+                  onPressed: allowCancel
+                      ? () {
+                          controller.close();
+                          onCancel?.call();
+                        }
+                      : null,
+                  child: Text(cancelButtonText.tl),
+                ),
+              ],
+            );
+          },
+        ),
       );
     },
   );
 
   var navigator = Navigator.of(context, rootNavigator: true);
 
-  navigator.push(loadingDialogRoute).then((value) => controller.closed = true);
+  navigator.push(loadingDialogRoute).then((value) {
+    final wasClosed = controller.closed;
+    controller.closed = true;
+    // Back and barrier dismissal must cancel the work just like the button.
+    if (!wasClosed) onCancel?.call();
+  });
 
   controller._closeDialog = () {
     navigator.removeRoute(loadingDialogRoute);

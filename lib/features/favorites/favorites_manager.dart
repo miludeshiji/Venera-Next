@@ -344,6 +344,49 @@ class LocalFavoritesManager with ChangeNotifier {
   }
 
   static const String trackingFolderName = "追更";
+  String? get readLaterFolder {
+    final folder = appdata.settings['readLaterFolder'];
+    return folder is String && existsFolder(folder) ? folder : null;
+  }
+
+  bool isInReadLater(String id, ComicType type) {
+    final folder = readLaterFolder;
+    return folder != null && comicExists(folder, id, type);
+  }
+
+  List<FavoriteItem> getReadLaterComics({int? limit}) {
+    final folder = readLaterFolder;
+    if (folder == null) return [];
+    final rows = _db.select(
+      'SELECT * FROM "$folder" ORDER BY display_order${limit == null ? '' : ' LIMIT ?'}',
+      limit == null ? [] : [limit],
+    );
+    return rows.map(FavoriteItem.fromRow).toList();
+  }
+
+  Future<void> setReadLater(
+    FavoriteItem comic, {
+    required bool included,
+    required String folderName,
+  }) async {
+    var folder = readLaterFolder;
+    if (included) {
+      if (folder == null) {
+        folder = folderName;
+        var suffix = 2;
+        while (existsFolder(folder!)) {
+          folder = '$folderName (${suffix++})';
+        }
+        createFolder(folder);
+        appdata.settings['readLaterFolder'] = folder;
+      }
+      addComic(folder, comic, minValue(folder) - 1);
+    } else if (folder != null && comicExists(folder, comic.id, comic.type)) {
+      deleteComicWithId(folder, comic.id, comic.type);
+    }
+    await appdata.saveData();
+  }
+
 
   List<String> _ensureTrackingFolder(
     List<String> folderNames, {
@@ -1020,6 +1063,12 @@ class LocalFavoritesManager with ChangeNotifier {
       [name],
     );
     counts.remove(name);
+    for (final key in ['readLaterFolder', 'quickFavorite']) {
+      if (appdata.settings[key] == name) {
+        appdata.settings[key] = null;
+        appdata.saveData();
+      }
+    }
     refreshHashedIds();
     if (wasFollowUpdatesFolder) {
       appdata.settings['followUpdatesFolder'] = null;
@@ -1196,6 +1245,12 @@ class LocalFavoritesManager with ChangeNotifier {
     );
     counts[after] = counts[before] ?? 0;
     counts.remove(before);
+    for (final key in ['readLaterFolder', 'quickFavorite']) {
+      if (appdata.settings[key] == before) {
+        appdata.settings[key] = after;
+        appdata.saveData();
+      }
+    }
     if (wasFollowUpdatesFolder) {
       appdata.settings['followUpdatesFolder'] = after;
       refreshUpdateIds();
@@ -1225,22 +1280,24 @@ class LocalFavoritesManager with ChangeNotifier {
             .replaceFirst("T", " ")
             .substring(0, 19);
         String updateLocationSql = "";
-        if (appdata.settings['moveFavoriteAfterRead'] == "end") {
-          int maxValue =
-              _db.select("""
-            SELECT MAX(display_order) AS max_value
-            FROM "$folder";
-          """).firstOrNull?["max_value"] ??
-              0;
-          updateLocationSql = "display_order = ${maxValue + 1},";
-        } else if (appdata.settings['moveFavoriteAfterRead'] == "start") {
-          int minValue =
-              _db.select("""
-            SELECT MIN(display_order) AS min_value
-            FROM "$folder";
-          """).firstOrNull?["min_value"] ??
-              0;
-          updateLocationSql = "display_order = ${minValue - 1},";
+        if (folder != readLaterFolder) {
+          if (appdata.settings['moveFavoriteAfterRead'] == "end") {
+            int maxValue =
+                _db.select("""
+              SELECT MAX(display_order) AS max_value
+              FROM "$folder";
+            """).firstOrNull?["max_value"] ??
+                0;
+            updateLocationSql = "display_order = ${maxValue + 1},";
+          } else if (appdata.settings['moveFavoriteAfterRead'] == "start") {
+            int minValue =
+                _db.select("""
+              SELECT MIN(display_order) AS min_value
+              FROM "$folder";
+            """).firstOrNull?["min_value"] ??
+                0;
+            updateLocationSql = "display_order = ${minValue - 1},";
+          }
         }
         _db.execute(
           """

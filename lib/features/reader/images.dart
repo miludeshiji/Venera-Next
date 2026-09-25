@@ -13,6 +13,7 @@ import 'package:venera_next/components/gesture.dart';
 import 'package:venera_next/components/loading.dart';
 import 'package:venera_next/features/comic_source/comic_source.dart';
 import 'package:venera_next/features/local_comics/local_comics.dart';
+import 'package:venera_next/features/webdav_library/webdav_library.dart';
 import 'package:venera_next/features/reader/chapter_comments.dart';
 import 'package:venera_next/features/reader/comic_image.dart';
 import 'package:venera_next/features/reader/gallery_page_plan.dart';
@@ -75,19 +76,39 @@ class ReaderImagesState extends State<ReaderImages> {
   void load() async {
     if (inProgress) return;
     inProgress = true;
-    if (reader.type == ComicType.local ||
+    final isLocalOrDownloaded = reader.type == ComicType.local ||
         (LocalManager().isDownloaded(
           reader.cid,
           reader.type,
           reader.chapter,
           reader.widget.chapters,
-        ))) {
+        ));
+    if (isLocalOrDownloaded) {
       try {
+        if (!reader.localPageOrderChecked) {
+          final history = reader.history;
+          if (history != null) {
+            final previousPage = history.page;
+            await LocalManager().migrateLegacyPageOrder(history);
+            if (!mounted) return;
+            if ((reader.widget.initialChapter ?? 1) == history.ep &&
+                reader.widget.initialPage == previousPage) {
+              final imagePage = history.page;
+              reader.pageValue = reader.imagesPerPage == 1
+                  ? imagePage
+                  : reader.showSingleImageOnFirstPage()
+                  ? ((imagePage - 1) / reader.imagesPerPage).ceil() + 1
+                  : (imagePage / reader.imagesPerPage).ceil();
+            }
+          }
+          reader.localPageOrderChecked = true;
+        }
         var images = await LocalManager().getImages(
           reader.cid,
           reader.type,
           reader.chapter,
         );
+        if (!mounted) return;
         setState(() {
           reader.images = images;
           reader.isLoading = false;
@@ -118,6 +139,25 @@ class ReaderImagesState extends State<ReaderImages> {
           inProgress = false;
         });
       } else {
+        if (!reader.localPageOrderChecked &&
+            reader.type == ComicType.fromKey(WebDavLibrarySource.sourceKey)) {
+          final history = reader.history;
+          if (history != null) {
+            final previousPage = history.page;
+            await LocalManager().migrateLegacyPageOrder(history, res.data);
+            if (!mounted) return;
+            if ((reader.widget.initialChapter ?? 1) == history.ep &&
+                reader.widget.initialPage == previousPage) {
+              final imagePage = history.page;
+              reader.pageValue = reader.imagesPerPage == 1
+                  ? imagePage
+                  : reader.showSingleImageOnFirstPage()
+                  ? ((imagePage - 1) / reader.imagesPerPage).ceil() + 1
+                  : (imagePage / reader.imagesPerPage).ceil();
+            }
+          }
+          reader.localPageOrderChecked = true;
+        }
         setState(() {
           reader.images = res.data;
           reader.isLoading = false;

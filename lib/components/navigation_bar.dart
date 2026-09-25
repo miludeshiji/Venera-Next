@@ -8,6 +8,7 @@ import 'package:venera_next/foundation/app_page_route.dart';
 import 'package:venera_next/foundation/consts.dart';
 import 'package:venera_next/foundation/context.dart';
 import 'package:venera_next/foundation/widget_utils.dart';
+import 'package:venera_next/foundation/edge_back_gesture.dart';
 
 import 'consts.dart';
 import 'gesture.dart';
@@ -195,13 +196,12 @@ class NaviPaneState extends State<NaviPane>
         : EdgeInsets.zero;
     return _NaviPopScope(
       action: () {
-        if (App.mainNavigatorKey!.currentState!.canPop()) {
-          App.mainNavigatorKey!.currentState!.maybePop();
-        } else {
-          SystemNavigator.pop();
+        final nav = App.mainNavigatorKey?.currentState;
+        if (nav != null && nav.canPop()) {
+          nav.maybePop();
         }
       },
-      popGesture: App.isIOS && context.width >= changePoint,
+      popGesture: App.isIOS && !App.isDesktop && context.width >= changePoint,
       child: AnimatedBuilder(
         animation: controller,
         builder: (context, child) {
@@ -629,7 +629,7 @@ class NaviObserver extends NavigatorObserver implements Listenable {
   }
 }
 
-class _NaviPopScope extends StatelessWidget {
+class _NaviPopScope extends StatefulWidget {
   const _NaviPopScope({
     required this.child,
     this.popGesture = false,
@@ -640,31 +640,62 @@ class _NaviPopScope extends StatelessWidget {
   final bool popGesture;
   final VoidCallback action;
 
-  static bool panStartAtEdge = false;
+  @override
+  State<_NaviPopScope> createState() => _NaviPopScopeState();
+}
+
+class _NaviPopScopeState extends State<_NaviPopScope> {
+  double _progress = 0;
+  bool _userGestureStarted = false;
+
+  bool _isGestureEnabled() {
+    if (!widget.popGesture) return false;
+    if (App.isDesktop) return false;
+    final nav = App.mainNavigatorKey?.currentState;
+    if (nav == null || !nav.canPop() || nav.userGestureInProgress) {
+      return false;
+    }
+    return true;
+  }
 
   @override
   Widget build(BuildContext context) {
-    Widget res = child;
-    if (popGesture) {
-      res = GestureDetector(
-        onPanStart: (details) {
-          if (details.globalPosition.dx < 64) {
-            panStartAtEdge = true;
+    return EdgeBackGestureDetector(
+      enabled: _isGestureEnabled,
+      onStart: () {
+        _progress = 0;
+        final nav = App.mainNavigatorKey?.currentState;
+        if (nav != null && !nav.userGestureInProgress) {
+          nav.didStartUserGesture();
+          _userGestureStarted = true;
+        }
+      },
+      onUpdate: (delta) => _progress = (_progress + delta).clamp(0, 1),
+      onEnd: (velocity) {
+        final shouldPop = velocity.abs() >= 1
+            ? velocity > 0 && _progress >= 0.1
+            : _progress >= 0.5;
+        _progress = 0;
+        if (_userGestureStarted) {
+          _userGestureStarted = false;
+          App.mainNavigatorKey?.currentState?.didStopUserGesture();
+        }
+        if (shouldPop) {
+          final nav = App.mainNavigatorKey?.currentState;
+          if (nav != null && nav.canPop()) {
+            widget.action();
           }
-        },
-        onPanEnd: (details) {
-          if (details.velocity.pixelsPerSecond.dx < 0 ||
-              details.velocity.pixelsPerSecond.dx > 0) {
-            if (panStartAtEdge) {
-              action();
-            }
-          }
-          panStartAtEdge = false;
-        },
-        child: res,
-      );
-    }
-    return res;
+        }
+      },
+      onCancel: () {
+        _progress = 0;
+        if (_userGestureStarted) {
+          _userGestureStarted = false;
+          App.mainNavigatorKey?.currentState?.didStopUserGesture();
+        }
+      },
+      child: widget.child,
+    );
   }
 }
 
