@@ -14,6 +14,7 @@ import 'package:venera_next/components/loading.dart';
 import 'package:venera_next/features/comic_source/comic_source.dart';
 import 'package:venera_next/features/local_comics/local_comics.dart';
 import 'package:venera_next/features/webdav_library/webdav_library.dart';
+import 'package:venera_next/features/reader/auto_reading.dart';
 import 'package:venera_next/features/reader/chapter_comments.dart';
 import 'package:venera_next/features/reader/comic_image.dart';
 import 'package:venera_next/features/reader/gallery_page_plan.dart';
@@ -171,7 +172,12 @@ class ReaderImagesState extends State<ReaderImages> {
         });
       }
     }
-    context.readerScaffold.update();
+    if (mounted) {
+      if (error != null || reader.images?.isEmpty == true) {
+        reader.autoReading.stop();
+      }
+      context.readerScaffold.update();
+    }
   }
 
   @override
@@ -267,7 +273,7 @@ class GalleryMode extends StatefulWidget {
 typedef _GalleryMode = GalleryMode;
 
 class GalleryModeState extends State<_GalleryMode>
-    implements ReaderImageViewController {
+    implements ReaderImageViewController, AutoReadingViewport {
   late PageController controller;
 
   int get preCacheCount => appdata.settings["preloadImageCount"];
@@ -330,6 +336,57 @@ class GalleryModeState extends State<_GalleryMode>
     if (displayPage == null) return false;
     return _resolvedSourceIndices.contains(displayPage.sourceIndex);
   }
+
+  @override
+  bool get autoReadingReady {
+    if (!controller.hasClients ||
+        fingers > 0 ||
+        isLongPressing ||
+        _isAnimatingVisualPage ||
+        reader.isPageAnimating ||
+        controller.position.isScrollingNotifier.value) {
+      return false;
+    }
+    if (reader.images == null || reader.images!.isEmpty) {
+      return false;
+    }
+    final currentIndex = controller.page?.round() ?? _currentControllerIndex;
+    if (reader.isOnChapterCommentsPage || isChapterCommentsPage(currentIndex)) {
+      return true;
+    }
+    if (currentIndex < 1 || currentIndex > totalVisualPages) {
+      return false;
+    }
+    if (isSplitEnabled) {
+      if (_pagePlan == null || !isCurrentSourceSizeResolved()) {
+        return false;
+      }
+    }
+    final key = _controllerKeyForIndex(currentIndex);
+    final photo = _pool[key];
+    final initialScale = photo?.getInitialScale?.call();
+    // PhotoView installs this callback only after its image is decoded.
+    if (initialScale == null ||
+        ((photo?.scale ?? initialScale) - initialScale).abs() > 0.01) {
+      return false;
+    }
+    if (!isSplitEnabled) {
+      final (start, end) = getPageImagesRange(currentIndex);
+      if (end - start == 1) {
+        return true;
+      }
+    }
+    final visible = imageStates
+        .whereType<ComicImageState>()
+        .where((image) => image.visibleInReader)
+        .toList();
+    return visible.isNotEmpty &&
+        visible.every((image) => image.readyForAutoReading);
+  }
+
+  @override
+  AutoReadingStep autoScroll(double distance, {required bool acrossChapters}) =>
+      AutoReadingStep.finished;
 
   bool get isSplitEnabled => reader.imagesPerPage == 1 && _splitDualPage;
 
@@ -1131,9 +1188,10 @@ class GalleryModeState extends State<_GalleryMode>
 
   @override
   void handleLongPressDown(Offset location) {
-    if (!appdata.settings['enableLongPressToZoom'] || fingers != 1) {
+    if (fingers != 1) {
       return;
     }
+    isLongPressing = true;
     final currentIndex = controller.hasClients && controller.page != null
         ? controller.page!.round()
         : _currentControllerIndex;
@@ -1143,21 +1201,20 @@ class GalleryModeState extends State<_GalleryMode>
     double target = (photoViewController.getInitialScale?.call() ?? 1.0) * 1.75;
     var size = reader.size;
     Offset zoomPosition;
-    if (appdata.settings['longPressZoomPosition'] != 'center') {
+    if (reader.readerSetting('longPressZoomPosition') != 'center') {
       zoomPosition = Offset(
         size.width / 2 - location.dx,
         size.height / 2 - location.dy,
       );
     } else {
-      zoomPosition = Offset(0, 0);
+      zoomPosition = Offset.zero;
     }
     photoViewController.animateScale?.call(target, zoomPosition);
-    isLongPressing = true;
   }
 
   @override
   void handleLongPressUp(Offset location) {
-    if (!appdata.settings['enableLongPressToZoom'] || !isLongPressing) {
+    if (!isLongPressing) {
       return;
     }
     final currentIndex = controller.hasClients && controller.page != null
@@ -1366,7 +1423,7 @@ class _ContinuousMode extends StatefulWidget {
 }
 
 class ContinuousModeState extends State<_ContinuousMode>
-    implements ReaderImageViewController {
+    implements ReaderImageViewController, AutoReadingViewport {
   late ReaderState reader;
 
   var itemScrollController = ItemScrollController();
@@ -1494,7 +1551,9 @@ class ContinuousModeState extends State<_ContinuousMode>
   }
 
   Future<void> _ensureWaterfallImagesAfter(int current) async {
-    if (!crossChapter || _isLoadingNextSegment) return;
+    if (!crossChapter || _isLoadingNextSegment || _nextSegmentError != null) {
+      return;
+    }
     var threshold = math.max(preCacheCount, 1);
     if (_flowImageCount - current >= threshold) return;
     var nextChapter =
@@ -2221,13 +2280,13 @@ class ContinuousModeState extends State<_ContinuousMode>
 
   @override
   void handleLongPressDown(Offset location) {
-    if (!appdata.settings['enableLongPressToZoom'] || delayedIsScrolling) {
+    if (delayedIsScrolling) {
       return;
     }
     double target = photoViewController.getInitialScale!.call()! * 1.75;
     var size = reader.size;
     Offset zoomPosition;
-    if (appdata.settings['longPressZoomPosition'] != 'center') {
+    if (reader.readerSetting('longPressZoomPosition') != 'center') {
       zoomPosition = Offset(
         size.width / 2 - location.dx,
         size.height / 2 - location.dy,
@@ -2242,7 +2301,7 @@ class ContinuousModeState extends State<_ContinuousMode>
 
   @override
   void handleLongPressUp(Offset location) {
-    if (!appdata.settings['enableLongPressToZoom']) {
+    if (!isLongPressing) {
       return;
     }
     double target = photoViewController.getInitialScale!.call()!;
@@ -2282,6 +2341,69 @@ class ContinuousModeState extends State<_ContinuousMode>
 
   @override
   bool isReadyForChapter(int chapter) => mounted;
+
+  @override
+  bool get autoReadingReady {
+    final controller = _scrollController;
+    if (controller == null ||
+        !controller.hasClients ||
+        isZoomedIn ||
+        fingers > 0 ||
+        _isRestoringPrependedSegmentPosition ||
+        _isNavigatingWaterfallLocation ||
+        controller.position.isScrollingNotifier.value) {
+      return false;
+    }
+    final visible = imageStates
+        .whereType<ComicImageState>()
+        .where((image) => image.visibleInReader)
+        .toList();
+    return visible.isNotEmpty &&
+        visible.every((image) => image.readyForAutoReading);
+  }
+
+  @override
+  AutoReadingStep autoScroll(double distance, {required bool acrossChapters}) {
+    if (!autoReadingReady) return AutoReadingStep.waiting;
+    final position = scrollController.position;
+    final lastIndex = crossChapter && !acrossChapters
+        ? _waterfallIndexOfChapterPage(reader.chapter, reader.maxPage)
+        : _flowImageCount;
+    final last = lastIndex == null
+        ? null
+        : itemPositionsListener.itemPositions.value
+              .where((item) => item.index == lastIndex)
+              .firstOrNull;
+    var available = position.maxScrollExtent - position.pixels;
+    if (last != null) {
+      available = math.min(
+        available,
+        math.max(0.0, (last.itemTrailingEdge - 1) * position.viewportDimension),
+      );
+      if (last.itemTrailingEdge <= 1.001) {
+        if (crossChapter &&
+            acrossChapters &&
+            _waterfallFlow.lastChapter != null &&
+            _waterfallFlow.lastChapter! < reader.maxChapter) {
+          if (_nextSegmentError != null) return AutoReadingStep.finished;
+          _ensureWaterfallImagesAfter(_flowImageCount);
+          return AutoReadingStep.waiting;
+        }
+        if (!crossChapter &&
+            acrossChapters &&
+            reader.chapter < reader.maxChapter) {
+          reader.toNextChapter();
+          return AutoReadingStep.waiting;
+        }
+        return AutoReadingStep.finished;
+      }
+    }
+    if (available <= 0) return AutoReadingStep.waiting;
+    _futurePosition = null;
+    scrollController.jumpTo(position.pixels + math.min(distance, available));
+    return AutoReadingStep.advanced;
+  }
+
   @override
   void handleKeyEvent(KeyEvent event) {
     if (event.logicalKey == LogicalKeyboardKey.controlLeft ||

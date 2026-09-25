@@ -25,6 +25,7 @@ import 'package:venera_next/foundation/widget_utils.dart';
 
 import 'parser.dart';
 import 'source_translation.dart';
+import 'source_repositories.dart';
 
 class ComicSourcePage extends StatelessWidget {
   const ComicSourcePage({super.key});
@@ -33,6 +34,8 @@ class ComicSourcePage extends StatelessWidget {
   static Dio Function()? debugCreateDio;
 
   static Dio _createDio() => debugCreateDio?.call() ?? AppDio();
+
+  static final _updating = <String, CancelToken>{};
 
   static Future<String?> _downloadSource(
     String url, {
@@ -74,35 +77,98 @@ class ComicSourcePage extends StatelessWidget {
     ComicSource source, [
     bool showLoading = true,
   ]) async {
-    var sourceRemoved = false;
-    try {
-      final content = await _downloadSource(
-        source.url,
-        showLoading: showLoading,
-      );
-      if (content == null) return;
-      ComicSourceManager().remove(source.key);
-      sourceRemoved = true;
-      await ComicSourceParser().parse(content, source.filePath);
-      await io.File(source.filePath).writeAsString(content);
-      if (ComicSourceManager().availableUpdates.containsKey(source.key)) {
-        ComicSourceManager().availableUpdates.remove(source.key);
+    if (_updating.containsKey(source.key)) {
+      // An interactive duplicate tap stays silent because the loading dialog
+      // already owns the update. A batch caller must not mistake the skipped
+      // update for a success.
+      if (!showLoading) throw 'Update already in progress'.tl;
+      return;
+    }
+    final token = CancelToken();
+    _updating[source.key] = token;
+    Dio? dio;
+    LoadingDialogController? controller;
+    final loadingContext = showLoading ? App.rootContext : null;
+    void releaseUpdate() {
+      if (identical(_updating[source.key], token)) {
+        _updating.remove(source.key);
       }
-    } catch (e, s) {
-      Log.error("Update comic source", "$e\n$s");
-      if (showLoading) {
-        final context = App.rootNavigatorKey.currentContext;
-        if (context != null && context.mounted) {
-          context.showMessage(message: _sourceErrorMessage(e));
+    }
+
+    try {
+      if (loadingContext != null) {
+        controller = showLoadingDialog(
+          loadingContext,
+          onCancel: () {
+            token.cancel();
+            releaseUpdate();
+          },
+          barrierDismissible: false,
+        );
+      }
+      dio = _createDio();
+      final store = SourceRepositories.instance;
+      final origin = store.originFor(source.key);
+      final repository = store.find(origin?.repositoryId);
+      final url = await store.updateUrl(
+        source,
+        client: dio,
+        cancelToken: token,
+      );
+      if (token.isCancelled) return;
+      final res = await dio.get<String>(
+        url,
+        cancelToken: token,
+        options: Options(
+          responseType: ResponseType.plain,
+          headers: {'cache-time': 'no'},
+        ),
+      );
+      if (token.isCancelled) return;
+      await ComicSourceManager().replaceScript(
+        source,
+        res.data!,
+        validate: () {
+          if (token.isCancelled) throw token.cancelError!;
+          if (store.originFor(source.key)?.repositoryId !=
+                  origin?.repositoryId ||
+              store.originFor(source.key)?.url != origin?.url ||
+              ComicSource.find(source.key)?.filePath != source.filePath ||
+              (repository != null &&
+                  store.find(repository.id)?.url != repository.url)) {
+            throw 'Repository changed. Refresh the list and try again.'.tl;
+          }
+          // Once the serialized commit begins, the script must be replaced
+          // atomically. Cancellation is available while downloading or queued.
+          if (loadingContext?.mounted ?? false) controller?.close();
+        },
+        origin: repository == null
+            ? null
+            : SourceOrigin(
+                kind: 'repository',
+                repositoryId: repository.id,
+                repositoryName: repository.name,
+                url: url,
+              ),
+      );
+    } catch (e, stack) {
+      if (!token.isCancelled) {
+        Log.error('Update comic source', '$e\n$stack');
+        if (showLoading) {
+          final context = App.rootNavigatorKey.currentContext;
+          if (context != null && context.mounted) {
+            context.showMessage(
+              message: e is DioException ? 'Network error'.tl : e.toString(),
+            );
+          }
+        } else {
+          rethrow;
         }
-      } else {
-        rethrow;
       }
     } finally {
-      if (sourceRemoved) {
-        await ComicSourceManager().reload();
-        if (showLoading) App.forceRebuild();
-      }
+      if (loadingContext?.mounted ?? false) controller?.close();
+      dio?.close();
+      releaseUpdate();
     }
   }
 

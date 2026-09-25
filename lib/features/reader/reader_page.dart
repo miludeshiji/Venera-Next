@@ -176,30 +176,51 @@ class ReaderState extends State<Reader>
       settings: () => AutoReadingSettings(
         gallery: mode.isGallery,
         pageInterval:
-            (appdata.settings.getReaderSetting(
-                      cid,
-                      type.sourceKey,
-                      'autoPageTurningInterval',
-                    )
-                    as num)
-                .toDouble(),
+            (readerSetting('autoPageTurningInterval') as num?)?.toDouble() ??
+            5.0,
+        pixelsPerSecond:
+            (readerSetting('autoScrollSpeed') as num?)?.toDouble() ?? 80.0,
+        stepped: readerSetting('autoScrollStyle') == 'stepped',
+        stepsPerSecond:
+            (readerSetting('autoScrollFrequency') as num?)?.toDouble() ?? 2.0,
+        pixelsPerStep:
+            (readerSetting('autoScrollDistance') as num?)?.toDouble() ?? 40.0,
       ),
-      canAdvance: () =>
-          _readerContentReady &&
-          !isLoading &&
-          !isPageAnimating &&
-          imageViewController?.isCurrentSourceSizeResolved() == true,
-      advance: (_) {
+      canAdvance: () {
+        final controller = imageViewController;
+        if (controller is! AutoReadingViewport) return false;
+        final viewport = controller as AutoReadingViewport;
+        return mounted &&
+            _readerContentReady &&
+            !isLoading &&
+            !isPageAnimating &&
+            (ModalRoute.of(context)?.isCurrent ?? true) &&
+            viewport.autoReadingReady;
+      },
+      advance: (distance) {
+        final across = readerSetting('autoReadingAcrossChapters') == true;
+        if (!mode.isGallery) {
+          final controller = imageViewController;
+          if (controller is! AutoReadingViewport) {
+            return AutoReadingStep.waiting;
+          }
+          final viewport = controller as AutoReadingViewport;
+          return viewport.autoScroll(distance, acrossChapters: across);
+        }
         final controller = imageViewController;
         if (controller == null || isLoading) return AutoReadingStep.waiting;
         if (toNextPage()) return AutoReadingStep.advanced;
         if (!controller.isAtLastVisualPartOfSource()) {
           return AutoReadingStep.waiting;
         }
-        if (toNextChapter()) return AutoReadingStep.advanced;
+        if (across && chapter < maxChapter) {
+          return toNextChapter()
+              ? AutoReadingStep.advanced
+              : AutoReadingStep.waiting;
+        }
         return AutoReadingStep.finished;
       },
-    );
+    )..addListener(update);
     pageValue = normalizeReaderInitialPage(widget.initialPage);
     chapter = widget.initialChapter ?? 1;
     if (chapter < 1) {
@@ -302,6 +323,7 @@ class ReaderState extends State<Reader>
       fullscreen();
     }
     autoPageTurningTimer?.cancel();
+    autoReadingController.removeListener(update);
     autoReadingController.dispose();
     _flushPendingHistoryUpdate();
     unawaited(_remoteProgressTracker?.dispose());
@@ -339,6 +361,10 @@ class ReaderState extends State<Reader>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    autoReadingController.pause(
+      'lifecycle',
+      state != AppLifecycleState.resumed,
+    );
     switch (state) {
       case AppLifecycleState.resumed:
         if (_readerContentReady) {

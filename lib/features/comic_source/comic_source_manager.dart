@@ -323,6 +323,7 @@ class ComicSourceManager with ChangeNotifier, Init {
     final oldPages = _snapshotPages();
     final oldOrigin = SourceRepositories.instance.originFor(source.key);
     var changedSettings = false;
+    var wroteOrigin = false;
     var wroteScript = false;
     try {
       final replacement = await parser.parse(
@@ -347,9 +348,11 @@ class ComicSourceManager with ChangeNotifier, Init {
         await temporary.deleteIfExists();
       }
       _registerSourcePages(replacement);
+      validate();
       changedSettings = true;
       if (origin != null) {
         await SourceRepositories.instance.setOrigin(source.key, origin);
+        wroteOrigin = true;
       } else {
         await appdata.saveData();
       }
@@ -366,7 +369,16 @@ class ComicSourceManager with ChangeNotifier, Init {
       _restorePages(oldPages);
       if (changedSettings) {
         if (origin != null) {
-          await SourceRepositories.instance.setOrigin(source.key, oldOrigin);
+          final currentOrigin = SourceRepositories.instance.originFor(
+            source.key,
+          );
+          if (wroteOrigin &&
+              currentOrigin?.kind == origin.kind &&
+              currentOrigin?.repositoryId == origin.repositoryId &&
+              currentOrigin?.repositoryName == origin.repositoryName &&
+              currentOrigin?.url == origin.url) {
+            await SourceRepositories.instance.setOrigin(source.key, oldOrigin);
+          }
         } else {
           await appdata.saveData(false);
         }
