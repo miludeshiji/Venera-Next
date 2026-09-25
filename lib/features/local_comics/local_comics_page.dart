@@ -396,14 +396,14 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
                   icon: Icons.folder_open,
                   text: "Open Folder".tl,
                   onClick: () {
-                    openComicFolder(c as LocalComic);
+                    openComicFolder(c);
                   },
                 ),
                 MenuEntry(
                   icon: Icons.delete,
                   text: "Delete".tl,
                   onClick: () {
-                    deleteComics([c as LocalComic]).then((value) {
+                    deleteComics([c]).then((value) {
                       if (value && multiSelectMode) {
                         setState(() {
                           multiSelectMode = false;
@@ -417,10 +417,10 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
                   icon: Icons.cloud_upload_outlined,
                   text: "Archive to WebDAV".tl,
                   onClick: () {
-                    archiveComics([c as LocalComic]);
+                    archiveComics([c]);
                   },
                 ),
-                ...exportActions([c as LocalComic]),
+                ...exportActions([c]),
               ];
             },
           ),

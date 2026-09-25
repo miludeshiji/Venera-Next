@@ -81,7 +81,6 @@ class ReaderState extends State<Reader>
         ReaderImagePerPageHandler,
         WidgetsBindingObserver {
   late final AutoReadingController autoReadingController;
-  @override
   AutoReadingController get autoReading => autoReadingController;
 
   dynamic readerSetting(String key) =>
@@ -176,11 +175,14 @@ class ReaderState extends State<Reader>
     autoReadingController = AutoReadingController(
       settings: () => AutoReadingSettings(
         gallery: mode.isGallery,
-        pageInterval: (appdata.settings.getReaderSetting(
-          cid,
-          type.sourceKey,
-          'autoPageTurningInterval',
-        ) as num).toDouble(),
+        pageInterval:
+            (appdata.settings.getReaderSetting(
+                      cid,
+                      type.sourceKey,
+                      'autoPageTurningInterval',
+                    )
+                    as num)
+                .toDouble(),
       ),
       canAdvance: () =>
           _readerContentReady &&
@@ -292,7 +294,6 @@ class ReaderState extends State<Reader>
     );
     PaintingBinding.instance.imageCache.maximumSizeBytes = maxImageCacheSize;
   }
-
 
   @override
   void dispose() {

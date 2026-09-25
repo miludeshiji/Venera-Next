@@ -91,17 +91,20 @@ void main() {
     expect(CachedImageProvider.loadingCount, 0);
   });
 
-  test('cached image provider uses fallback after primary load fails', () async {
-    final chunkEvents = StreamController<ImageChunkEvent>.broadcast();
-    addTearDown(chunkEvents.close);
+  test(
+    'cached image provider uses fallback after primary load fails',
+    () async {
+      final chunkEvents = StreamController<ImageChunkEvent>.broadcast();
+      addTearDown(chunkEvents.close);
 
-    final provider = CachedImageProvider(
-      'file://missing-cover.jpg',
-      fallback: () => Uint8List.fromList([1, 2, 3]),
-    );
+      final provider = CachedImageProvider(
+        'file://missing-cover.jpg',
+        fallback: () => Uint8List.fromList([1, 2, 3]),
+      );
 
-    final data = await provider.load(chunkEvents, () {});
+      final data = await provider.load(chunkEvents, () {});
 
-    expect(data, [1, 2, 3]);
-  });
+      expect(data, [1, 2, 3]);
+    },
+  );
 }

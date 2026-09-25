@@ -46,10 +46,13 @@ void main() {
   });
 
   group('App.locale system language under flutter_tester', () {
-    test('system resolves to the first supported reported language as en_US', () {
-      appdata.settings['language'] = 'system';
-      expect(App.locale, const Locale('en', 'US'));
-    });
+    test(
+      'system resolves to the first supported reported language as en_US',
+      () {
+        appdata.settings['language'] = 'system';
+        expect(App.locale, const Locale('en', 'US'));
+      },
+    );
 
     test('unrecognized setting value falls back to system resolution', () {
       appdata.settings['language'] = 'fr-FR';
@@ -94,7 +97,9 @@ void main() {
       ),
       (
         name: 'zh-Hant: script only',
-        system: [const Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant')],
+        system: [
+          const Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant'),
+        ],
         expected: const Locale('zh', 'TW'),
       ),
       (

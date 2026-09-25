@@ -127,6 +127,7 @@ abstract mixin class ComicPageActions {
       message: "Added to @folder".tlParams({"folder": folder}),
     );
   }
+
   Widget buildReadLaterAction() => ReadLaterButton(
     comic: _toFavoriteItem(),
     onChanged: () {
@@ -137,7 +138,6 @@ abstract mixin class ComicPageActions {
       update();
     },
   );
-
 
   void share() {
     var text = comic.title;

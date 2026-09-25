@@ -25,6 +25,7 @@ class _TestImage extends BaseImageProvider<_TestImage> {
     );
   }
 }
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 

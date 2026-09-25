@@ -53,8 +53,8 @@ void main() {
   );
 
   test('fewer than four body images do not start downloads', () async {
-    ImageDownloader.debugLoadComicImageUnwrapped =
-        (_, _, _, _, {target}) => throw StateError('Unexpected download');
+    ImageDownloader.debugLoadComicImageUnwrapped = (_, _, _, _, {target}) =>
+        throw StateError('Unexpected download');
     expect(
       (await detect(ComicLayoutProbe(), images.take(4).toList())).layout,
       ComicLayout.unknown,
@@ -64,13 +64,12 @@ void main() {
   test(
     'failed and corrupt samples do not prevent classification from valid originals',
     () async {
-      ImageDownloader.debugLoadComicImageUnwrapped =
-          (url, _, _, _, {target}) {
-            expect(target, isNull);
-            if (url == images[1]) return Stream.error(StateError('offline'));
-            if (url == images[2]) return bytes(Uint8List.fromList([1, 2, 3]));
-            return bytes(strip);
-          };
+      ImageDownloader.debugLoadComicImageUnwrapped = (url, _, _, _, {target}) {
+        expect(target, isNull);
+        if (url == images[1]) return Stream.error(StateError('offline'));
+        if (url == images[2]) return bytes(Uint8List.fromList([1, 2, 3]));
+        return bytes(strip);
+      };
       final result = await detect(ComicLayoutProbe());
       expect(result.layout, ComicLayout.longStrip);
       expect(result.sampleCount, 4);
@@ -78,8 +77,8 @@ void main() {
   );
 
   test('all failed downloads fall back to unknown', () async {
-    ImageDownloader.debugLoadComicImageUnwrapped =
-        (_, _, _, _, {target}) => Stream.error(StateError('offline'));
+    ImageDownloader.debugLoadComicImageUnwrapped = (_, _, _, _, {target}) =>
+        Stream.error(StateError('offline'));
     final result = await detect(ComicLayoutProbe());
     expect(result.layout, ComicLayout.unknown);
     expect(result.sampleCount, 0);
@@ -107,9 +106,8 @@ void main() {
           // LocalManager and downloaded chapters use this unescaped key format.
           urls.add('file://${file.path}');
         }
-        ImageDownloader.debugLoadComicImageUnwrapped =
-            (_, _, _, _, {target}) =>
-                throw StateError('Local images must not start network downloads');
+        ImageDownloader.debugLoadComicImageUnwrapped = (_, _, _, _, {target}) =>
+            throw StateError('Local images must not start network downloads');
         final result = await detect(ComicLayoutProbe(), urls);
         expect(result.layout, layout);
         expect(result.sampleCount, 6);
@@ -123,19 +121,18 @@ void main() {
       final streams = <StreamController<ImageDownloadProgress>>[];
       var active = 0;
       var peak = 0;
-      ImageDownloader.debugLoadComicImageUnwrapped =
-          (_, _, _, _, {target}) {
-            expect(target, isNull);
-            final stream = StreamController<ImageDownloadProgress>(
-              onListen: () {
-                active++;
-                if (active > peak) peak = active;
-              },
-              onCancel: () => active--,
-            );
-            streams.add(stream);
-            return stream.stream;
-          };
+      ImageDownloader.debugLoadComicImageUnwrapped = (_, _, _, _, {target}) {
+        expect(target, isNull);
+        final stream = StreamController<ImageDownloadProgress>(
+          onListen: () {
+            active++;
+            if (active > peak) peak = active;
+          },
+          onCancel: () => active--,
+        );
+        streams.add(stream);
+        return stream.stream;
+      };
       final probe = ComicLayoutProbe();
       final pending = detect(probe);
       await pumpEventQueue();
@@ -194,8 +191,8 @@ void main() {
 
   test('timeout releases every download subscription', () async {
     var cancellations = 0;
-    ImageDownloader.debugLoadComicImageUnwrapped =
-        (_, _, _, _, {target}) => StreamController<ImageDownloadProgress>(
+    ImageDownloader.debugLoadComicImageUnwrapped = (_, _, _, _, {target}) =>
+        StreamController<ImageDownloadProgress>(
           onCancel: () => cancellations++,
         ).stream;
     final result = await detect(ComicLayoutProbe());
@@ -207,8 +204,8 @@ void main() {
     'cancel stops all active downloads without waiting for timeout',
     () async {
       var cancellations = 0;
-      ImageDownloader.debugLoadComicImageUnwrapped =
-          (_, _, _, _, {target}) => StreamController<ImageDownloadProgress>(
+      ImageDownloader.debugLoadComicImageUnwrapped = (_, _, _, _, {target}) =>
+          StreamController<ImageDownloadProgress>(
             onCancel: () => cancellations++,
           ).stream;
       final probe = ComicLayoutProbe();

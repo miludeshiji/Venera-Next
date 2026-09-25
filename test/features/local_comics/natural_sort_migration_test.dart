@@ -115,30 +115,27 @@ void main() {
 
       // Test page 1: should stay page 1 (page_1.jpg is at natural index 1)
       final db = sqlite3.open('${root.path}/local.db');
-      db.execute(
-        'DELETE FROM natural_sort_migration WHERE id = ?',
-        ['numbered_book'],
-      );
+      db.execute('DELETE FROM natural_sort_migration WHERE id = ?', [
+        'numbered_book',
+      ]);
       final h1 = History.fromModel(model: comic, ep: 1, page: 1);
       HistoryManager().addHistory(h1);
       await local.migrateLegacyPageOrder(h1);
       expect(h1.page, 1);
 
       // Test page 2: legacy page 2 was page_10.jpg -> natural index 3
-      db.execute(
-        'DELETE FROM natural_sort_migration WHERE id = ?',
-        ['numbered_book'],
-      );
+      db.execute('DELETE FROM natural_sort_migration WHERE id = ?', [
+        'numbered_book',
+      ]);
       final h2 = History.fromModel(model: comic, ep: 1, page: 2);
       HistoryManager().addHistory(h2);
       await local.migrateLegacyPageOrder(h2);
       expect(h2.page, 3);
 
       // Test page 3: legacy page 3 was page_2.jpg -> natural index 2
-      db.execute(
-        'DELETE FROM natural_sort_migration WHERE id = ?',
-        ['numbered_book'],
-      );
+      db.execute('DELETE FROM natural_sort_migration WHERE id = ?', [
+        'numbered_book',
+      ]);
       final h3 = History.fromModel(model: comic, ep: 1, page: 3);
       HistoryManager().addHistory(h3);
       await local.migrateLegacyPageOrder(h3);
@@ -148,30 +145,33 @@ void main() {
     },
   );
 
-  test('migrates downloaded comics and direct image lists idempotently', () async {
-    // Direct image list (such as WebDAV)
-    final webdavImages = [
-      'https://example.com/comics/ch1/page_1.jpg',
-      'https://example.com/comics/ch1/page_2.jpg',
-      'https://example.com/comics/ch1/page_10.jpg',
-    ];
-    final webdavHistory = History.fromMap({
-      'id': 'webdav_1',
-      'type': ComicType.fromKey('webdav_library').value,
-      'time': 1000,
-      'title': 'WebDAV Comic',
-      'subtitle': '',
-      'cover': '',
-      'ep': 1,
-      'page': 2,
-      'max_page': 20,
-    });
+  test(
+    'migrates downloaded comics and direct image lists idempotently',
+    () async {
+      // Direct image list (such as WebDAV)
+      final webdavImages = [
+        'https://example.com/comics/ch1/page_1.jpg',
+        'https://example.com/comics/ch1/page_2.jpg',
+        'https://example.com/comics/ch1/page_10.jpg',
+      ];
+      final webdavHistory = History.fromMap({
+        'id': 'webdav_1',
+        'type': ComicType.fromKey('webdav_library').value,
+        'time': 1000,
+        'title': 'WebDAV Comic',
+        'subtitle': '',
+        'cover': '',
+        'ep': 1,
+        'page': 2,
+        'max_page': 20,
+      });
 
-    await local.migrateLegacyPageOrder(webdavHistory, webdavImages);
-    expect(webdavHistory.page, 3);
+      await local.migrateLegacyPageOrder(webdavHistory, webdavImages);
+      expect(webdavHistory.page, 3);
 
-    // Repeated call is idempotent
-    await local.migrateLegacyPageOrder(webdavHistory, webdavImages);
-    expect(webdavHistory.page, 3);
-  });
+      // Repeated call is idempotent
+      await local.migrateLegacyPageOrder(webdavHistory, webdavImages);
+      expect(webdavHistory.page, 3);
+    },
+  );
 }

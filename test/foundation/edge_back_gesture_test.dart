@@ -206,54 +206,55 @@ void main() {
     animation.dispose();
   });
 
-  testWidgets('IOSBackGestureDetector cancels and clears user gesture on dispose', (
-    tester,
-  ) async {
-    final navigator = GlobalKey<NavigatorState>();
-    var showDetector = true;
+  testWidgets(
+    'IOSBackGestureDetector cancels and clears user gesture on dispose',
+    (tester) async {
+      final navigator = GlobalKey<NavigatorState>();
+      var showDetector = true;
 
-    await tester.pumpWidget(
-      MaterialApp(
-        navigatorKey: navigator,
-        home: StatefulBuilder(
-          builder: (context, setState) {
-            return Scaffold(
-              body: showDetector
-                  ? IOSBackGestureDetector(
-                      gestureWidth: 24,
-                      enabledCallback: () => true,
-                      onStartPopGesture: () => IOSBackGestureController(
-                        AnimationController(vsync: tester, value: 1),
-                        navigator.currentState!,
-                      ),
-                      child: const SizedBox.expand(child: Text('swipe-me')),
-                    )
-                  : const Text('disposed'),
-            );
-          },
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navigator,
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              return Scaffold(
+                body: showDetector
+                    ? IOSBackGestureDetector(
+                        gestureWidth: 24,
+                        enabledCallback: () => true,
+                        onStartPopGesture: () => IOSBackGestureController(
+                          AnimationController(vsync: tester, value: 1),
+                          navigator.currentState!,
+                        ),
+                        child: const SizedBox.expand(child: Text('swipe-me')),
+                      )
+                    : const Text('disposed'),
+              );
+            },
+          ),
         ),
-      ),
-    );
+      );
 
-    // Start a gesture to set userGestureInProgress to true
-    final gesture = await tester.startGesture(const Offset(5, 200));
-    await gesture.moveBy(const Offset(50, 0));
-    await tester.pump();
-    expect(navigator.currentState!.userGestureInProgress, isTrue);
+      // Start a gesture to set userGestureInProgress to true
+      final gesture = await tester.startGesture(const Offset(5, 200));
+      await gesture.moveBy(const Offset(50, 0));
+      await tester.pump();
+      expect(navigator.currentState!.userGestureInProgress, isTrue);
 
-    // Unmount the detector while gesture was in progress
-    showDetector = false;
-    await tester.pumpWidget(
-      MaterialApp(
-        navigatorKey: navigator,
-        home: const Scaffold(body: Text('disposed')),
-      ),
-    );
-    await tester.pumpAndSettle();
+      // Unmount the detector while gesture was in progress
+      showDetector = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navigator,
+          home: const Scaffold(body: Text('disposed')),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    expect(navigator.currentState!.userGestureInProgress, isFalse);
-    await gesture.up();
-  });
+      expect(navigator.currentState!.userGestureInProgress, isFalse);
+      await gesture.up();
+    },
+  );
 
   testWidgets('root route edge swipe does not pop when canPop is false', (
     tester,
@@ -281,38 +282,40 @@ void main() {
     expect(find.text('root-page'), findsOneWidget);
   });
 
-  testWidgets('edge back gesture does not start when userGestureInProgress is true', (
-    tester,
-  ) async {
-    final navigator = GlobalKey<NavigatorState>();
-    var secondGestureStarted = false;
+  testWidgets(
+    'edge back gesture does not start when userGestureInProgress is true',
+    (tester) async {
+      final navigator = GlobalKey<NavigatorState>();
+      var secondGestureStarted = false;
 
-    await tester.pumpWidget(
-      MaterialApp(
-        navigatorKey: navigator,
-        home: Scaffold(
-          body: EdgeBackGestureDetector(
-            enabled: () => !(navigator.currentState?.userGestureInProgress ?? false),
-            onStart: () => secondGestureStarted = true,
-            onUpdate: (_) {},
-            onEnd: (_) {},
-            onCancel: () {},
-            child: const SizedBox.expand(child: Text('content')),
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navigator,
+          home: Scaffold(
+            body: EdgeBackGestureDetector(
+              enabled: () =>
+                  !(navigator.currentState?.userGestureInProgress ?? false),
+              onStart: () => secondGestureStarted = true,
+              onUpdate: (_) {},
+              onEnd: (_) {},
+              onCancel: () {},
+              child: const SizedBox.expand(child: Text('content')),
+            ),
           ),
         ),
-      ),
-    );
+      );
 
-    // Simulate an ongoing platform gesture
-    navigator.currentState!.didStartUserGesture();
-    expect(navigator.currentState!.userGestureInProgress, isTrue);
+      // Simulate an ongoing platform gesture
+      navigator.currentState!.didStartUserGesture();
+      expect(navigator.currentState!.userGestureInProgress, isTrue);
 
-    final gesture = await tester.startGesture(const Offset(5, 200));
-    await gesture.moveBy(const Offset(100, 0));
-    await gesture.up();
-    await tester.pumpAndSettle();
+      final gesture = await tester.startGesture(const Offset(5, 200));
+      await gesture.moveBy(const Offset(100, 0));
+      await gesture.up();
+      await tester.pumpAndSettle();
 
-    expect(secondGestureStarted, isFalse);
-    navigator.currentState!.didStopUserGesture();
-  });
+      expect(secondGestureStarted, isFalse);
+      navigator.currentState!.didStopUserGesture();
+    },
+  );
 }
