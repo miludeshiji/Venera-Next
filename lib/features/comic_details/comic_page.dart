@@ -659,23 +659,44 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     }
 
     String formatTime(String time) {
-      if (int.tryParse(time) != null) {
-        var t = int.tryParse(time);
-        if (t! > 1000000000000) {
-          return DateTime.fromMillisecondsSinceEpoch(
-            t,
-          ).toString().substring(0, 19);
-        } else {
-          return DateTime.fromMillisecondsSinceEpoch(
-            t * 1000,
-          ).toString().substring(0, 19);
+      final value = time.trim();
+
+      if (value.isEmpty) {
+        return time;
+      }
+
+      DateTime? dateTime;
+
+      final timestamp = int.tryParse(value);
+
+      if (timestamp != null) {
+        try {
+          dateTime = DateTime.fromMillisecondsSinceEpoch(
+            timestamp < 10000000000 ? timestamp * 1000 : timestamp,
+          );
+        } catch (_) {
+          return time;
         }
+      } else {
+        dateTime = DateTime.tryParse(value);
       }
-      if (time.contains('T') || time.contains('Z')) {
-        var t = DateTime.parse(time);
-        return t.toString().substring(0, 19);
+
+      if (dateTime == null) {
+        return time;
       }
-      return time;
+
+      final local = dateTime.toLocal();
+
+      String twoDigits(int value) {
+        return value.toString().padLeft(2, '0');
+      }
+
+      return '${local.year}-'
+          '${twoDigits(local.month)}-'
+          '${twoDigits(local.day)} '
+          '${twoDigits(local.hour)}:'
+          '${twoDigits(local.minute)}:'
+          '${twoDigits(local.second)}';
     }
 
     Widget buildWrap({required List<Widget> children}) {

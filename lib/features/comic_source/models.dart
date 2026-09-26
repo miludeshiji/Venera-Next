@@ -297,16 +297,42 @@ class ComicDetails with HistoryMixin {
   }
 
   String? _validateUpdateTime(String time) {
-    time = time.split(" ").first;
-    var segments = time.split("-");
-    if (segments.length != 3) return null;
-    var year = int.tryParse(segments[0]);
-    var month = int.tryParse(segments[1]);
-    var day = int.tryParse(segments[2]);
-    if (year == null || month == null || day == null) return null;
-    if (year < 2000 || year > 3000) return null;
-    if (month < 1 || month > 12) return null;
-    if (day < 1 || day > 31) return null;
+    final value = time.trim();
+
+    if (value.isEmpty) {
+      return null;
+    }
+
+    DateTime? dateTime;
+
+    final timestamp = int.tryParse(value);
+
+    if (timestamp != null) {
+      try {
+        dateTime = DateTime.fromMillisecondsSinceEpoch(
+          timestamp < 10000000000 ? timestamp * 1000 : timestamp,
+        );
+      } catch (_) {
+        return null;
+      }
+    } else {
+      dateTime = DateTime.tryParse(value);
+    }
+
+    if (dateTime == null) {
+      return null;
+    }
+
+    final local = dateTime.toLocal();
+
+    if (local.year < 2000 || local.year > 3000) {
+      return null;
+    }
+
+    final year = local.year.toString().padLeft(4, '0');
+    final month = local.month.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+
     return "$year-$month-$day";
   }
 
