@@ -553,4 +553,95 @@ void main() {
     },
     skip: _sqliteAvailable() ? false : 'sqlite3 native library is unavailable',
   );
+
+  test(
+    'old read later folder survives reload as ordinary folder and is reordered on read while clearing updates',
+    () async {
+      final dataDir = Directory.systemTemp.createTempSync(
+        'venera-favorites-data-',
+      );
+      final cacheDir = Directory.systemTemp.createTempSync(
+        'venera-favorites-cache-',
+      );
+      final previousFollowUpdatesFolder =
+          appdata.settings['followUpdatesFolder'];
+      final previousQuickFavorite = appdata.settings['quickFavorite'];
+      final previousMoveFavoriteAfterRead =
+          appdata.settings['moveFavoriteAfterRead'];
+
+      addTearDown(() async {
+        if (LocalFavoritesManager.cache != null) {
+          await LocalFavoritesManager().debugWaitForHashedIdsRefresh();
+          try {
+            LocalFavoritesManager().close();
+          } catch (_) {
+            // ignore cleanup failures in partially initialized tests
+          }
+        }
+        LocalFavoritesManager.cache = null;
+        appdata.settings['followUpdatesFolder'] = previousFollowUpdatesFolder;
+        appdata.settings['quickFavorite'] = previousQuickFavorite;
+        appdata.settings['moveFavoriteAfterRead'] =
+            previousMoveFavoriteAfterRead;
+        if (dataDir.existsSync()) {
+          dataDir.deleteSync(recursive: true);
+        }
+        if (cacheDir.existsSync()) {
+          cacheDir.deleteSync(recursive: true);
+        }
+      });
+
+      App.dataPath = dataDir.path;
+      App.cachePath = cacheDir.path;
+      LocalFavoritesManager.cache = null;
+
+      const folderName = 'Read later';
+      final first = _favorite('c1');
+      final second = _favorite('c2');
+
+      final setupManager = LocalFavoritesManager();
+      await setupManager.init();
+      setupManager.createFolder(folderName);
+      setupManager.addComic(folderName, first, 1, '2026-07-01');
+      setupManager.addComic(folderName, second, 2, '2026-07-01');
+
+      appdata.settings['followUpdatesFolder'] = folderName;
+      setupManager.prepareTableForFollowUpdates(folderName);
+      setupManager.updateUpdateTime(
+        folderName,
+        second.id,
+        second.type,
+        '2026-07-02',
+      );
+
+      expect(setupManager.hasNewUpdate(second.id, second.type), isTrue);
+      expect(setupManager.countUpdates(folderName), 1);
+
+      await setupManager.debugWaitForHashedIdsRefresh();
+      setupManager.close();
+      LocalFavoritesManager.cache = null;
+
+      final reloadedManager = LocalFavoritesManager();
+      await reloadedManager.init();
+
+      expect(reloadedManager.folderNames, contains(folderName));
+      expect(reloadedManager.count(folderName), 2);
+      expect(reloadedManager.getFolderComics(folderName).map((c) => c.id), [
+        first.id,
+        second.id,
+      ]);
+      expect(reloadedManager.hasNewUpdate(second.id, second.type), isTrue);
+
+      appdata.settings['moveFavoriteAfterRead'] = 'start';
+      reloadedManager.onRead(second.id, second.type);
+
+      expect(reloadedManager.getFolderComics(folderName).map((c) => c.id), [
+        second.id,
+        first.id,
+      ]);
+      expect(reloadedManager.hasNewUpdate(second.id, second.type), isFalse);
+      expect(reloadedManager.countUpdates(folderName), 0);
+    },
+    skip: _sqliteAvailable() ? false : 'sqlite3 native library is unavailable',
+  );
 }

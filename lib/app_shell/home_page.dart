@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:venera_next/components/scroll.dart';
 import 'package:venera_next/features/comic_source/comic_source.dart';
-import 'package:venera_next/features/favorites/favorites.dart';
 import 'package:venera_next/foundation/consts.dart';
 import 'package:venera_next/foundation/context.dart';
 import 'package:venera_next/features/history/history.dart';
@@ -23,7 +22,6 @@ class HomePage extends StatelessWidget {
         const SearchEntry(),
         const SyncStatusSummary(),
         const HistorySummary(),
-        const ReadLaterSummary(),
         const LocalComicsSummary(),
         const FollowUpdatesWidget(),
         const ComicSourceSummary(),

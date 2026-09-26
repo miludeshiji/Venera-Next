@@ -351,47 +351,9 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
                 comic.read();
               }
             },
-            menuBuilder: (c) {
+            menuBuilder: (comic) {
+              final c = comic as LocalComic;
               return [
-                MenuEntry(
-                  icon: Icons.watch_later_outlined,
-                  text:
-                      LocalFavoritesManager().isInReadLater(
-                        c.id,
-                        (c as LocalComic).comicType,
-                      )
-                      ? 'Remove from read later'.tl
-                      : 'Read later'.tl,
-                  onClick: () async {
-                    final manager = LocalFavoritesManager();
-                    final included = manager.isInReadLater(c.id, c.comicType);
-                    try {
-                      await manager.setReadLater(
-                        FavoriteItem(
-                          id: c.id,
-                          name: c.title,
-                          coverPath: c.cover,
-                          author: c.subtitle,
-                          type: c.comicType,
-                          tags: c.tags,
-                        ),
-                        included: !included,
-                        folderName: 'Read later'.tl,
-                      );
-                      if (context.mounted) {
-                        context.showMessage(
-                          message: included
-                              ? 'Removed from read later'.tl
-                              : 'Added to read later'.tl,
-                        );
-                      }
-                    } catch (error) {
-                      if (context.mounted) {
-                        context.showMessage(message: error.toString());
-                      }
-                    }
-                  },
-                ),
                 MenuEntry(
                   icon: Icons.folder_open,
                   text: "Open Folder".tl,

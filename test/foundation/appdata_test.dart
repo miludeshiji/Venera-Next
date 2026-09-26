@@ -661,4 +661,82 @@ void main() {
       );
     },
   );
+
+  test(
+    'drops obsolete settings on load and sync without persisting them',
+    () async {
+      final dataDir = Directory.systemTemp.createTempSync(
+        'venera-appdata-obsolete-',
+      );
+      final previousProxy = appdata.settings['proxy'];
+      final previousQuickFavorite = appdata.settings['quickFavorite'];
+      final previousSearchHistory = List<String>.from(appdata.searchHistory);
+      final previousDataPath = App.dataPath;
+
+      addTearDown(() async {
+        App.dataPath = previousDataPath;
+        appdata.settings['proxy'] = previousProxy;
+        appdata.settings['quickFavorite'] = previousQuickFavorite;
+        appdata.searchHistory = previousSearchHistory;
+        if (dataDir.existsSync()) {
+          dataDir.deleteSync(recursive: true);
+        }
+      });
+
+      App.dataPath = dataDir.path;
+
+      final appDataFile = File(p.join(dataDir.path, 'appdata.json'));
+      appDataFile.writeAsStringSync(
+        jsonEncode({
+          'settings': {
+            'proxy': 'http://127.0.0.1:9090',
+            'quickFavorite': 'Favorites',
+            'readLaterFolder': 'Old Later Folder',
+          },
+          'searchHistory': ['sample'],
+        }),
+      );
+
+      await appdata.loadDataForTesting(dataDir.path);
+
+      expect(appdata.settings['proxy'], 'http://127.0.0.1:9090');
+      expect(appdata.settings['quickFavorite'], 'Favorites');
+      expect(appdata.settings['readLaterFolder'], isNull);
+
+      await appdata.saveData(false);
+
+      final savedAppData =
+          jsonDecode(appDataFile.readAsStringSync()) as Map<String, dynamic>;
+      final savedAppSettings = savedAppData['settings'] as Map<String, dynamic>;
+      expect(savedAppSettings.containsKey('readLaterFolder'), isFalse);
+      expect(savedAppSettings['proxy'], 'http://127.0.0.1:9090');
+      expect(savedAppSettings['quickFavorite'], 'Favorites');
+
+      final syncDataFile = File(p.join(dataDir.path, 'syncdata.json'));
+      final savedSyncData =
+          jsonDecode(syncDataFile.readAsStringSync()) as Map<String, dynamic>;
+      final savedSyncSettings =
+          savedSyncData['settings'] as Map<String, dynamic>;
+      expect(savedSyncSettings.containsKey('readLaterFolder'), isFalse);
+      expect(savedSyncSettings['quickFavorite'], 'Favorites');
+
+      await appdata.syncData({
+        'settings': {
+          'quickFavorite': 'Updated Favorites',
+          'readLaterFolder': 'Synced Obsolete Folder',
+        },
+        'searchHistory': ['synced-sample'],
+      });
+
+      expect(appdata.settings['quickFavorite'], 'Updated Favorites');
+      expect(appdata.settings['readLaterFolder'], isNull);
+
+      final afterSyncData =
+          jsonDecode(appDataFile.readAsStringSync()) as Map<String, dynamic>;
+      final afterSyncSettings =
+          afterSyncData['settings'] as Map<String, dynamic>;
+      expect(afterSyncSettings.containsKey('readLaterFolder'), isFalse);
+      expect(afterSyncSettings['quickFavorite'], 'Updated Favorites');
+    },
+  );
 }

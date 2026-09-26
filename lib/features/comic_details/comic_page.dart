@@ -422,7 +422,6 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
                 onLongPressed: quickFavorite,
                 iconColor: context.useTextColor(Colors.purple),
               ),
-              buildReadLaterAction(),
               ComicDetailActionButton(
                 key: const Key('comic-detail-progress'),
                 icon: const Icon(Icons.update),

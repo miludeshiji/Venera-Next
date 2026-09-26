@@ -96,6 +96,8 @@ class Appdata with Init {
     "webdavComicLibrarySyncIntervalMinutes",
   };
 
+  static const _obsoleteSetting = "readLaterFolder";
+
   /// Sync data from another device and persist the accepted settings.
   Future<void> syncData(Map<String, dynamic> data) async {
     if (data['settings'] is Map) {
@@ -111,6 +113,7 @@ class Appdata with Init {
           this.settings["webdavComicLibrarySyncEnabled"] == true;
 
       for (var key in settings.keys) {
+        if (key == _obsoleteSetting) continue;
         if (_archiveSyncFields.contains(key)) {
           if (archiveSyncEnabled) {
             this.settings[key] = settings[key];
@@ -206,7 +209,7 @@ class Appdata with Init {
       try {
         final decoded = _decodeAppData(await candidate.readAsString());
         for (final entry in decoded.settings.entries) {
-          if (entry.value != null) {
+          if (entry.value != null && entry.key != _obsoleteSetting) {
             settings[entry.key] = entry.value;
           }
         }
@@ -259,7 +262,7 @@ class Appdata with Init {
     }
     final normalizedSettings = <String, dynamic>{};
     for (final entry in rawSettings.entries) {
-      if (entry.key is String) {
+      if (entry.key is String && entry.key != _obsoleteSetting) {
         normalizedSettings[entry.key as String] = entry.value;
       }
     }
@@ -416,7 +419,6 @@ class Settings with ChangeNotifier {
     "disableSyncFields": "", // "field1, field2, ..."
     'dataVersion': 0,
     'quickFavorite': null,
-    'readLaterFolder': null,
     'enableTurnPageByVolumeKey': true,
     'enableClockAndBatteryInfoInReader': true,
     'quickCollectImage': 'No', // No, DoubleTap, Swipe
