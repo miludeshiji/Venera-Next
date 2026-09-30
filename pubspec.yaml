@@ -88,6 +88,7 @@ dependencies:
   image: ^4.9.2
   pdfrx: ^2.4.7
   xml: ^6.6.1
+  flutter_markdown_plus: ^1.0.12
 
 dev_dependencies:
   flutter_test:
