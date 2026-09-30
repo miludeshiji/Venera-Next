@@ -1,3 +1,8 @@
+import 'dart:async';
+
+import 'dart:convert';
+import 'package:archive/archive_io.dart' as archive_io;
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as image;
 import 'package:pdfrx/pdfrx.dart';
@@ -5,6 +10,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:venera_next/features/favorites/favorites.dart';
 import 'package:venera_next/features/local_comics/import_export/import_export.dart';
 import 'package:venera_next/features/local_comics/local_comics.dart';
+import 'package:venera_next/features/local_comics/local_storage_guard.dart';
 import 'package:venera_next/foundation/app.dart';
 import 'package:venera_next/foundation/appdata.dart';
 import 'package:venera_next/foundation/comic_type.dart';
@@ -81,6 +87,212 @@ void main() {
         }
       }
 
+      test(
+        'storage migration cannot copy or delete a PDF still being imported',
+        () async {
+          final firstPageReady = Completer<void>();
+          final renderGate = Completer<void>();
+          final originalPath = manager.path;
+          final destination = Directory(
+            FilePath.join(dataDirectory.path, 'migrated'),
+          )..createSync();
+          final importing = PdfComicImporter.importDocument(
+            _Document([_Page(), _Page(waitBeforeRender: renderGate.future)]),
+            title: 'In progress',
+            onProgress: (current, total) {
+              if (current == 1) firstPageReady.complete();
+            },
+            registerComic: (comic) => const ImportComic().registerComic(comic),
+          );
+          // Always finish the renderer, including when a regression assertion
+          // fails, so test cleanup cannot race a live import.
+          addTearDown(() async {
+            if (!renderGate.isCompleted) renderGate.complete();
+            try {
+              await importing;
+            } catch (_) {}
+          });
+          await firstPageReady.future;
+          expect(await manager.setNewPath(destination.path), isNotNull);
+          expect(manager.path, originalPath);
+          expect(destination.listSync(), isEmpty);
+          renderGate.complete();
+          await importing;
+          expect(
+            await manager.getImages('1', ComicType.local, 1),
+            hasLength(2),
+          );
+          expect(await manager.setNewPath(destination.path), isNull);
+          expect(
+            await manager.getImages('1', ComicType.local, 1),
+            hasLength(2),
+          );
+        },
+      );
+
+      test('failed PDF import releases storage for migration', () async {
+        final destination = Directory(
+          FilePath.join(dataDirectory.path, 'after-failure'),
+        )..createSync();
+        await expectLater(
+          PdfComicImporter.importDocument(
+            _Document([_Page(returnsNull: true)]),
+            title: 'Broken',
+          ),
+          throwsA(isA<PdfPageRenderException>()),
+        );
+        expect(await manager.setNewPath(destination.path), isNull);
+        expect(destination.listSync(), isEmpty);
+      });
+
+      testWidgets(
+        'library recovery refuses to register a partially converted PDF',
+        (tester) async {
+          await tester.pumpWidget(
+            MaterialApp(
+              navigatorKey: App.rootNavigatorKey,
+              home: const Scaffold(),
+            ),
+          );
+          await tester.runAsync(() async {
+            final firstPageReady = Completer<void>();
+            final renderGate = Completer<void>();
+            final importing = PdfComicImporter.importDocument(
+              _Document([_Page(), _Page(waitBeforeRender: renderGate.future)]),
+              title: 'Still importing',
+              onProgress: (current, total) {
+                if (current == 1) firstPageReady.complete();
+              },
+              registerComic: (comic) =>
+                  const ImportComic().registerComic(comic),
+            );
+            try {
+              await firstPageReady.future;
+              expect(await const ImportComic().localDownloads(), isFalse);
+              expect(manager.count, 0);
+            } finally {
+              renderGate.complete();
+              await importing;
+            }
+            expect(manager.count, 1);
+            expect(
+              await manager.getImages('1', ComicType.local, 1),
+              hasLength(2),
+            );
+          });
+          await tester.pumpWidget(const SizedBox.shrink());
+        },
+      );
+
+      test(
+        'PDF waits for earlier exclusive storage work before rendering',
+        () async {
+          final gate = Completer<void>();
+          final exclusive = LocalComicStorageGuard.instance.runExclusive(
+            () => gate.future,
+          );
+          final page = _Page();
+          final document = _Document([page]);
+          final importing = PdfComicImporter.importDocument(
+            document,
+            title: 'After recovery',
+            registerComic: (comic) => const ImportComic().registerComic(comic),
+          );
+          try {
+            await Future<void>.delayed(Duration.zero);
+            expect(page.renderCount, 0);
+            expect(manager.count, 0);
+          } finally {
+            gate.complete();
+            await exclusive;
+            await importing;
+          }
+          final comic = manager.findByName('After recovery')!;
+          final images = await manager.getImages(comic.id, ComicType.local, 1);
+          expect(
+            image
+                .decodeJpg(
+                  File(
+                    images.single.replaceFirst('file://', ''),
+                  ).readAsBytesSync(),
+                )!
+                .height,
+            9,
+          );
+          expect(document.disposed, isTrue);
+        },
+      );
+
+      test(
+        'controlled two-page PDF paused mid-flight allows CBZ with same title to import and keep files after PDF cancellation',
+        () async {
+          final firstPageReady = Completer<void>();
+          final renderGate = Completer<void>();
+          final cancellation = DocumentImportCancellation();
+
+          final pdfImporting = PdfComicImporter.importDocument(
+            _Document([_Page(), _Page(waitBeforeRender: renderGate.future)]),
+            title: 'Book',
+            onProgress: (current, total) {
+              if (current == 1) firstPageReady.complete();
+            },
+            cancellation: cancellation,
+            registerComic: (comic) => const ImportComic().registerComic(comic),
+          );
+          final cancelled = expectLater(
+            pdfImporting,
+            throwsA(isA<DocumentImportCancelled>()),
+          );
+          addTearDown(() async {
+            cancellation.cancel();
+            if (!renderGate.isCompleted) renderGate.complete();
+            await cancelled;
+          });
+
+          // Wait until PDF renders page 1 and writes it to disk
+          await firstPageReady.future;
+
+          final pageBytes = image.encodeJpg(image.Image(width: 2, height: 3));
+          final archive = archive_io.Archive()
+            ..addFile(
+              archive_io.ArchiveFile.bytes(
+                'metadata.json',
+                utf8.encode(
+                  jsonEncode({'title': 'Book', 'author': '', 'tags': []}),
+                ),
+              ),
+            )
+            ..addFile(archive_io.ArchiveFile.bytes('1.jpg', pageBytes))
+            ..addFile(archive_io.ArchiveFile.bytes('2.jpg', pageBytes));
+          final cbzFile = File(FilePath.join(dataDirectory.path, 'Book.cbz'))
+            ..writeAsBytesSync(archive_io.ZipEncoder().encodeBytes(archive));
+
+          final cbzComic = await CBZ.import(cbzFile);
+          await const ImportComic().registerComic(cbzComic);
+
+          // Now cancel the in-flight PDF import and let it finish aborting
+          cancellation.cancel();
+          renderGate.complete();
+
+          await cancelled;
+
+          // Verify the CBZ record still exists and its images are readable
+          final comic = manager.findByName('Book');
+          expect(comic, isNotNull);
+          expect(comic!.id, cbzComic.id);
+
+          final images = await manager.getImages(comic.id, ComicType.local, 1);
+          expect(images, hasLength(2));
+          for (final imageUri in images) {
+            final imagePath = imageUri.replaceFirst('file://', '');
+            expect(File(imagePath).readAsBytesSync(), pageBytes);
+            expect(
+              image.decodeJpg(File(imagePath).readAsBytesSync())!.height,
+              3,
+            );
+          }
+        },
+      );
       test(
         'registers multiple comics in the selected favorites folder',
         () async {
@@ -349,10 +561,12 @@ class _Document extends Fake implements PdfDocument {
 }
 
 class _Page extends Fake implements PdfPage {
-  _Page({this.onRender, this.returnsNull = false});
+  _Page({this.onRender, this.returnsNull = false, this.waitBeforeRender});
 
   final void Function()? onRender;
   final bool returnsNull;
+  final Future<void>? waitBeforeRender;
+
   int renderCount = 0;
   _Image? renderedImage;
 
@@ -377,6 +591,7 @@ class _Page extends Fake implements PdfPage {
     int flags = 0,
     PdfPageRenderCancellationToken? cancellationToken,
   }) async {
+    await waitBeforeRender;
     renderCount++;
     onRender?.call();
     if (returnsNull) return null;

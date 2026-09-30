@@ -26,6 +26,28 @@ void main() {
   });
   tearDown(() => previous.forEach((key, value) => settings[key] = value));
 
+  test(
+    'side margins and width limit follow comic, device, global precedence',
+    () {
+      settings['readerSideMargin'] = 5;
+      settings['limitImageWidth'] = true;
+      settings.setEnabledDeviceSpecificSettings(true);
+      settings.setDeviceReaderSetting('readerSideMargin', 10);
+      settings.setDeviceReaderSetting('limitImageWidth', false);
+      expect(settings.getReaderSetting(cid, source, 'readerSideMargin'), 10);
+      expect(settings.getReaderSetting(cid, source, 'limitImageWidth'), false);
+      settings.setEnabledComicSpecificSettings(cid, source, true);
+      settings.setReaderSetting(cid, source, 'readerSideMargin', 20);
+      settings.setReaderSetting(cid, source, 'limitImageWidth', true);
+      expect(settings.getReaderSetting(cid, source, 'readerSideMargin'), 20);
+      expect(settings.getReaderSetting(cid, source, 'limitImageWidth'), true);
+      settings.setEnabledComicSpecificSettings(cid, source, false);
+      expect(settings.getReaderSetting(cid, source, 'readerSideMargin'), 10);
+      settings.setEnabledDeviceSpecificSettings(false);
+      expect(settings.getReaderSetting(cid, source, 'readerSideMargin'), 5);
+    },
+  );
+
   test('automatic selection is opt-in for existing installations', () {
     expect(previous['autoReaderMode'], isFalse);
     detect(ComicLayout.longStrip);

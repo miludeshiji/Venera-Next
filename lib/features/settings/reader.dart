@@ -124,6 +124,14 @@ class _ReaderSettingsState extends State<ReaderSettings> {
     bool useDeviceSpecificSettings =
         !isEnabledSpecificSettings &&
         appdata.settings.isDeviceSpecificSettingsEnabled();
+    final effectiveReaderMode = _readerSettingValue(
+      'readerMode',
+      isEnabledSpecificSettings: isEnabledSpecificSettings,
+      useDeviceSpecificSettings: useDeviceSpecificSettings,
+    );
+    final isVerticalFlowMode =
+        effectiveReaderMode == 'waterfallTopToBottom' ||
+        effectiveReaderMode == 'continuousTopToBottom';
 
     return SmoothCustomScrollView(
       slivers: [
@@ -538,6 +546,21 @@ class _ReaderSettingsState extends State<ReaderSettings> {
           comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
           useDeviceSettings: useDeviceSpecificSettings,
         ).toSliver(),
+        SliverAnimatedVisibility(
+          visible: isVerticalFlowMode,
+          child: SliderSetting(
+            title: 'Side margins (each side)'.tl,
+            settingsIndex: 'readerSideMargin',
+            interval: 1,
+            min: 0,
+            max: 30,
+            valueFormatter: (value) => '${value.toInt()}%',
+            onChanged: () => widget.onChanged?.call('readerSideMargin'),
+            comicId: isEnabledSpecificSettings ? widget.comicId : null,
+            comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
+            useDeviceSettings: useDeviceSpecificSettings,
+          ),
+        ),
         if (App.isAndroid)
           SwitchSetting(
             title: 'Turn page by volume keys'.tl,

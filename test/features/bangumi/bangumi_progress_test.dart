@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:venera_next/components/side_bar.dart';
 import 'package:venera_next/features/bangumi/bangumi.dart';
 import 'package:venera_next/features/comic_source/models.dart';
 import 'package:venera_next/features/history/history.dart';
@@ -19,6 +20,13 @@ void main() {
     appdata.settings['bangumiBindings'] = <String, dynamic>{};
     configureBangumiBindingMetadataHandler(null);
     gateway = _Gateway();
+  });
+
+  tearDown(() {
+    appdata.settings['bangumiAccessToken'] = '';
+    appdata.settings['bangumiUsername'] = '';
+    appdata.settings['bangumiBindings'] = <String, dynamic>{};
+    configureBangumiBindingMetadataHandler(null);
   });
 
   testWidgets('unconnected panel explains that Bangumi must be connected', (
@@ -137,6 +145,89 @@ void main() {
     expect(gateway.searches, ['keyword']);
     expect(gateway.subjectIds, isEmpty);
   });
+
+  testWidgets(
+    'sidebar Bangumi search panel avoids keyboard without redundant blank space',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetViewInsets);
+
+      final service = BangumiService.forTesting(gatewayFactory: (_) => gateway);
+      addTearDown(service.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () {
+                  showSideBar(
+                    context,
+                    BangumiProgressPanel(
+                      service: service,
+                      sourceKey: 'source',
+                      comicId: 'comic',
+                      comicTitle: 'Title',
+                      chapters: const ComicChapters({'1': '第 1 话'}),
+                      history: null,
+                    ),
+                  );
+                },
+                child: const Text('Open Bangumi'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Open Bangumi'));
+      await tester.pumpAndSettle();
+
+      final scrollableFinder = find.byType(SingleChildScrollView);
+      expect(scrollableFinder, findsOneWidget);
+
+      // Record initial viewport rect without keyboard.
+      final initialViewportRect = tester.getRect(scrollableFinder);
+
+      // Focus enters search query field.
+      final queryFinder = find.byKey(const Key('bangumi-subject-query'));
+      expect(queryFinder, findsOneWidget);
+      await tester.tap(queryFinder);
+      await tester.pump();
+
+      // Keyboard appears with inset height of 180.
+      const keyboardHeight = 180.0;
+      tester.view.viewInsets = const FakeViewPadding(bottom: keyboardHeight);
+      await tester.pumpAndSettle();
+
+      // Viewport shrinks only by keyboard height without redundant blank space below.
+      final keyboardViewportRect = tester.getRect(scrollableFinder);
+      expect(keyboardViewportRect.top, initialViewportRect.top);
+      expect(keyboardViewportRect.bottom, 600 - keyboardHeight);
+      expect(
+        keyboardViewportRect.height,
+        initialViewportRect.height - keyboardHeight,
+      );
+
+      // Search query field remains visible within current viewport.
+      final queryRect = tester.getRect(queryFinder);
+      expect(keyboardViewportRect.contains(queryRect.topLeft), isTrue);
+      expect(keyboardViewportRect.contains(queryRect.bottomRight), isTrue);
+
+      // Dismiss keyboard: viewport rect restores to its initial geometry.
+      tester.view.viewInsets = FakeViewPadding.zero;
+      await tester.pumpAndSettle();
+      expect(tester.getRect(scrollableFinder), initialViewportRect);
+
+      // Pop sidebar route to cleanly close the panel.
+      await tester.tap(find.byIcon(Icons.arrow_back_sharp));
+      await tester.pumpAndSettle();
+      expect(find.byType(BangumiProgressPanel), findsNothing);
+    },
+  );
 
   testWidgets('binding exposes editable progress and rating', (tester) async {
     await tester.pumpWidget(

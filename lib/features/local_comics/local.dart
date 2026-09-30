@@ -15,6 +15,9 @@ import 'package:venera_next/features/local_comics/download.dart';
 import 'package:venera_next/features/reader/reader.dart';
 import 'package:venera_next/foundation/file_interaction.dart';
 
+import 'package:venera_next/foundation/translations.dart';
+import 'local_storage_guard.dart';
+import 'import_export/document_import.dart';
 import 'package:venera_next/foundation/app.dart';
 import 'package:venera_next/foundation/context.dart';
 import 'package:venera_next/features/history/history.dart';
@@ -211,6 +214,16 @@ class LocalManager with ChangeNotifier {
 
   // return error message if failed
   Future<String?> setNewPath(String newPath) async {
+    try {
+      return await LocalComicStorageGuard.instance.runExclusive(
+        () => _setNewPath(newPath),
+      );
+    } on LocalComicStorageBusy catch (error) {
+      return error.message.tl;
+    }
+  }
+
+  Future<String?> _setNewPath(String newPath) async {
     var newDir = Directory(newPath);
     if (!await newDir.exists()) {
       return "Directory does not exist";
@@ -311,7 +324,7 @@ class LocalManager with ChangeNotifier {
     } catch (e, s) {
       Log.error("IO", "Failed to create local folder: $e", s);
     }
-    _checkPathValidation();
+    await _checkPathValidation();
     _checkNoMedia();
     if (!debugSkipComicSourceInit) {
       await ComicSourceManager().ensureInit();
@@ -592,8 +605,7 @@ class LocalManager with ChangeNotifier {
     if (name.length > comicDirectoryMaxLength) {
       name = name.substring(0, comicDirectoryMaxLength);
     }
-    var dir = findValidDirectoryName(path, name);
-    return Directory(FilePath.join(path, dir)).create().then((value) => value);
+    return DocumentImportSession.allocateDirectory(path, name);
   }
 
   void completeTask(DownloadTask task) {

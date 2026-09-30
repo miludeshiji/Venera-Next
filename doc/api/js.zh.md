@@ -1,96 +1,191 @@
 # JavaScript API
 
-本文档是 JavaScript 扩展 API 的中文入口，用于快速理解接口分区和维护约定。完整英文签名参考见 [js.en.md](js.en.md)。
+[English](js.en.md) · [漫画源开发说明](comic_source.zh.md) · [返回文档索引](../README.md#开发-api)
 
-## API 分区
+本文档是 VeneraNext 扩展运行时 API 参考。函数名与调用以 [assets/init.js](../../assets/init.js) 与宿主实现 [js_engine.dart](../../lib/foundation/js_engine.dart) 为准。
 
-JavaScript API 主要分为以下几类：
+## 运行环境
 
-| 分区 | 用途 |
+源脚本在 QuickJS 引擎中执行，支持 ES2020 标准 JavaScript 语法，以及本文列出的应用专用 API。环境不包含 Node.js 原生模块或浏览器 DOM 全局对象。跨语言桥接时请使用字符串、数字、布尔值、普通对象和数组；操作二进制数据时使用 `ArrayBuffer`。
+
+## Network 网络
+
+所有网络请求函数均返回 Promise。网络传输错误会抛出异常；HTTP 4xx/5xx 状态码通常仍返回响应对象，扩展需自行检查 `status`。
+
+| 方法 | 返回值 | 说明 |
+|---|---|---|
+| `Network.get(url, headers?, extra?)` | `Promise<{status, headers, body}>` | 发起 GET 请求，`body` 为字符串 |
+| `Network.post(url, headers?, data?, extra?)` | `Promise<{status, headers, body}>` | 发起 POST 请求 |
+| `Network.put(url, headers?, data?, extra?)` | `Promise<{status, headers, body}>` | 发起 PUT 请求 |
+| `Network.delete(url, headers?, extra?)` | `Promise<{status, headers, body}>` | 发起 DELETE 请求 |
+| `Network.patch(url, headers?, data?, extra?)` | `Promise<{status, headers, body}>` | 发起 PATCH 请求 |
+| `Network.sendRequest(method, url, headers?, data?, extra?)` | `Promise<{status, headers, body}>` | 自定义 HTTP 动词请求 |
+| `Network.fetchBytes(method, url, headers?, data?, extra?)` | `Promise<{status, headers, body: ArrayBuffer}>` | 发起请求并以 ArrayBuffer 形式接收二进制响应体 |
+
+- `headers`：普通键值对象，值均为字符串。
+- `data`：请求体数据，可为字符串、二进制 ArrayBuffer 或对象。提交 JSON 时需自行 `JSON.stringify` 并设置 `Content-Type: application/json`。
+- 请求头包含 `headers["cache-time"] = "no"` 可要求跳过底层短期网络缓存。
+
+### Cookie 管理
+
+| API | 说明 |
 |---|---|
-| `Convert` | 字符串、二进制、Base64、Hash、HMAC、AES、RSA 等数据转换和加解密工具 |
-| `Network` | 网络请求、资源加载、请求配置和响应处理 |
-| `Html` | HTML 解析、节点查询和内容提取 |
-| `UI` | 扩展设置、交互控件和用户界面辅助能力 |
-| `Utils` | 常用工具函数 |
-| `Types` | 漫画、章节、图片、分类、设置项等运行时类型约定 |
+| `new Cookie({name, value, domain?})` | 构造 Cookie 对象 |
+| `Network.setCookies(url, cookies)` | 为指定 URL 设置 Cookie 数组 |
+| `Network.getCookies(url)` | 同步获取指定 URL 匹配的 Cookie 数组 |
+| `Network.deleteCookies(url)` | 删除指定 URL 的 Cookie |
 
-## WebSocket
+### fetch
 
-`Network.WebSocket.connect(url, headers = {}, options = {})` 建立通用 WebSocket
-连接。`options` 支持 `protocols` 和 `connectTimeoutMs`（默认 30000）。
-返回对象包含 `id`、`protocol`、`closed`、`send(data)`、`receive()` 和
-`close(code = 1000, reason = "")`。
+`fetch(url, {method?, headers?, body?})` 返回 Promise，包装了基础的 fetch 操作。返回对象提供 `ok`、`status`、`statusText`、普通对象 `headers`，以及异步方法 `text()`、`json()`、`arrayBuffer()`。
 
-`receive()` 返回 `{type: "message", data}` 或
-`{type: "close", code, reason}`。同一连接同一时刻只允许一个等待中的
-`receive()`；连接、发送和接收错误通过 Promise rejection 暴露。该 API
-仅提供文本与二进制 WebSocket transport，不包含 SignalR、重连策略或
-站点认证语义。
+### WebSocket 连接
 
-## 图片加载配置与 Header 处理契约（ImageLoadingConfig）
+`Network.WebSocket.connect(url, headers = {}, options = {})` 建立通用 WebSocket 连接。
 
-漫画源通过 `comic.onImageLoad` 与 `comic.onThumbnailLoad` 返回 `ImageLoadingConfig` 对象，为图片网络请求提供自定义配置。
+- `options` 支持：
+  - `protocols?: string[]`：子协议列表。
+  - `connectTimeoutMs?: number`：连接超时毫秒数，默认 30000。
+- 返回 `WebSocketConnection` 对象：
+  - `id` (`string`)：连接唯一标识。
+  - `protocol` (`string`)：协议。
+  - `closed` (`boolean`)：连接是否已关闭。
+  - `send(data: string | ArrayBuffer | ArrayBufferView): Promise<void>`：发送文本或二进制帧。
+  - `receive(): Promise<string | ArrayBuffer>`：等待并接收下一条消息（文本返回 string，二进制返回 ArrayBuffer）。同一时刻仅允许一个等待中的 receive。
+  - `close(code = 1000, reason = ""): Promise<void>`：关闭连接。
+- 连接断开、传输错误均通过 Promise rejection 抛出。该 API 提供基础双向传输，不内置自动重连或心跳逻辑。
 
-### 适用范围与字段支持
+## HTML 解析
 
-| 钩子函数 | 适用场景 | 支持字段 | 特殊说明 |
-|---|---|---|---|
-| `comic.onImageLoad` | 章节正文图片加载 | `url`, `headers`, `method`, `data`, `onResponse`, `modifyImage`, `onLoadFailed` | 支持失败重试；`onLoadFailed` 返回的新配置同样遵循统一 Header fallback 规则；可选接收 `target` 排版约束参数 |
-| `comic.onThumbnailLoad` | 缩略图与封面图片（首页推荐、分类浏览、搜索结果、详情页封面） | `url`, `headers`, `method`, `data` | 仅使用基础网络请求配置；`modifyImage` 与 `onLoadFailed` 在缩略图场景下不生效（被运行时忽略） |
+`new HtmlDocument(htmlString)` 解析 HTML 文本为文档树结构，解析后不执行任何内嵌脚本。
 
-### Header 解析与 User-Agent 回退规则
+| 对象与方法 | 说明 |
+|---|---|
+| `document.querySelector(selector)` | 查询首个匹配的 `HtmlElement`，无匹配返回 `null` |
+| `document.querySelectorAll(selector)` | 查询所有匹配节点，返回 `HtmlElement[]` |
+| `document.getElementById(id)` | 按 ID 查找元素 |
+| `document.dispose()` | **释放文档占用的原生内存**。提取所需数据后应显式调用 |
+| `element.text` | 元素及子节点的纯文本内容 |
+| `element.innerHTML` | 元素的内部 HTML 字符串 |
+| `element.attributes` | 属性映射字典（如 `element.attributes["href"]`） |
+| `element.children` | 子元素列表 `HtmlElement[]` |
+| `element.parent` / `previousElementSibling` / `nextElementSibling` | 节点导航 |
 
-在所有图片请求（缩略图、封面、章节正文及章节重试）中，VeneraNext 统一遵循以下 Header 解析与 fallback 契约：
+```javascript
+const doc = new HtmlDocument('<div class="list"><a href="/1">Item 1</a></div>');
+try {
+    const link = doc.querySelector("a");
+    const href = link?.attributes["href"];
+} finally {
+    doc.dispose();
+}
+```
 
-1. **Source UA 优先**：漫画源通过 `headers` 显式指定的 Header 拥有最高优先级。
-2. **Header 名大小写不敏感**：根据 HTTP 规范，Header 名称判定大小写不敏感（例如 `User-Agent`、`user-agent`、`USER-AGENT`）。只要源返回的 `headers` 中包含任意大小写形式的 `User-Agent`，运行时均严格保留源指定的 UA，绝不会被默认浏览器 UA 覆盖，也不会重复追加默认 UA。
-3. **缺省 UA fallback**：当漫画源未提供 `headers`、`headers` 为空对象，或者其中未包含任何形式的 `User-Agent` 时，运行时会自动回退补入默认客户端标识（`user-agent: webUA`）。
-4. **独立可变映射与防御校验**：解析后的 headers 统一输出为独立的新可变 Map，避免直接污染原对象；若传入了非 Map/Object 等非法 headers 类型，运行时会抛出清晰明确的异常。
+## Convert 数据转换与加解密
 
+所有 Convert 方法均为同步调用，处理二进制数据时入参与返回值采用 `ArrayBuffer`：
 
-## 章节图片排版目标（ComicImageLoadTarget）
+| API | 功能 |
+|---|---|
+| `Convert.encodeUtf8(text)` / `decodeUtf8(bytes)` | UTF-8 字符串与 ArrayBuffer 互转 |
+| `Convert.encodeGbk(text)` / `decodeGbk(bytes)` | GBK 字符串与 ArrayBuffer 互转 |
+| `Convert.encodeBase64(bytes)` / `decodeBase64(text)` | 二进制与 Base64 字符串互转 |
+| `Convert.hexEncode(bytes)` | 二进制转十六进制字符串 |
+| `Convert.md5(bytes)`、`sha1(bytes)`、`sha256(bytes)`、`sha512(bytes)` | 哈希摘要计算，返回摘要字节 ArrayBuffer |
+| `Convert.hmac(key, bytes, hash)` | HMAC 签名计算，返回 ArrayBuffer |
+| `Convert.hmacString(key, bytes, hash)` | HMAC 签名计算，返回十六进制字符串 |
+| `Convert.encryptAesEcb(bytes, key)` / `decryptAesEcb(bytes, key)` | AES-ECB 加解密 |
+| `Convert.encryptAesCbc(bytes, key, iv)` / `decryptAesCbc(bytes, key, iv)` | AES-CBC 加解密 |
+| `Convert.encryptAesCfb(bytes, key, iv, blockSize)` / `decryptAesCfb(...)` | AES-CFB 加解密 |
+| `Convert.encryptAesOfb(bytes, key, blockSize)` / `decryptAesOfb(...)` | AES-OFB 加解密 |
+| `Convert.decryptRsa(bytes, key)` | RSA PKCS#1 解密；`key` 为 Base64 编码的 PKCS#8 DER 私钥 |
+| `Convert.encodeGzip(bytes)` | **Gzip 压缩**：将输入 ArrayBuffer 压缩为 Gzip 格式字节流 |
+| `Convert.decodeGzip(bytes)` | **Gzip 解压**：将 Gzip 格式的 ArrayBuffer 解压为原始数据流 |
 
-漫画源实现 `comic.onImageLoad(url, comicId, epId, target)` 时，可接收可选的第四个参数 `target`（类型为 `ComicImageLoadTarget | null`）：
+## 图片处理与排版约束
 
-- **排版约束定位**：
-  - `target` 严格代表当前阅读器显示视口与排版容器的**布局约束**，**而非漫画源原图的原始尺寸或固有分辨率**。
-- **字段与单位**：
-  - `logicalWidth` (`number | null`)：目标显示容器的 Flutter 逻辑像素宽度（dp）。当宽度无约束时为 `null`。
-  - `logicalHeight` (`number | null`)：目标显示容器的 Flutter 逻辑像素高度（dp）。当高度无约束时为 `null`。
-  - `devicePixelRatio` (`number`)：设备像素比（DPR，如 1.0、2.0、3.0）。物理像素计算方式为 `Math.round(logicalWidth * devicePixelRatio)`。
-  - `fit` (`"contain" | "fitWidth" | "fitHeight"`)：排版适应模式。
-    - `"contain"`：双向受限（翻页或单图模式），宽高均非 `null`。
-    - `"fitWidth"`：纵向连续滚动（条漫/瀑布流），宽度对齐视口，高度为 `null`。
-    - `"fitHeight"`：横向连续滚动，高度对齐视口，宽度为 `null`。
-  - `splitWideImage` (`boolean`)：当前阅读器是否开启了大图/跨页双页拆分模式。
-- **`null` 语义与原图操作**：
-  - 在无特定 Reader 排版约束的上下文（如通用预加载、未传递 target 的调用），`target` 为 `null`。
-  - **原图操作**：保存原图、复制原图、分享原图或导出等操作均显式传入 `target: null`。
-  - **最终策略由源决定**：应用通过 `target: null` 表达请求无视口限制原图的意图，但最终的实际加载策略、分流 CDN 和返回 URL 完全由漫画源的 `onImageLoad` 自行决定。
-- **兼容性与缓存隔离**：
-  - 仅接收 `(url, comicId, epId)` 的旧源完全兼容，无需修改。
-  - 缓存机制会依据 `target` 规格（包括 `splitWideImage`）进行隔离，避免不同分辨率缓存交叉污染。
-- **应用不规定图床算法**：
-  - VeneraNext 仅向扩展提供客观的排版约束信息，不规定、不建议也不干预图床 CDN 的分辨率档位、参数转换或图片格式算法，漫画源可自由按需使用或忽略。
-## 使用建议
+### ImageLoadingConfig
 
-- 新扩展应优先使用稳定 API，避免依赖内部实现细节。
-- 网络请求参数、headers、referer 和 Cookie 处理应尽量集中封装，方便站点规则变化时维护。
-- 返回给应用的漫画、章节和图片数据应保持字段类型稳定，避免同一字段在不同请求中返回不同类型。
-- 图片加载逻辑应尽量返回可取消、可重试的请求信息，不要在脚本中做不必要的大量预下载。
-- 扩展配置应通过设置项暴露给用户，不要把账号、Cookie 或站点特定参数写死。
+`comic.onImageLoad` 与 `comic.onThumbnailLoad` 返回普通对象配置图片请求：
 
-## 维护约定
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `url` | `string?` | 实际请求图片 URL，缺省使用 image key |
+| `headers` | `object?` | 自定义 HTTP 请求头映射 |
+| `method` | `string?` | HTTP 动词，默认 GET |
+| `data` | `any?` | 请求体 |
+| `onResponse(bytes)` | `Function?` | 接收下载的原始 ArrayBuffer，返回修改后的图片 ArrayBuffer；正文与缩略图均支持 |
+| `modifyImage` | `string?` | 定义 `function modifyImage(image)` 的脚本字符串，在独立引擎内重排位图；仅章节正文有效 |
+| `onLoadFailed()` | `Function?` | 章节图片失败重试钩子，返回新的 `ImageLoadingConfig`；仅章节正文有效 |
 
-`js.en.md` 目前保留更完整的英文 API 签名和示例。后续修改 API 时应同步检查本文件：
+### Header 解析与 User-Agent 回退契约
 
-- 如果新增 API 分区，在本文件的分区表中补充说明。
-- 如果修改外部可见函数签名，在英文文档中更新签名，并在中文文档中补充迁移注意事项。
-- 如果 API 变更会影响漫画源兼容性，应同时更新 [comic_source.zh.md](comic_source.zh.md) 和 [comic_source.en.md](comic_source.en.md)。
+1. **Source UA 优先**：源显式指定的 Header 优先级最高。
+2. **大小写不敏感**：根据 HTTP 规范，匹配 `User-Agent`、`user-agent` 等任意形态。只要存在，绝不被默认 UA 覆盖。
+3. **缺省 fallback**：未指定 UA 时，自动补入应用默认浏览器标识（`user-agent: webUA`）。
+4. **独立映射**：解析后输出独立的新可变 Map，类型非法时抛出明确异常。
 
-## 相关文档
+### ComicImageLoadTarget 排版约束（仅 onImageLoad）
 
-- [漫画源开发说明（中文）](comic_source.zh.md)
-- [Comic Source Guide (English)](comic_source.en.md)
-- [JavaScript API (English)](js.en.md)
+`comic.onImageLoad(url, comicId, epId, target)` 接收第四个参数：
+
+- `logicalWidth` (`number | null`)：容器逻辑宽度（dp）；条漫左右边距生效时为扣除边距后的实际宽度。
+- `logicalHeight` (`number | null`)：容器逻辑高度（dp）。
+- `devicePixelRatio` (`number`)：屏幕 DPR。
+- `fit` (`"contain" | "fitWidth" | "fitHeight"`)：排版适应模式。
+- `splitWideImage` (`boolean`)：是否开启大图双页拆分。
+- **`target: null`**：表示无特定 Reader 视口约束（原图保存、复制、分享、通用预加载）。源根据意图决定是否提供原图。
+
+### 图片处理沙箱与 Image API
+
+`modifyImage` 脚本字符串中可使用 `Image` 对象：
+
+| 方法与属性 | 说明 |
+|---|---|
+| `image.width`、`image.height` | 图像宽高尺寸 |
+| `image.copyRange(x, y, width, height)` | 裁剪矩形区域并返回新 Image |
+| `image.copyAndRotate90()` | 旋转 90 度 |
+| `image.fillImageAt(x, y, other)` | 将另一张图粘贴到当前图指定坐标 |
+| `image.fillImageRangeAt(x, y, other, sx, sy, w, h)` | 区域复制粘贴 |
+| `Image.empty(width, height)` | 创建空白位图 |
+
+## 源数据与应用环境
+
+### 源实例方法
+
+- `this.loadData(key)`：读取当前源的持久化数据字符串。
+- `this.saveData(key, value)`：持久化保存当前源数据。
+- `this.deleteData(key)`：删除指定数据项。
+- `this.loadSetting(key)`：读取当前源设置项的值。
+- `this.isLogged`：布尔值，当前源登录状态。
+- `this.translate(text)`：查当前源词典翻译文案。
+
+### APP 全局信息与剪贴板
+
+- `APP.version`：应用当前版本号字符串（如 `"2.2.1"`）。
+- `APP.locale`：当前系统语言（如 `"zh_CN"`、`"en_US"`）。
+- `APP.platform`：当前运行平台（`"android"`、`"ios"`、`"windows"`、`"macos"`、`"linux"`）。
+- `setClipboard(text)`：异步写入系统剪贴板。
+- `getClipboard()`：异步读取系统剪贴板文本。
+
+## UI 交互
+
+| API | 说明 |
+|---|---|
+| `UI.showMessage(message)` | 底部展示短暂提示文本 |
+| `UI.showDialog(title, content, actions)` | 弹出对话框，`actions` 包含 `[{text, callback, style}]` |
+| `UI.launchUrl(url)` | 调用系统默认应用打开外部 URL |
+| `UI.showLoading(onCancel?)` | 显示全局加载指示器，返回加载框 ID |
+| `UI.cancelLoading(id)` | 关闭对应 ID 的加载指示器 |
+| `UI.showInputDialog(title, validator?, image?)` | 弹出输入框，返回 `Promise<string|null>` |
+| `UI.showSelectDialog(title, options, initialIndex?)` | 弹出单选对话框，返回 `Promise<number|null>` |
+
+## 日志、计时器与后台计算
+
+- `log(level, title, content)`：输出应用日志，级别包含 `info`、`warning`、`error`。
+- `console.log(value)`、`console.warn`、`console.error`：控制台输出。
+- `createUuid()`：生成基于时间的 UUID 字符串。
+- `randomInt(min, max)`、`randomDouble(min, max)`：生成伪随机数。
+- `setTimeout(callback, delayMs)`：一次性延时回调。
+- `setInterval(callback, delayMs)`：周期定时器，返回对象包含 `timer.cancel()`。
+- `compute(functionCode, ...args)`：在后台工作线程中执行计算密集型 JS 代码并返回结果 Promise。

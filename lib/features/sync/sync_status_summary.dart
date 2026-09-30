@@ -16,14 +16,11 @@ class SyncStatusSummary extends StatefulWidget {
   State<SyncStatusSummary> createState() => _SyncStatusSummaryState();
 }
 
-class _SyncStatusSummaryState extends State<SyncStatusSummary>
-    with WidgetsBindingObserver {
+class _SyncStatusSummaryState extends State<SyncStatusSummary> {
   @override
   void initState() {
     super.initState();
     DataSync().addListener(update);
-    WidgetsBinding.instance.addObserver(this);
-    lastCheck = DateTime.now();
   }
 
   void update() {
@@ -36,20 +33,6 @@ class _SyncStatusSummaryState extends State<SyncStatusSummary>
   void dispose() {
     super.dispose();
     DataSync().removeListener(update);
-    WidgetsBinding.instance.removeObserver(this);
-  }
-
-  late DateTime lastCheck;
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.resumed) {
-      if (DateTime.now().difference(lastCheck) > const Duration(minutes: 10)) {
-        lastCheck = DateTime.now();
-        DataSync().downloadData();
-      }
-    }
   }
 
   @override
@@ -127,12 +110,14 @@ class _SyncStatusSummaryState extends State<SyncStatusSummary>
                   ).paddingRight(4),
                 IconButton(
                   icon: const Icon(Icons.cloud_upload_outlined),
+                  tooltip: 'Upload'.tl,
                   onPressed: () async {
                     DataSync().uploadData();
                   },
                 ),
                 IconButton(
                   icon: const Icon(Icons.cloud_download_outlined),
+                  tooltip: 'Download'.tl,
                   onPressed: () async {
                     DataSync().downloadData();
                   },

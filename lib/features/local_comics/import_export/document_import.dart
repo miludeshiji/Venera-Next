@@ -27,6 +27,35 @@ class DocumentImportSession {
   final String title;
   final Directory directory;
 
+  static String findUniqueDirectoryName(String localPath, String baseName) {
+    final sanitizedBase = sanitizeFileName(
+      baseName,
+      maxLength: maxSanitizedFileNameLength,
+    );
+    var candidate = sanitizedBase;
+    var i = 1;
+    bool isTaken(String name) =>
+        Directory(FilePath.join(localPath, name)).existsSync() ||
+        File(FilePath.join(localPath, name)).existsSync();
+
+    while (isTaken(candidate)) {
+      final suffix = '($i)';
+      final stemLength = maxSanitizedFileNameLength - suffix.length;
+      candidate =
+          '${sanitizedBase.substring(0, sanitizedBase.length < stemLength ? sanitizedBase.length : stemLength)}$suffix';
+      i++;
+    }
+    return candidate;
+  }
+
+  /// Create synchronously on the caller isolate before any asynchronous copy.
+  /// Even an empty directory belongs to its writer and must never be reused.
+  static Directory allocateDirectory(String localPath, String baseName) {
+    final name = findUniqueDirectoryName(localPath, baseName);
+    return Directory(FilePath.join(localPath, name))
+      ..createSync(recursive: true);
+  }
+
   static DocumentImportSession start(String title) {
     final normalizedTitle = title.trim();
     if (normalizedTitle.isEmpty) {
@@ -36,13 +65,7 @@ class DocumentImportSession {
       throw Exception('Comic with name $normalizedTitle already exists');
     }
 
-    final localPath = LocalManager().path;
-    final directoryName = findValidDirectoryName(
-      localPath,
-      sanitizeFileName(normalizedTitle, maxLength: maxSanitizedFileNameLength),
-    );
-    final directory = Directory(FilePath.join(localPath, directoryName));
-    directory.createSync(recursive: true);
+    final directory = allocateDirectory(LocalManager().path, normalizedTitle);
     return DocumentImportSession._(
       title: normalizedTitle,
       directory: directory,
@@ -111,7 +134,9 @@ class DocumentImportSession {
     );
   }
 
-  Future<void> abort() => directory.deleteIgnoreError(recursive: true);
+  Future<void> abort() async {
+    await directory.deleteIgnoreError(recursive: true);
+  }
 
   static String _normalizeExtension(String extension) {
     final normalized = extension.startsWith('.')

@@ -3,6 +3,7 @@ import 'package:venera_next/foundation/res.dart';
 import 'package:venera_next/foundation/appdata.dart';
 import 'package:venera_next/features/local_comics/local_comics.dart';
 import 'package:venera_next/features/local_comics/import_export/import_export.dart';
+import 'package:venera_next/features/local_comics/local_storage_guard.dart';
 import 'package:venera_next/foundation/file_system.dart';
 import 'package:venera_next/network/webdav.dart';
 import 'package:webdav_client/webdav_client.dart' hide File;
@@ -344,48 +345,50 @@ class ComicBackupManager {
     var success = 0;
     var failed = 0;
     final errors = <String>[];
-    for (var i = 0; i < files.length; i++) {
-      if (isCancelled?.call() == true) break;
-      final backup = files[i];
-      onProgress?.call(i + 1, files.length, backup.name);
-      final remotePath = config.remoteFilePath(backup.name);
-      final localPath = FilePath.join(
-        App.cachePath,
-        'comic_restore_${DateTime.now().microsecondsSinceEpoch}_${backup.name}',
-      );
-      final localFile = File(localPath);
-      try {
-        await ops.downloadFile(config, remotePath, localPath);
-        late LocalComic comic;
-        final importer = importComic;
-        if (importer != null) {
-          comic = await importer(localPath);
-        } else {
-          comic = await CBZ.import(localFile);
+    return await LocalComicStorageGuard.instance.runImport(() async {
+      for (var i = 0; i < files.length; i++) {
+        if (isCancelled?.call() == true) break;
+        final backup = files[i];
+        onProgress?.call(i + 1, files.length, backup.name);
+        final remotePath = config.remoteFilePath(backup.name);
+        final localPath = FilePath.join(
+          App.cachePath,
+          'comic_restore_${DateTime.now().microsecondsSinceEpoch}_${backup.name}',
+        );
+        final localFile = File(localPath);
+        try {
+          await ops.downloadFile(config, remotePath, localPath);
+          late LocalComic comic;
+          final importer = importComic;
+          if (importer != null) {
+            comic = await importer(localPath);
+          } else {
+            comic = await CBZ.import(localFile);
+          }
+          final register = registerImportedComic;
+          if (register != null) {
+            await register(comic);
+          } else {
+            LocalManager().add(
+              comic,
+              LocalManager().findValidId(comic.comicType),
+            );
+          }
+          success++;
+        } catch (e) {
+          failed++;
+          errors.add('${backup.name}: $e');
+        } finally {
+          await localFile.deleteIgnoreError();
         }
-        final register = registerImportedComic;
-        if (register != null) {
-          await register(comic);
-        } else {
-          LocalManager().add(
-            comic,
-            LocalManager().findValidId(comic.comicType),
-          );
-        }
-        success++;
-      } catch (e) {
-        failed++;
-        errors.add('${backup.name}: $e');
-      } finally {
-        await localFile.deleteIgnoreError();
       }
-    }
-    return BackupResult(
-      success: success,
-      skipped: 0,
-      failed: failed,
-      errors: errors,
-    );
+      return BackupResult(
+        success: success,
+        skipped: 0,
+        failed: failed,
+        errors: errors,
+      );
+    });
   }
 
   static Future<Res<bool>> deleteBackup(BackupFile file) async {

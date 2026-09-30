@@ -1,571 +1,189 @@
-# Javascript API
+# JavaScript API Reference
 
-## Overview
+[中文版本](js.zh.md) · [Comic Source Development Guide](comic_source.en.md) · [Documentation Index](../README.en.md#developer-api)
 
-The Javascript API is a set of functions that used to interact application.
+This document describes the JavaScript extension runtime API for VeneraNext. Function names and invocations follow [assets/init.js](../../assets/init.js) and the host implementation in [js_engine.dart](../../lib/foundation/js_engine.dart).
 
-There are following parts in the API:
-- [Convert](#Convert)
-- [Network](#Network)
-- [Html](#Html)
-- [UI](#UI)
-- [Utils](#Utils)
-- [Types](#Types)
+## Runtime Environment
 
-
-## Convert
-
-Convert is a set of functions that used to convert data between different types.
-
-### `Convert.encodeUtf8(str: string): ArrayBuffer`
-
-Convert a string to an ArrayBuffer.
-
-### `Convert.decodeUtf8(value: ArrayBuffer): string`
-
-Convert an ArrayBuffer to a string.
-
-### `Convert.encodeBase64(value: ArrayBuffer): string`
-
-Convert an ArrayBuffer to a base64 string.
-
-### `Convert.decodeBase64(value: string): ArrayBuffer`
-
-Convert a base64 string to an ArrayBuffer.
-
-### `Convert.md5(value: ArrayBuffer): ArrayBuffer`
-
-Calculate the md5 hash of an ArrayBuffer.
-
-### `Convert.sha1(value: ArrayBuffer): ArrayBuffer`
-
-Calculate the sha1 hash of an ArrayBuffer.
-
-### `Convert.sha256(value: ArrayBuffer): ArrayBuffer`
-
-Calculate the sha256 hash of an ArrayBuffer.
-
-### `Convert.sha512(value: ArrayBuffer): ArrayBuffer`
-
-Calculate the sha512 hash of an ArrayBuffer.
-
-### `Convert.hmac(key: ArrayBuffer, value: ArrayBuffer, hash: string): ArrayBuffer`
-
-Calculate the hmac hash of an ArrayBuffer.
-
-### `Convert.hmacString(key: ArrayBuffer, value: ArrayBuffer, hash: string): string`
-
-Calculate the hmac hash of an ArrayBuffer and return a string.
-
-### `Convert.decryptAesEcb(value: ArrayBuffer, key: ArrayBuffer): ArrayBuffer`
-
-Decrypt an ArrayBuffer with AES ECB mode.
-
-### `Convert.decryptAesCbc(value: ArrayBuffer, key: ArrayBuffer, iv: ArrayBuffer): ArrayBuffer`
-
-Decrypt an ArrayBuffer with AES CBC mode.
-
-### `Convert.decryptAesCfb(value: ArrayBuffer, key: ArrayBuffer, iv: ArrayBuffer): ArrayBuffer`
-
-Decrypt an ArrayBuffer with AES CFB mode.
-
-### `Convert.decryptAesOfb(value: ArrayBuffer, key: ArrayBuffer, iv: ArrayBuffer): ArrayBuffer`
-
-Decrypt an ArrayBuffer with AES OFB mode.
-
-### `Convert.decryptRsa(value: ArrayBuffer, key: ArrayBuffer): ArrayBuffer`
-
-Decrypt an ArrayBuffer with RSA.
-
-### `Convert.hexEncode(value: ArrayBuffer): string`
-
-Convert an ArrayBuffer to a hex string.
+Source scripts run within the QuickJS engine, supporting standard ES2020 JavaScript features along with application-specific APIs documented here. The environment does not provide Node.js native modules or browser DOM globals. For cross-bridge data exchange, use standard primitive types (strings, numbers, booleans, plain objects, and arrays); use `ArrayBuffer` for binary data.
 
 ## Network
 
-Network is a set of functions that used to send network requests and manage network resources.
-
-### `Network.fetchBytes(method: string, url: string, headers: object, data: ArrayBuffer): Promise<{status: number, headers: object, body: ArrayBuffer}>`
-
-Send a network request and return the response as an ArrayBuffer.
-
-### `Network.sendRequest(method: string, url: string, headers: object, data: ArrayBuffer): Promise<{status: number, headers: object, body: string}>`
-
-Send a network request and return the response as a string.
-
-### `Network.get(url: string, headers: object): Promise<{status: number, headers: object, body: string}>`
-
-Send a GET request and return the response as a string.
-
-### `Network.post(url: string, headers: object, data: ArrayBuffer): Promise<{status: number, headers: object, body: string}>`
-
-Send a POST request and return the response as a string.
-
-### `Network.put(url: string, headers: object, data: ArrayBuffer): Promise<{status: number, headers: object, body: string}>`
-
-Send a PUT request and return the response as a string.
-
-### `Network.delete(url: string, headers: object): Promise<{status: number, headers: object, body: string}>`
-
-Send a DELETE request and return the response as a string.
-
-### `Network.patch(url: string, headers: object, data: ArrayBuffer): Promise<{status: number, headers: object, body: string}>`
-
-Send a PATCH request and return the response as a string.
-
-### `Network.setCookies(url: string, cookies: Cookie[]): void`
-
-Set cookies for a specific url.
-
-### `Network.getCookies(url: string): Cookie[]`
-
-Get cookies for a specific url.
-
-### `Network.deleteCookies(url: string): void`
-
-Delete cookies for a specific url.
-
-### `Network.WebSocket.connect(url: string, headers?: object, options?: {protocols?: string[], connectTimeoutMs?: number}): Promise<WebSocketConnection>`
-
-Creates a generic WebSocket connection. The returned object exposes `id`,
-`protocol`, `closed`, `send(data)`, `receive()`, and
-`close(code = 1000, reason = "")`.
-
-`receive()` resolves to `{type: "message", data}` for text or binary frames, or
-`{type: "close", code, reason}` when the peer closes the connection. Only one
-pending `receive()` is allowed per connection. Connection, send, and receive
-failures reject their promises.
-
-This API is transport only. It does not implement SignalR, reconnection policy,
-or site-specific authentication semantics.
-
-### `fetch`
-
-The fetch function is a wrapper of the `Network.fetchBytes` function. Same as the `fetch` function in the browser.
-
-## Html
-
-Api for parsing HTML.
-
-### `new HtmlDocument(html: string): HtmlDocument`
-
-Create a HtmlDocument object from a html string.
-
-### `HtmlDocument.querySelector(selector: string): HtmlElement`
-
-Find the first element that matches the selector.
-
-### `HtmlDocument.querySelectorAll(selector: string): HtmlElement[]`
-
-Find all elements that match the selector.
-
-### `HtmlDocument.getElementById(id: string): HtmlElement`
-
-Find the element with the id.
-
-### `HtmlDocument.dispose(): void`
-
-Dispose the HtmlDocument object.
-
-### `HtmlElement.querySelector(selector: string): HtmlElement`
-
-Find the first element that matches the selector.
-
-### `HtmlElement.querySelectorAll(selector: string): HtmlElement[]`
-
-Find all elements that match the selector.
-
-### `HtmlElement.getElementById(id: string): HtmlElement`
-
-Find the element with the id.
-
-### `get HtmlElement.text(): string`
-
-Get the text content of the element.
-
-### `get HtmlElement.attributes(): object`
-
-Get the attributes of the element.
-
-### `get HtmlElement.children(): HtmlElement[]`
-
-Get the children
-
-### `get HtmlElement.nodes(): HtmlNode[]`
-
-Get the child nodes
-
-### `get HtmlElement.parent(): HtmlElement | null`
-
-Get the parent element
-
-### `get HtmlElement.innerHtml(): string`
-
-Get the inner html
-
-### `get HtmlElement.classNames(): string[]`
-
-Get the class names
-
-### `get HtmlElement.id(): string | null`
-
-Get the id
-
-### `get HtmlElement.localName(): string`
-
-Get the local name
-
-### `get HtmlElement.previousSibling(): HtmlElement | null`
-
-Get the previous sibling
-
-### `get HtmlElement.nextSibling(): HtmlElement | null`
-
-Get the next sibling
-
-### `get HtmlNode.type(): string`
-
-Get the node type ("text", "element", "comment", "document", "unknown")
-
-### `HtmlNode.toElement(): HtmlElement | null`
-
-Convert the node to an element
-
-### `get HtmlNode.text(): string`
-
-Get the text content of the node
-
-## UI
-
-### `UI.showMessage(message: string): void`
-
-Show a message.
-
-### `UI.showDialog(title: string, content: string, actions: {text: string, callback: () => void | Promise<void>, style: "text"|"filled"|"danger"}[]): void`
-
-Show a dialog. Any action will close the dialog.
-
-### `UI.launchUrl(url: string): void`
-
-Open a url in external browser.
-
-### `UI.showLoading(onCancel: () => void | null | undefined): number`
-
-Show a loading dialog.
-
-### `UI.cancelLoading(id: number): void`
-
-Cancel a loading dialog.
-
-### `UI.showInputDialog(title: string, validator: (string) => string | null | undefined): string | null`
-
-Show an input dialog.
-
-### `UI.showSelectDialog(title: string, options: string[], initialIndex?: number): number | null`
-
-Show a select dialog.
-
-## Utils
-
-### `createUuid(): string`
-
-create a time-based uuid.
-
-### `randomInt(min: number, max: number): number`
-
-Generate a random integer between min and max.
-
-### `randomDouble(min: number, max: number): number`
-
-Generate a random double between min and max.
-
-### console
-
-Send log to application console. Same api as the browser console.
-
-## Types
-
-### `Cookie`
+All network functions return Promises. Transport errors throw exceptions. HTTP 4xx and 5xx responses resolve to standard response objects; extensions must inspect `status` directly.
+
+| Method | Returns | Description |
+|---|---|---|
+| `Network.get(url, headers?, extra?)` | `Promise<{status, headers, body}>` | Sends a GET request; `body` is a string |
+| `Network.post(url, headers?, data?, extra?)` | `Promise<{status, headers, body}>` | Sends a POST request |
+| `Network.put(url, headers?, data?, extra?)` | `Promise<{status, headers, body}>` | Sends a PUT request |
+| `Network.delete(url, headers?, extra?)` | `Promise<{status, headers, body}>` | Sends a DELETE request |
+| `Network.patch(url, headers?, data?, extra?)` | `Promise<{status, headers, body}>` | Sends a PATCH request |
+| `Network.sendRequest(method, url, headers?, data?, extra?)` | `Promise<{status, headers, body}>` | Sends an arbitrary HTTP method request |
+| `Network.fetchBytes(method, url, headers?, data?, extra?)` | `Promise<{status, headers, body: ArrayBuffer}>` | Sends a request and receives the response body as an `ArrayBuffer` |
+
+- `headers`: A plain key-value object of strings.
+- `data`: Request body (string, ArrayBuffer, or object). When sending JSON, explicitly call `JSON.stringify` and set `Content-Type: application/json`.
+- Setting `headers["cache-time"] = "no"` bypasses the short-term network cache.
+
+### Cookie Management
+
+| Method | Description |
+|---|---|
+| `new Cookie({name, value, domain?})` | Constructs a Cookie object |
+| `Network.setCookies(url, cookies)` | Persists an array of Cookies for the specified URL |
+| `Network.getCookies(url)` | Synchronously returns matching Cookies for a URL |
+| `Network.deleteCookies(url)` | Deletes stored Cookies for a URL |
+
+### fetch
+
+`fetch(url, {method?, headers?, body?})` wraps basic HTTP requests, returning a Promise that resolves to an object with `ok`, `status`, `statusText`, `headers` (plain object), and async methods `text()`, `json()`, and `arrayBuffer()`.
+
+### WebSocket
+
+`Network.WebSocket.connect(url, headers = {}, options = {})` establishes a general-purpose WebSocket connection.
+
+- `options`:
+  - `protocols?: string[]`: Subprotocols.
+  - `connectTimeoutMs?: number`: Connection timeout in milliseconds (default 30000).
+- Returns a `WebSocketConnection` object:
+  - `id` (`string`): Connection identifier.
+  - `protocol` (`string`): Selected subprotocol.
+  - `closed` (`boolean`): Whether the connection is closed.
+  - `send(data: string | ArrayBuffer | ArrayBufferView): Promise<void>`: Sends text or binary frames.
+  - `receive(): Promise<string | ArrayBuffer>`: Waits for and receives the next incoming frame (text returns `string`, binary returns `ArrayBuffer`). Only one pending `receive()` is allowed at a time.
+  - `close(code = 1000, reason = ""): Promise<void>`: Closes the connection.
+- Transport and protocol errors reject their respective Promises. This API provides raw bidirectional transport without built-in reconnection or heartbeat logic.
+
+## HTML Parsing
+
+`new HtmlDocument(htmlString)` parses an HTML string into a DOM tree without executing scripts.
+
+| Member | Description |
+|---|---|
+| `document.querySelector(selector)` | Returns the first matching `HtmlElement` or `null` |
+| `document.querySelectorAll(selector)` | Returns all matching nodes as `HtmlElement[]` |
+| `document.getElementById(id)` | Finds an element by ID |
+| `document.dispose()` | **Frees native memory**. Call explicitly after extracting necessary data |
+| `element.text` | Text content of the element and its children |
+| `element.innerHTML` | Inner HTML string of the element |
+| `element.attributes` | Attribute map (e.g. `element.attributes["href"]`) |
+| `element.children` | Child elements as `HtmlElement[]` |
+| `element.parent` / `previousElementSibling` / `nextElementSibling` | Node navigation |
 
 ```javascript
-/**
- * Create a cookie object.
- * @param name {string}
- * @param value {string}
- * @param domain {string}
- * @constructor
- */
-function Cookie({name, value, domain}) {
-    this.name = name;
-    this.value = value;
-    this.domain = domain;
+const doc = new HtmlDocument('<div class="list"><a href="/item">Title</a></div>');
+try {
+    const link = doc.querySelector("a");
+    const href = link?.attributes["href"];
+} finally {
+    doc.dispose();
 }
 ```
 
-### `Comic`
+## Convert: Encoding, Hashing, and Cryptography
 
-```javascript
-/**
- * Create a comic object
- * @param id {string}
- * @param title {string}
- * @param subtitle {string}
- * @param subTitle {string} - equal to subtitle
- * @param cover {string}
- * @param tags {string[]}
- * @param description {string}
- * @param maxPage {number?}
- * @param language {string?}
- * @param favoriteId {string?} - Only set this field if the comic is from favorites page
- * @param stars {number?} - 0-5, double
- * @constructor
- */
-function Comic({id, title, subtitle, subTitle, cover, tags, description, maxPage, language, favoriteId, stars}) {
-    this.id = id;
-    this.title = title;
-    this.subtitle = subtitle;
-    this.subTitle = subTitle;
-    this.cover = cover;
-    this.tags = tags;
-    this.description = description;
-    this.maxPage = maxPage;
-    this.language = language;
-    this.favoriteId = favoriteId;
-    this.stars = stars;
-}
-```
+All `Convert` functions execute synchronously and operate on `ArrayBuffer` for binary payloads:
 
-### `ComicDetails`
-```javascript
-/**
- * Create a comic details object
- * @param title {string}
- * @param subtitle {string}
- * @param subTitle {string} - equal to subtitle
- * @param cover {string}
- * @param description {string?}
- * @param tags {Map<string, string[]> | {} | null | undefined}
- * @param chapters {Map<string, string> | {} | null | undefined} - key: chapter id, value: chapter title
- * @param isFavorite {boolean | null | undefined} - favorite status. If the comic source supports multiple folders, this field should be null
- * @param subId {string?} - a param which is passed to comments api
- * @param thumbnails {string[]?} - for multiple page thumbnails, set this to null, and use `loadThumbnails` api to load thumbnails
- * @param recommend {Comic[]?} - related comics
- * @param commentCount {number?}
- * @param likesCount {number?}
- * @param isLiked {boolean?}
- * @param uploader {string?}
- * @param updateTime {string?}
- * @param uploadTime {string?}
- * @param url {string?}
- * @param stars {number?} - 0-5, double
- * @param maxPage {number?}
- * @param comments {Comment[]?}- `since 1.0.7` App will display comments in the details page.
- * @constructor
- */
-function ComicDetails({title, subtitle, subTitle, cover, description, tags, chapters, isFavorite, subId, thumbnails, recommend, commentCount, likesCount, isLiked, uploader, updateTime, uploadTime, url, stars, maxPage, comments}) {
-    this.title = title;
-    this.subtitle = subtitle ?? subTitle;
-    this.cover = cover;
-    this.description = description;
-    this.tags = tags;
-    this.chapters = chapters;
-    this.isFavorite = isFavorite;
-    this.subId = subId;
-    this.thumbnails = thumbnails;
-    this.recommend = recommend;
-    this.commentCount = commentCount;
-    this.likesCount = likesCount;
-    this.isLiked = isLiked;
-    this.uploader = uploader;
-    this.updateTime = updateTime;
-    this.uploadTime = uploadTime;
-    this.url = url;
-    this.stars = stars;
-    this.maxPage = maxPage;
-    this.comments = comments;
-}
-```
+| API | Function |
+|---|---|
+| `Convert.encodeUtf8(text)` / `decodeUtf8(bytes)` | UTF-8 string to/from ArrayBuffer |
+| `Convert.encodeGbk(text)` / `decodeGbk(bytes)` | GBK string to/from ArrayBuffer |
+| `Convert.encodeBase64(bytes)` / `decodeBase64(text)` | Binary to/from Base64 string |
+| `Convert.hexEncode(bytes)` | Binary to hexadecimal string |
+| `Convert.md5(bytes)`, `sha1`, `sha256`, `sha512` | Cryptographic hash digests returning ArrayBuffer |
+| `Convert.hmac(key, bytes, hash)` | HMAC digest returning ArrayBuffer |
+| `Convert.hmacString(key, bytes, hash)` | HMAC digest returning hexadecimal string |
+| `Convert.encryptAesEcb(bytes, key)` / `decryptAesEcb(...)` | AES-ECB cipher |
+| `Convert.encryptAesCbc(bytes, key, iv)` / `decryptAesCbc(...)` | AES-CBC cipher |
+| `Convert.encryptAesCfb(bytes, key, iv, blockSize)` / `decryptAesCfb(...)` | AES-CFB cipher |
+| `Convert.encryptAesOfb(bytes, key, blockSize)` / `decryptAesOfb(...)` | AES-OFB cipher |
+| `Convert.decryptRsa(bytes, key)` | RSA PKCS#1 decryption with Base64 PKCS#8 private key |
+| `Convert.encodeGzip(bytes)` | **Gzip compression**: compresses an ArrayBuffer to a Gzip byte stream |
+| `Convert.decodeGzip(bytes)` | **Gzip decompression**: decompresses a Gzip ArrayBuffer to raw bytes |
 
-### `Comment`
-```javascript
-/**
- * Create a comment object
- * @param userName {string}
- * @param avatar {string?}
- * @param content {string}
- * @param time {string?}
- * @param replyCount {number?}
- * @param id {string?}
- * @param isLiked {boolean?}
- * @param score {number?}
- * @param voteStatus {number?} - 1: upvote, -1: downvote, 0: none
- * @constructor
- */
-function Comment({userName, avatar, content, time, replyCount, id, isLiked, score, voteStatus}) {
-    this.userName = userName;
-    this.avatar = avatar;
-    this.content = content;
-    this.time = time;
-    this.replyCount = replyCount;
-    this.id = id;
-    this.isLiked = isLiked;
-    this.score = score;
-    this.voteStatus = voteStatus;
-}
-```
+## Image Handling and Layout Constraints
 
-### `ImageLoadingConfig`
-```javascript
-/**
- * Create image loading config
- *
- * Applicable Scopes:
- * - `comic.onImageLoad(url, comicId, epId, target)`: Used for chapter images. Supports all fields.
- *   When chapter loading fails, `onLoadFailed` can return a new `ImageLoadingConfig` to retry,
- *   which follows the exact same header fallback rules.
- * - `comic.onThumbnailLoad(url)`: Used for thumbnails and covers (explore/recommendations,
- *   category/browse lists, search results, and comic detail covers). Only network request fields
- *   (`url`, `headers`, `method`, `data`) are supported; `modifyImage` and `onLoadFailed` are ignored.
- *
- * Header Resolution & User-Agent Fallback Contract:
- * - Source headers take precedence: Headers explicitly provided by the comic source have highest priority.
- * - Case-insensitive header matching: HTTP header names are case-insensitive (e.g. `User-Agent`, `user-agent`).
- *   If any casing of `User-Agent` is specified in `headers`, VeneraNext preserves the source-specified UA and will
- *   NOT overwrite or duplicate it with the default User-Agent.
- * - Default UA fallback: When `headers` is missing, empty, or does not include any `User-Agent`, VeneraNext falls
- *   back to adding `user-agent: webUA`.
- * - Parsed headers are normalized into a new mutable map. Invalid non-map headers types will throw an exception.
- *
- * @param url {string?}
- * @param method {string?} - http method, uppercase
- * @param data {any} - request data, may be null
- * @param headers {Object?} - request headers
- * @param onResponse {((ArrayBuffer) => ArrayBuffer)?} - modify response data
- * @param modifyImage {string?}
- *  A js script string.
- *  The script will be executed in a new Isolate.
- *  A function named `modifyImage` should be defined in the script, which receives an [Image] as the only argument, and returns an [Image]..
- * @param onLoadFailed {(() => ImageLoadingConfig)?} - called when the image loading failed (supported in chapter images only)
- * @constructor
- * @since 1.0.5
- *
- * To keep the compatibility with the old version, do not use the constructor. Consider creating a new object with the properties directly.
- */
-function ImageLoadingConfig({url, method, data, headers, onResponse, modifyImage, onLoadFailed}) {
-    this.url = url;
-    this.method = method;
-    this.data = data;
-    this.headers = headers;
-    this.onResponse = onResponse;
-    this.modifyImage = modifyImage;
-    this.onLoadFailed = onLoadFailed;
-}
-```
+### ImageLoadingConfig
 
-### `ComicImageLoadTarget`
+`comic.onImageLoad` and `comic.onThumbnailLoad` return configuration objects:
 
-```javascript
-/**
- * Display and layout target constraints passed as the optional 4th parameter to `comic.onImageLoad(url, comicId, epId, target)`.
- * Note: `target` reflects reader layout/viewport constraints, NOT the intrinsic dimensions or original size of the comic image.
- *
- * @typedef {Object} ComicImageLoadTarget
- * @property {number | null} logicalWidth - Display width in Flutter logical pixels (dp). null if unconstrained (e.g. continuous horizontal scroll).
- * @property {number | null} logicalHeight - Display height in Flutter logical pixels (dp). null if unconstrained (e.g. continuous vertical scroll / waterfall).
- * @property {number} devicePixelRatio - Screen device pixel ratio (e.g. 1.0, 2.0, 3.0). Multiply logical dimensions by this to compute physical pixels: Math.round(logical * dpr).
- * @property {"contain" | "fitWidth" | "fitHeight"} fit - Display fitting mode.
- *   - "contain": bounded in both dimensions (page flip mode, gallery single page, split dual-page).
- *   - "fitWidth": width is aligned to viewport, height is unbounded (vertical continuous / waterfall).
- *   - "fitHeight": height is aligned to viewport, width is unbounded (horizontal continuous scroll).
- * @property {boolean} splitWideImage - Whether wide image / dual-page spread splitting is enabled in the reader.
- *
- * Notes:
- * - Null semantics & Original images: `target` is null when loaded outside specific reader layout constraints. Original image operations (Save Image, Copy Image, Share Image, export, or generic background preloading) pass `target: null`.
- * - Final strategy decided by the source: The app signals unconstrained/original intent via `target: null`, but the comic source's `onImageLoad` ultimately decides the final request headers, CDN selection, and returned URL (e.g. returning uncompressed original images or maintaining default CDN strategy).
- * - Compatibility: Existing comic sources with 3 parameters (url, comicId, epId) continue to work without modification.
- * - Cache isolation: Caches with target constraints (including `splitWideImage`) are isolated to prevent cross-resolution pollution.
- * - No prescribed host algorithm: Venera does not prescribe CDN algorithms, resolution tiers, or scaling formulas. The app provides layout constraints only; comic sources may freely use or ignore them.
- */
-```
+| Field | Type | Description |
+|---|---|---|
+| `url` | `string?` | Image URL; defaults to image key |
+| `headers` | `object?` | Custom HTTP headers map |
+| `method` | `string?` | HTTP method (default GET) |
+| `data` | `any?` | Request body |
+| `onResponse(bytes)` | `Function?` | Transforms response ArrayBuffer; supported for both chapter and thumbnail images |
+| `modifyImage` | `string?` | Script string defining `function modifyImage(image)` for pixel manipulation; chapter images only |
+| `onLoadFailed()` | `Function?` | Retry hook returning a new `ImageLoadingConfig`; chapter images only |
 
-### `ComicSource`
-```javascript
-class ComicSource {
-    name = ""
+### Header Parsing and User-Agent Fallback Contract
 
-    key = ""
+1. **Source UA Priority**: Custom User-Agent headers declared in `headers` take highest precedence.
+2. **Case-Insensitive Lookup**: Matches `User-Agent`, `user-agent`, or any casing. If provided, it is strictly preserved without being overwritten by the default UA.
+3. **Default Fallback**: If `headers` is omitted or contains no User-Agent, the runtime supplies the default browser identifier (`user-agent: webUA`).
+4. **Independent Map**: Output headers are placed in a new, independent mutable map; invalid input types throw explicit exceptions.
 
-    version = ""
+### ComicImageLoadTarget Layout Constraints (onImageLoad Only)
 
-    minAppVersion = ""
+`comic.onImageLoad(url, comicId, epId, target)` receives an optional fourth parameter:
 
-    url = ""
+- `logicalWidth` (`number | null`): container logical width in dp; reflects width after side-margin deduction when enabled.
+- `logicalHeight` (`number | null`): container logical height in dp.
+- `devicePixelRatio` (`number`): screen DPR.
+- `fit` (`"contain" | "fitWidth" | "fitHeight"`): layout adaptation mode.
+- `splitWideImage` (`boolean`): whether dual-page split mode is enabled.
+- **`target: null`**: indicates no specific viewport constraints (e.g. Save Original, Copy Original, Share Original, general preloading).
 
-    /**
-     * load data with its key
-     * @param {string} dataKey
-     * @returns {any}
-     */
-    loadData(dataKey) {
-        return sendMessage({
-            method: 'load_data',
-            key: this.key,
-            data_key: dataKey
-        })
-    }
+### The `Image` Object (inside `modifyImage`)
 
-    /**
-     * load a setting with its key
-     * @param key {string}
-     * @returns {any}
-     */
-    loadSetting(key) {
-        return sendMessage({
-            method: 'load_setting',
-            key: this.key,
-            setting_key: key
-        })
-    }
+| Property / Method | Description |
+|---|---|
+| `image.width`, `image.height` | Image dimensions |
+| `image.copyRange(x, y, width, height)` | Crops a sub-region into a new `Image` |
+| `image.copyAndRotate90()` | Rotates the image 90 degrees |
+| `image.fillImageAt(x, y, other)` | Pastes another image at given coordinates |
+| `image.fillImageRangeAt(x, y, other, sx, sy, w, h)` | Copies a sub-region from another image |
+| `Image.empty(width, height)` | Creates an empty blank image |
 
-    /**
-     * save data
-     * @param {string} dataKey
-     * @param data
-     */
-    saveData(dataKey, data) {
-        return sendMessage({
-            method: 'save_data',
-            key: this.key,
-            data_key: dataKey,
-            data: data
-        })
-    }
+## Source Storage and Environment
 
-    /**
-     * delete data
-     * @param {string} dataKey
-     */
-    deleteData(dataKey) {
-        return sendMessage({
-            method: 'delete_data',
-            key: this.key,
-            data_key: dataKey,
-        })
-    }
+### Instance Methods
 
-    /**
-     *
-     * @returns {boolean}
-     */
-    get isLogged() {
-        return sendMessage({
-            method: 'isLogged',
-            key: this.key,
-        });
-    }
+- `this.loadData(key)`: Reads persisted string data for this source.
+- `this.saveData(key, value)`: Persists data for this source.
+- `this.deleteData(key)`: Deletes a stored item.
+- `this.loadSetting(key)`: Reads a source setting value.
+- `this.isLogged`: Boolean indicating login status.
+- `this.translate(text)`: Looks up translation in the source's dictionary.
 
-    init() { }
+### APP Global Information & Clipboard
 
-    static sources = {}
-}
-```
+- `APP.version`: Application version string (e.g. `"2.2.1"`).
+- `APP.locale`: Current locale string (e.g. `"zh_CN"`, `"en_US"`).
+- `APP.platform`: Operating system (`"android"`, `"ios"`, `"windows"`, `"macos"`, `"linux"`).
+- `setClipboard(text)`: Writes string to system clipboard.
+- `getClipboard()`: Reads text from system clipboard.
+
+## UI Interactions
+
+| Method | Description |
+|---|---|
+| `UI.showMessage(message)` | Shows a toast message |
+| `UI.showDialog(title, content, actions)` | Displays an alert dialog with action buttons |
+| `UI.launchUrl(url)` | Opens an external URL in the system browser |
+| `UI.showLoading(onCancel?)` | Displays a global loading overlay and returns an ID |
+| `UI.cancelLoading(id)` | Dismisses a loading overlay |
+| `UI.showInputDialog(title, validator?, image?)` | Prompts for text input; returns `Promise<string|null>` |
+| `UI.showSelectDialog(title, options, initialIndex?)` | Displays a selection dialog; returns `Promise<number|null>` |
+
+## Logging, Timers, and Background Computation
+
+- `log(level, title, content)`: Logs to application logger (`info`, `warning`, `error`).
+- `console.log(value)`, `console.warn`, `console.error`: Console output.
+- `createUuid()`: Generates a new time-based UUID string.
+- `randomInt(min, max)`, `randomDouble(min, max)`: Generates pseudo-random numbers.
+- `setTimeout(callback, delayMs)`: One-shot delayed callback.
+- `setInterval(callback, delayMs)`: Recurring timer with `timer.cancel()`.
+- `compute(functionCode, ...args)`: Runs heavy JS compute logic in a background worker isolate and resolves the result.

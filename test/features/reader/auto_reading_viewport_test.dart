@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:photo_view/photo_view.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:venera_next/components/message.dart';
 import 'package:venera_next/features/comic_source/models.dart';
@@ -63,6 +64,7 @@ void main() {
           settings['showPageNumberInReader'] = false;
           settings['eInkMode'] = false;
           settings['limitImageWidth'] = false;
+          settings['readerSideMargin'] = 20;
           settings['language'] = 'en-US';
           LocalManager.resetForTesting();
           LocalManager.debugSkipComicSourceInit = true;
@@ -136,6 +138,42 @@ void main() {
             isTrue,
           );
           settings['longPressAction'] = 'zoom';
+          if (!mode.isGallery) {
+            PhotoView flowPhoto() => tester.widget<PhotoView>(
+              find.byWidgetPredicate(
+                (widget) => widget is PhotoView && widget.childSize != null,
+              ),
+            );
+            final expectedWidth =
+                reader.size.width * (mode.isTopToBottom ? 0.6 : 1.0);
+            expect(flowPhoto().childSize!.width, closeTo(expectedWidth, 0.01));
+            final chapter = reader.chapter;
+            final page = reader.page;
+            settings['readerSideMargin'] = 0;
+            reader.update();
+            await pumpFrames(10);
+            expect(flowPhoto().childSize!.width, reader.size.width);
+            settings['readerSideMargin'] = 30;
+            settings['limitImageWidth'] = true;
+            reader.update();
+            await pumpFrames(10);
+            final limitedWidth =
+                mode.isTopToBottom &&
+                    reader.size.width / reader.size.height > 0.7
+                ? reader.size.height * 0.7
+                : reader.size.width;
+            expect(
+              flowPhoto().childSize!.width,
+              closeTo(limitedWidth * (mode.isTopToBottom ? 0.4 : 1.0), 0.01),
+            );
+            settings['limitImageWidth'] = false;
+            settings['readerSideMargin'] = 20;
+            reader.update();
+            await pumpFrames(10);
+            expect(flowPhoto().childSize!.width, closeTo(expectedWidth, 0.01));
+            expect(reader.chapter, chapter);
+            expect(reader.page, page);
+          }
           await tester.longPressAt(const Offset(400, 250));
           await pumpFrames(20);
           expect(reader.autoReading.isActive, isFalse);

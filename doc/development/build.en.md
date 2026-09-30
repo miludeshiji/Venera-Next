@@ -60,6 +60,7 @@ Run at least the following before submitting code:
 
 ```bash
 python .github/scripts/check_structure_imports.py
+dart tool/check_git_dependencies.dart
 flutter analyze --no-pub
 flutter test --no-pub
 git diff --check
@@ -124,8 +125,18 @@ flutter pub get --enforce-lockfile
 flutter build ios --release --no-codesign --no-pub
 ```
 
-The release workflow builds the Windows installer and portable package; this repository does not maintain winget manifests or public package-manager entries.
+### Linux Debian Packaging
 
+Linux Debian packages are built using the host system `dpkg-deb` utility and the project script `debian/build.py`:
+
+```bash
+flutter build linux --release --no-pub
+python debian/build.py --skip-build
+```
+
+Built packages are placed in `build/linux/{x64,arm64}/release/debian/`. This approach replaces the legacy `flutter_to_debian` dependency and avoids global Git package activation.
+
+The release workflow builds the Windows installer and portable package; this repository does not maintain winget manifests or public package-manager entries.
 ## GitHub Actions and Release Versions
 
 Repository workflows handle continuous integration, manual builds, tag releases, and distribution metadata. The release version is maintained centrally in `release.json`:
@@ -155,7 +166,7 @@ Android release workflows require these repository Secrets:
 - `ANDROID_KEYSTORE`: Base64 content of the keystore file
 - `ANDROID_KEY_PROPERTIES`: text content of `key.properties`
 
-After a stable release, the AltStore workflow reuses the fixed `automation/update-altstore` branch and creates a pull request. Configure `ALTSTORE_PR_TOKEN` with permission to push a branch and create pull requests in this repository; when it is not configured, the workflow falls back to `WINGET_PKGS_TOKEN`. A missing token or failed PR creation now fails the job instead of reporting success with only an orphan branch.
+As an independent personal fork (miludeshiji), upstream AltStore release automation, repository metadata, and pull-request generation have been completely removed. This repository does not provide a public AltStore source.
 
 AI issue checking is disabled by default. After confirming that `API_URL` and `API_KEY` work, set the repository variable `ENABLE_AI_ISSUE_CHECK` to `true`; `ISSUE_CHECK_MODEL` can override the default model. The workflow posts summaries and close recommendations only and never closes an issue automatically.
 

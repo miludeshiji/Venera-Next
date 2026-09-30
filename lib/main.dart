@@ -19,6 +19,7 @@ import 'foundation/appdata.dart';
 import 'foundation/context.dart';
 import 'foundation/js_engine.dart';
 import 'features/webdav_library/webdav_library.dart';
+import 'features/sync/sync.dart';
 
 void main(List<String> args) {
   if (args.contains('--headless')) {
@@ -98,6 +99,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      DataSync().checkForAutomaticSync();
       WebDavLibrarySource.checkForAutomaticSync();
     }
     if (!App.isMobile || !appdata.settings['authorizationRequired']) {

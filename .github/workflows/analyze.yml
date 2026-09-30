@@ -31,6 +31,7 @@ jobs:
       - run: python3 .github/scripts/check_structure_imports.py
       - run: python3 -m unittest discover -s .github/scripts/tests -p "test_*.py"
       - run: flutter pub get --enforce-lockfile
+      - run: dart tool/check_git_dependencies.dart
       - name: 检查 Dart 格式
         run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze --no-fatal-infos --fatal-warnings

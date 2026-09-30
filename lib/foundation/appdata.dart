@@ -406,6 +406,7 @@ class Settings with ChangeNotifier {
     'longPressZoomPosition': "press", // press, center
     'checkUpdateOnStart': false,
     'limitImageWidth': true,
+    'readerSideMargin': 0, // Percent on each side of the limited flow width.
     'webdav': [], // empty means not configured
     'webdavProxyEnabled': true,
     'backupWebdav': [], // empty means not configured

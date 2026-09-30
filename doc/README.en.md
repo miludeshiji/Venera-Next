@@ -28,13 +28,14 @@ This is the English companion index for `doc/`. Documents are grouped by type an
 
 - [构建与开发](development/build.zh.md) / [Build and Development](development/build.en.md)
 - [依赖治理](development/dependencies.zh.md) / [Dependency Governance](development/dependencies.en.md)
-
+- [Git 依赖接管与替换审计](development/dependency_audit.zh.md) / [Git Dependency Audit](development/dependency_audit.en.md)
 
 ## User And CLI
 
 - [本地漫画导入](user/import_comic.zh.md) / [Import Comic](user/import_comic.en.md)
+- [应用数据同步](user/data_sync.zh.md) / [App Data Synchronization](user/data_sync.en.md)
+- [条漫左右边距](user/reader_width.zh.md) / [Reader Side Margins](user/reader_width.en.md)
 - [无头命令模式](user/headless.zh.md) / [Headless Mode](user/headless.en.md)
-
 ## Experiments
 
 - [图片增强实验](experiments/image_enhancement.zh.md)

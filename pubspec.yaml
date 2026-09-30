@@ -95,10 +95,6 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   fake_async: 1.3.3
   flutter_to_arch: ^1.0.1
-  flutter_to_debian:
-    git:
-      url: https://github.com/venera-app/flutter_to_debian.git
-      ref: 3777c91b6b1cc0b7c03357c67ca216d4313c3db5
 
 dependency_overrides:
   flutter_rust_bridge: 2.11.1

@@ -1,787 +1,311 @@
-﻿# Comic Source
+# Comic Source Development Guide
 
-## Introduction
+[中文版本](comic_source.zh.md) · [JavaScript API](js.en.md) · [Documentation Index](../README.en.md#developer-api)
 
-VeneraNext is a comic reader that can read comics from various sources.
+This document describes how to create JavaScript comic source extensions for VeneraNext. Function names and invocations follow the runtime in [assets/init.js](../../assets/init.js), source parser in [parser.dart](../../lib/features/comic_source/parser.dart), and models in [models.dart](../../lib/features/comic_source/models.dart). Examples use RFC 2606 reserved fictional domains (`example.invalid`) and do not represent active services.
 
-All comic sources are written in javascript. 
-VeneraNext uses [flutter_qjs](https://github.com/wgh136/flutter_qjs) as js engine which is forked from [ekibun](https://github.com/ekibun/flutter_qjs).
+## Important Disclaimer
 
-This document will describe how to write a comic source for VeneraNext.
+VeneraNext only maintains the comic reader application and its extension runtime.
 
-## API Compatibility
+This repository does not provide, host, recommend, endorse, maintain, or verify any third-party comic source, repository list, site content, or copyright status. Do not report issues regarding third-party sources, site availability, missing chapters, or copyright to this repository.
 
-VeneraNext aims to stay compatible with the Venera JavaScript comic source API where practical.
-This compatibility only refers to the extension interface and runtime contract.
-It does not mean this repository provides, recommends, maintains, endorses, or verifies any third-party comic source, source list, source site, source content, or copyright status.
+## Development Preparation and Roadmap
 
-Do not report issues about source repositories, source sites, specific works, missing chapters, image availability, or copyright to this repository.
+1. Implement minimal functionality first: search → details → chapter images.
+2. Verify IDs, return data shapes, chapter reading order, and image request network configurations.
+3. Add optional features as needed: explore, categories, accounts, network favorites, comments, unidirectional remote progress sync, and settings.
+4. Extensions run inside the QuickJS engine. Do not use `import`, `export`, `require`, or globals that rely on Node.js or browser DOM environments.
 
-## Comic Source List
+## 1. Scripts and Minimal Template
 
-VeneraNext can display a list of comic sources in the app.
+An extension is a UTF-8 `.js` file declaring an entry class that extends `ComicSource`. Use class fields and arrow functions to define callbacks, where `this` references the source instance:
 
-VeneraNext does not provide, host, recommend, or maintain any comic source repository.
-If you need the app to display a source list, you should provide your own repository url.
-The url should point to a JSON file that contains the list of comic sources.
+| Field | Rule |
+|---|---|
+| `name` | Non-empty display name |
+| `key` | Stable and unique; matches `^[a-zA-Z_][a-zA-Z0-9_]*$`. Do not change after release to avoid breaking history and cache |
+| `version` | Extension version string, recommended three-part numbers like `1.0.0` |
+| `minAppVersion` | Explicit minimum validated app version, e.g. `2.2.1` |
+| `url` | Raw HTTP(S) download URL for script updates; optional |
+| `init()` | Optional async initialization; keep concise and avoid loading full site catalogs |
 
-The JSON file should have the following format:
+A complete minimal template is available at [minimal_source.js](../examples/minimal_source.js). Core skeleton:
+
+```javascript
+class MinimalSource extends ComicSource {
+    name = "Minimal Example";
+    key = "minimal_example";
+    version = "1.0.0";
+    minAppVersion = "2.2.1";
+    url = "";
+
+    search = {
+        optionList: [],
+        load: async (keyword, options, page) => ({
+            comics: page === 1 ? [
+                new Comic({
+                    id: "demo",
+                    title: "Demo",
+                    cover: "https://example.invalid/cover.jpg"
+                })
+            ] : [],
+            maxPage: 1
+        })
+    };
+
+    comic = {
+        loadInfo: async id => new ComicDetails({
+            title: "Demo",
+            cover: "https://example.invalid/cover.jpg",
+            tags: { author: ["Example Author"] },
+            chapters: { ep_1: "Chapter 1", ep_2: "Chapter 2" },
+            updateTime: "2026-09-01"
+        }),
+        loadEp: async (comicId, epId) => ({
+            images: ["https://example.invalid/" + epId + "/1.jpg"]
+        })
+    };
+}
+```
+
+The app registers the source automatically upon loading. Do not manipulate `ComicSource.sources` inside the script.
+
+## 2. Data Models and Chapter Order Contracts
+
+### Comic Lists and Details
+
+You can return instances of `new Comic({...})`, `new ComicDetails({...})`, or plain JavaScript objects with matching keys. Use standard primitives (strings, numbers, booleans, arrays, plain objects). Do not return ES `Map` or `Set` across the bridge.
+
+| Data | Key Fields |
+|---|---|
+| `Comic` item | `id: string`, `title: string`, `cover: string`; optional `subtitle` (accepts `subTitle`), `tags: string[]`, `description`, `language`, `stars` (0–5), `maxPage`, `favoriteId` |
+| `ComicDetails` details | Required `title: string`, `cover: string`, `tags: {namespace: string[]}` (use `{}` if empty); `chapters` (object map or `null`); optional `subtitle`, `description`, `updateTime`, `uploadTime`, `url` |
+| Details optional fields | `thumbnails: string[]`, `recommend: Comic[]`, `comments: Comment[]`, `isFavorite`, `isLiked`, `likesCount`, `commentCount`, `subId`, `uploader`, `stars` (0–5) |
+| Chapter images | `comic.loadEp(comicId, epId)` returns `{images: string[]}`. Do not return a bare array |
+
+In details, `tags` must be a map grouped by namespace (e.g. `{ author: ["Author Name"], genre: ["Action"] }`), whereas in list items `tags` is a flat array of strings.
+
+### Chapter Reading Order and Stable ID Contract
+
+The reader determines previous/next chapter navigation, automatic reading transitions, and waterfall continuity based on the chapter order returned by the source; it does not guess sequence from chapter titles. **The ascending/descending toggle in the details page is purely a display preference and never reverses continuous reading flow**. The source must sort chapters into the expected reading order (usually oldest first) in `comic.loadInfo` before returning.
+
+#### When an API Returns Chapters in Reverse Order
+
+When a site's API returns chapters from newest to oldest, reverse the array in the source before building the chapter map:
+
+```javascript
+// Suppose API returns: [{ id: "2", title: "Chapter 2" }, { id: "1", title: "Chapter 1" }]
+const chapters = {};
+for (const chapter of [...apiChapters].reverse()) {
+    chapters[`ep_${chapter.id}`] = chapter.title;
+}
+// Returns chapters: { ep_1: "Chapter 1", ep_2: "Chapter 2" }
+// In loadEp(comicId, epId), retrieve the site ID via epId.slice(3)
+```
+
+- **Object Key Numeric Ordering**: JavaScript engines enumerate integer-like keys in ascending numerical order. To preserve custom chapter ordering, use non-integer keys (such as the `ep_` prefix in the template).
+- **Existing Source Compatibility**: The `ep_` prefix is for newly authored sources. Existing sources fixing chapter order **must preserve their original chapter ID format**. Never renumber existing chapters with reversed array indices or bulk-rename ID prefixes, as doing so breaks user reading history, downloads, and bookmarks.
+- **Grouped Chapters**: For grouped comics, `chapters` uses `{ "Group Name": { "ep_id": "Title" } }`. Verify both group order and chapter order within each group. Only reverse groups that require ordering adjustments.
+
+### Timestamps and Author Namespaces
+
+The `updateTime` and `uploadTime` fields accept:
+
+- Standard date strings: `YYYY-MM-DD` (e.g. `2026-09-01`) or `YYYY-MM-DD HH:mm:ss`.
+- Unix timestamps: 10-digit second or 13-digit millisecond timestamps (e.g. `1788220800`).
+- ISO 8601 datetime strings: strings with date, time, and timezone indicators (e.g. `2026-09-01T12:00:00Z`).
+
+The app normalizes these formats to a local date string (`YYYY-MM-DD`). If `updateTime` is omitted, the app extracts the first tag from namespaces such as `update`, `last update`, `更新`, or `最后更新`.
+
+Author namespaces include `author`, `authors`, `artist`, `artists`, `作者`, or `画师`.
+
+## 3. Search, Explore, and Categories
+
+### Pagination Contracts
+
+| Callback | Return Value | Notes |
+|---|---|---|
+| `search.load(keyword, options, page)` | `{comics: Comic[], maxPage: number}` | Page-based search, `page` starts at 1 |
+| `search.loadNext(keyword, options, next)` | `{comics: Comic[], next: string|null}` | Cursor-based search, returns `next: null` on last page |
+| `explore[i].load(page)` | `{comics: Comic[], maxPage: number}` | Page-based explore list (`multiPageComicList`) |
+| `explore[i].loadNext(next)` | `{comics: Comic[], next: string|null}` | Cursor-based explore list |
+| `categoryComics.load(category, param, options, page)` | `{comics: Comic[], maxPage: number}` | Category list |
+| `categoryComics.ranking.load(option, page)` | `{comics: Comic[], maxPage: number}` | Ranking list |
+
+### Explore and Category Configurations
+
+`explore` is an array supporting three main formats: `multiPageComicList`, `multiPartPage` (returning `[{title, comics: Comic[], viewMore}]`), and `mixed`.
+
+`category` supports structured taxonomy:
+
+```javascript
+category = {
+    title: "Example Categories",
+    parts: [{
+        name: "Genres",
+        type: "fixed",
+        categories: [{
+            label: "Action",
+            target: {
+                page: "category",
+                attributes: { category: "Action", param: "action" }
+            }
+        }]
+    }],
+    enableRankingPage: false
+};
+```
+
+Tag clicks and link handling:
+- `comic.onClickTag(namespace, tag)`: synchronously returns a target object (e.g. `({ page: "search", attributes: { text: tag } })`) or `null`.
+- `comic.link = { domains: ["example.invalid"], linkToId: url => ... }`: parses external URLs into comic IDs.
+
+## 4. Image Loading and Header Fallbacks (onImageLoad & onThumbnailLoad)
+
+Sources configure custom network requests (headers, referers, alternative CDNs) via `comic.onImageLoad` and `comic.onThumbnailLoad`.
+
+### Differences and Scope
+
+1. **Chapter Images (`comic.onImageLoad`)**:
+   ```javascript
+   onImageLoad: (url, comicId, epId, target) => ({
+       url: url,
+       headers: {
+           "User-Agent": "CustomUA/1.0",
+           "Referer": "https://example.invalid/"
+       },
+       onLoadFailed: () => ({ url: retryUrl, headers: { "User-Agent": "CustomUA/1.0" } })
+   })
+   ```
+   - Configures chapter body images; supports async functions.
+   - Supports full `ImageLoadingConfig` fields (`url`, `headers`, `method`, `data`, `onResponse`, `modifyImage`, `onLoadFailed`).
+   - **4th parameter `target`** (`ComicImageLoadTarget | null`): provides reader layout constraints.
+   - `onLoadFailed`: retry hook for chapter images only.
+
+2. **Thumbnails and Covers (`comic.onThumbnailLoad`)**:
+   ```javascript
+   onThumbnailLoad: (url) => ({
+       url: url,
+       headers: {
+           "User-Agent": "CustomUA/1.0",
+           "Referer": "https://example.invalid/"
+       }
+   })
+   ```
+   - Used for search results, explore lists, and details covers.
+   - **Must be synchronous**.
+   - Supports basic network fields (`url`, `headers`, `method`, `data`, `onResponse`); does not support `modifyImage` or `onLoadFailed`.
+
+### Header Parsing and User-Agent Fallback Rules
+
+Across `onImageLoad`, `onThumbnailLoad`, and retry `onLoadFailed`, VeneraNext applies a unified Header contract:
+
+- **Source UA Priority**: Custom User-Agent headers declared by the source take highest priority.
+- **Case-Insensitive Headers**: Header lookup is case-insensitive (e.g. `User-Agent`, `user-agent`, `USER-AGENT`). If any variant is present, it is strictly preserved without being overwritten by the default UA.
+- **Default UA Fallback**: If the source omits `headers` or provides no User-Agent, the runtime supplies the default browser identifier (`user-agent: webUA`).
+- **Type Safety**: Headers are parsed into independent mutable maps; invalid types throw explicit exceptions.
+
+### The `target` Parameter (onImageLoad Only)
+
+- **`target` Fields**:
+  - `logicalWidth` (`number | null`): logical pixel width of the display container. When side margins are active, reflects width after margin deduction.
+  - `logicalHeight` (`number | null`): logical pixel height of the display container.
+  - `devicePixelRatio` (`number`): device pixel ratio (DPR).
+  - `fit` (`"contain" | "fitWidth" | "fitHeight"`): layout fit mode.
+  - `splitWideImage` (`boolean`): whether dual-page split mode is enabled.
+- **`target: null` Semantics**:
+  - `target: null` indicates **no specific reader viewport layout constraint**.
+  - Reader actions like "Save Original", "Copy Original", "Share Original", export, or general preloading pass `target: null`.
+  - The app expresses an intent for original image data; the source's `onImageLoad` decides whether to return higher-resolution URLs or preserve default CDN behavior.
+- **Legacy Compatibility**: Older sources with three parameters `(url, comicId, epId)` continue to work without modification.
+
+## 5. Accounts, Favorites, and Interactions
+
+### Accounts
+
+`account` can provide:
+
+| Member | Contract |
+|---|---|
+| `login(account, password)` | Async login; throws on failure |
+| `logout()` | Clears source session data and cookies |
+| `loginWithWebview` | `{url, checkStatus(url, title), onLoginSuccess?}` |
+| `loginWithCookies` | `{fields: string[], validate(values)}` |
+| `registerWebsite` | Optional registration URL |
+
+Persist data using `this.loadData(key)` and `this.saveData(key, value)`.
+
+### Network Favorites
+
+| Member | Contract |
+|---|---|
+| `multiFolder` | Required boolean, whether multi-folder is supported |
+| `addOrDelFavorite(comicId, folderId, isAdding)` | Add or remove favorites; accepts three arguments |
+| `loadComics(page, folder)` | Returns `{comics: Comic[], maxPage: number}` |
+| `loadNext(next, folder)` | Cursor-based favorites |
+| `loadFolders(comicId)` | Returns `{folders: {id: name}, favorited: string[]}` |
+
+Errors containing `Login expired` trigger an automatic re-login attempt.
+
+### Comments, Remote Progress, and Archives
+
+| Callback | Contract |
+|---|---|
+| `loadComments(comicId, subId, page, replyTo)` | Returns `{comments: Comment[], maxPage?}` |
+| `sendComment(comicId, subId, content, replyTo)` | Posts a top-level or reply comment |
+| `loadChapterComments(comicId, epId, page, replyTo)` | Chapter comments in reader |
+| `sendChapterComment(comicId, epId, content, replyTo)` | Posts a chapter comment or reply |
+| `replyComment(comicId, subId, content, parentId, replyId)` | Nested reply interface |
+| `updateReadProgress(comicId, epId, page)` | **Unidirectional remote reading progress hook**; debounced on stable reader page turns |
+| `likeComic(id, isLike)`, `likeComment(comicId, subId, commentId, isLike)` | Like / unlike |
+| `voteComment(id, subId, commentId, isUp, isCancel)` | Returns updated score |
+| `starRating(id, rating)` | Submits rating from 0 to 10 |
+| `archive.getArchives(comicId)` | Lists archives `[{id, title, description}]` |
+| `archive.getDownloadUrl(comicId, archiveId)` | Returns non-empty archive download URL |
+
+`Comment` includes `userName`, `content`, optional `avatar`, `time`, `id`, `replyToId`, `replyToUserName`, `replyCount`, `score`, `isLiked`, `voteStatus`.
+
+## 6. Settings and Localization
+
+```javascript
+settings = {
+    quality: {
+        title: "Image quality",
+        type: "select",
+        options: [
+            { value: "original", text: "Original" },
+            { value: "small", text: "Small" }
+        ],
+        default: "original"
+    }
+};
+
+translation = {
+    zh_CN: { "Image quality": "图片质量", "Original": "原图", "Small": "流畅" },
+    zh_TW: { "Image quality": "圖片品質", "Original": "原圖", "Small": "流暢" },
+    en: {}
+};
+```
+
+Read values via `this.loadSetting("quality")`. `comic.enableTagsTranslate: true` enables the app's built-in tag translations.
+
+## 7. Repositories and Catalogs
+
+Single extensions can be installed via file or URL. Repositories provide a UTF-8 JSON **array**:
 
 ```json
 [
   {
-    "name": "Source Name",
+    "name": "Example Source",
     "key": "example_source",
-    "fileName": "source.js",
     "version": "1.0.0",
-    "description": "A brief description of the source"
+    "fileName": "scripts/example.js",
+    "description": "An example source catalog entry"
   }
 ]
 ```
 
-`name` and `key` are required, and `key` should match the extension's key. Use `url` or `fileName` to specify the download location; field names are case-sensitive. If both are provided, a nonempty `url` takes priority. `description` is optional.
-
-`url` can be an absolute HTTP(S) URL or a relative path; `fileName` is normally a relative path. Relative references are resolved against the URL used to successfully load the list. For example, `source.js` in `https://example.com/repo/index.json` resolves to `https://example.com/repo/source.js`.
-
-After editing the repository URL in the app, select **Refresh**. The new address is saved only after the list loads and parses successfully; unfinished edits or failed refreshes do not replace the last working configuration. Clearing the field and refreshing removes the repository URL without uninstalling existing extensions. The displayed list remains bound to its loading URL, regardless of later edits to the input field.
-
-## Create a Comic Source
-
-### Preparation
-
-- Install VeneraNext. Using flutter to run the project is recommended since it's easier to debug.
-- An editor that supports javascript.
-- Read the JavaScript API document in this repository and create a local `.js` source file for testing.
-
-### Start Writing
-
-The template contains detailed comments and examples. You can refer to it when writing your own comic source.
-
-Here is a brief introduction to the template:
-
-> Note: Javascript api document is [here](js.en.md).
-
-#### Write basic information
-
-```javascript
-class NewComicSource extends ComicSource {
-    // Note: The fields which are marked as [Optional] should be removed if not used
-
-    // name of the source
-    name = ""
-
-    // unique id of the source
-    key = ""
-
-    version = "1.0.0"
-
-    minAppVersion = "1.0.0"
-
-    // update url
-    url = ""
-// ...
-}
-```
-
-In this part, you need to do the following:
-- Change the class name to your source name.
-- Fill in the name, key, version, minAppVersion, and url fields.
-
-#### init function
-
-```javascript
-    /**
-     * [Optional] init function
-     */
-    init() {
-
-    }
-```
-
-The function will be called when the source is initialized. You can do some initialization work here.
-
-Remove this function if not used.
-
-#### Account
-
-```javascript
-// [Optional] account related
-    account = {
-        /**
-         * [Optional] login with account and password, return any value to indicate success
-         * @param account {string}
-         * @param pwd {string}
-         * @returns {Promise<any>}
-         */
-        login: async (account, pwd) => {
-
-        },
-
-        /**
-         * [Optional] login with webview
-         */
-        loginWithWebview: {
-            url: "",
-            /**
-             * check login status
-             * @param url {string} - current url
-             * @param title {string} - current title
-             * @returns {boolean} - return true if login success
-             */
-            checkStatus: (url, title) => {
-
-            },
-            /**
-             * [Optional] Callback when login success
-             */
-            onLoginSuccess: () => {
-
-            },
-        },
-
-        /**
-         * [Optional] login with cookies
-         * Note: If `this.account.login` is implemented, this will be ignored
-         */
-        loginWithCookies: {
-            fields: [
-                "ipb_member_id",
-                "ipb_pass_hash",
-                "igneous",
-                "star",
-            ],
-            /**
-             * Validate cookies, return false if cookies are invalid.
-             *
-             * Use `Network.setCookies` to set cookies before validate.
-             * @param values {string[]} - same order as `fields`
-             * @returns {Promise<boolean>}
-             */
-            validate: async (values) => {
-
-            },
-        },
-
-        /**
-         * logout function, clear account related data
-         */
-        logout: () => {
-
-        },
-
-        // {string?} - register url
-        registerWebsite: null
-    }
-```
-
-In this part, you can implement login, logout, and register functions.
-
-Remove this part if not used.
-
-#### Explore page
-
-```javascript
-    // explore page list
-    explore = [
-        {
-            // title of the page.
-            // title is used to identify the page, it should be unique
-            title: "",
-
-            /// multiPartPage or multiPageComicList or mixed
-            type: "multiPartPage",
-
-            /**
-             * load function
-             * @param page {number | null} - page number, null for `singlePageWithMultiPart` type
-             * @returns {{}}
-             * - for `multiPartPage` type, return {title: string, comics: Comic[], viewMore: string?}[]
-             * - for `multiPageComicList` type, for each page(1-based), return {comics: Comic[], maxPage: number}
-             * - for `mixed` type, use param `page` as index. for each index(0-based), return {data: [], maxPage: number?}, data is an array contains Comic[] or {title: string, comics: Comic[], viewMore: string?}
-             */
-            load: async (page) => {
-
-            },
-
-            /**
-             * Only use for `multiPageComicList` type.
-             * `loadNext` would be ignored if `load` function is implemented.
-             * @param next {string | null} - next page token, null if first page
-             * @returns {Promise<{comics: Comic[], next: string?}>} - next is null if no next page.
-             */
-            loadNext(next) {},
-        }
-    ]
-```
-
-In this part, you can implement the explore page.
-
-A comic source can have multiple explore pages.
-
-There are three types of explore pages:
-- multiPartPage: An explore page contains multiple parts, each part contains multiple comics.
-- multiPageComicList: An explore page contains multiple comics, the comics are loaded page by page.
-- mixed: An explore page contains multiple parts, each part can be a list of comics or a block of comics which have a title and a view more button.
-
-#### Category Page
-
-```javascript
-    // categories
-    category = {
-        /// title of the category page, used to identify the page, it should be unique
-        title: "",
-        parts: [
-            {
-                // title of the part
-                name: "Theme",
-
-                // fixed or random
-                // if random, need to provide `randomNumber` field, which indicates the number of comics to display at the same time
-                type: "fixed",
-
-                // number of comics to display at the same time
-                // randomNumber: 5,
-
-                categories: ["All", "Adventure", "School"],
-
-                // category or search
-                // if `category`, use categoryComics.load to load comics
-                // if `search`, use search.load to load comics
-                itemType: "category",
-
-                // [Optional] {string[]?} must have same length as categories, used to provide loading param for each category
-                categoryParams: ["all", "adventure", "school"],
-
-                // [Optional] {string} cannot be used with `categoryParams`, set all category params to this value
-                groupParam: null,
-            }
-        ],
-        // enable ranking page
-        enableRankingPage: false,
-    }
-```
-
-Category page is a static page that contains multiple parts, each part contains multiple categories.
-
-A comic source can only have one category page.
-
-#### Category Comics Page
-
-```javascript
-    /// category comic loading related
-    categoryComics = {
-        /**
-         * load comics of a category
-         * @param category {string} - category name
-         * @param param {string?} - category param
-         * @param options {string[]} - options from optionList
-         * @param page {number} - page number
-         * @returns {Promise<{comics: Comic[], maxPage: number}>}
-         */
-        load: async (category, param, options, page) => {
-
-        },
-        // provide options for category comic loading
-        optionList: [
-            {
-                // For a single option, use `-` to separate the value and text, left for value, right for text
-                options: [
-                    "newToOld-New to Old",
-                    "oldToNew-Old to New"
-                ],
-                // [Optional] {string[]} - show this option only when the value not in the list
-                notShowWhen: null,
-                // [Optional] {string[]} - show this option only when the value in the list
-                showWhen: null
-            }
-        ],
-        ranking: {
-            // For a single option, use `-` to separate the value and text, left for value, right for text
-            options: [
-                "day-Day",
-                "week-Week"
-            ],
-            /**
-             * load ranking comics
-             * @param option {string} - option from optionList
-             * @param page {number} - page number
-             * @returns {Promise<{comics: Comic[], maxPage: number}>}
-             */
-            load: async (option, page) => {
-
-            }
-        }
-    }
-```
-
-When user clicks on a category, the category comics page will be displayed.
-
-This part is used to load comics of a category.
-
-#### Search
-
-```javascript
-    /// search related
-    search = {
-        /**
-         * load search result
-         * @param keyword {string}
-         * @param options {(string | null)[]} - options from optionList
-         * @param page {number}
-         * @returns {Promise<{comics: Comic[], maxPage: number}>}
-         */
-        load: async (keyword, options, page) => {
-
-        },
-
-        /**
-         * load search result with next page token.
-         * The field will be ignored if `load` function is implemented.
-         * @param keyword {string}
-         * @param options {(string)[]} - options from optionList
-         * @param next {string | null}
-         * @returns {Promise<{comics: Comic[], maxPage: number}>}
-         */
-        loadNext: async (keyword, options, next) => {
-
-        },
-
-        // provide options for search
-        optionList: [
-            {
-                // [Optional] default is `select`
-                // type: select, multi-select, dropdown
-                // For select, there is only one selected value
-                // For multi-select, there are multiple selected values or none. The `load` function will receive a json string which is an array of selected values
-                // For dropdown, there is one selected value at most. If no selected value, the `load` function will receive a null
-                type: "select",
-                // For a single option, use `-` to separate the value and text, left for value, right for text
-                options: [
-                    "0-time",
-                    "1-popular"
-                ],
-                // option label
-                label: "sort",
-                // default selected options
-                default: null,
-            }
-        ],
-
-        // enable tags suggestions
-        enableTagsSuggestions: false,
-        // [Optional] handle tag suggestion click
-        onTagSuggestionSelected: (namespace, tag) => {
-            // return the text to insert into search box
-            return `${namespace}:${tag}`
-        },
-    }
-```
-
-This part is used to load search results.
-
-`load` and `loadNext` functions are used to load search results. 
-If `load` function is implemented, `loadNext` function will be ignored.
-
-#### Favorites
-
-```javascript
-    // favorite related
-    favorites = {
-        // whether support multi folders
-        multiFolder: false,
-        /**
-         * add or delete favorite.
-         * throw `Login expired` to indicate login expired, App will automatically re-login and re-add/delete favorite
-         * @param comicId {string}
-         * @param folderId {string}
-         * @param isAdding {boolean} - true for add, false for delete
-         * @param favoriteId {string?} - [Comic.favoriteId]
-         * @returns {Promise<any>} - return any value to indicate success
-         */
-        addOrDelFavorite: async (comicId, folderId, isAdding, favoriteId) => {
-            
-        },
-        /**
-         * load favorite folders.
-         * throw `Login expired` to indicate login expired, App will automatically re-login retry.
-         * if comicId is not null, return favorite folders which contains the comic.
-         * @param comicId {string?}
-         * @returns {Promise<{folders: {[p: string]: string}, favorited: string[]}>} - `folders` is a map of folder id to folder name, `favorited` is a list of folder id which contains the comic
-         */
-        loadFolders: async (comicId) => {
-
-        },
-        /**
-         * add a folder
-         * @param name {string}
-         * @returns {Promise<any>} - return any value to indicate success
-         */
-        addFolder: async (name) => {
-
-        },
-        /**
-         * delete a folder
-         * @param folderId {string}
-         * @returns {Promise<void>} - return any value to indicate success
-         */
-        deleteFolder: async (folderId) => {
-
-        },
-        /**
-         * load comics in a folder
-         * throw `Login expired` to indicate login expired, App will automatically re-login retry.
-         * @param page {number}
-         * @param folder {string?} - folder id, null for non-multi-folder
-         * @returns {Promise<{comics: Comic[], maxPage: number}>}
-         */
-        loadComics: async (page, folder) => {
-
-        },
-        /**
-         * load comics with next page token
-         * @param next {string | null} - next page token, null for first page
-         * @param folder {string}
-         * @returns {Promise<{comics: Comic[], next: string?}>}
-         */
-        loadNext: async (next, folder) => {
-
-        },
-    }
-```
-
-This part is used to manage network favorites of the source.
-
-`load` and `loadNext` functions are used to load search results.
-If `load` function is implemented, `loadNext` function will be ignored.
-
-#### Comic Details
-
-```javascript
-    /// single comic related
-    comic = {
-        /**
-         * load comic info
-         * @param id {string}
-         * @returns {Promise<ComicDetails>}
-         */
-        loadInfo: async (id) => {
-
-        },
-        /**
-         * [Optional] load thumbnails of a comic
-         *
-         * To render a part of an image as thumbnail, return `${url}@x=${start}-${end}&y=${start}-${end}`
-         * - If width is not provided, use full width
-         * - If height is not provided, use full height
-         * @param id {string}
-         * @param next {string?} - next page token, null for first page
-         * @returns {Promise<{thumbnails: string[], next: string?}>} - `next` is next page token, null for no more
-         */
-        loadThumbnails: async (id, next) => {
-
-        },
-
-        /**
-         * rate a comic
-         * @param id
-         * @param rating {number} - [0-10] app use 5 stars, 1 rating = 0.5 stars,
-         * @returns {Promise<any>} - return any value to indicate success
-         */
-        starRating: async (id, rating) => {
-
-        },
-
-        /**
-         * load images of a chapter
-         * @param comicId {string}
-         * @param epId {string?}
-         * @returns {Promise<{images: string[]}>}
-         */
-        loadEp: async (comicId, epId) => {
-
-        },
-        /**
-         * [Optional] provide configs for chapter image loading
-         *
-         * Header Resolution & User-Agent Fallback:
-         * - Source headers take precedence: Headers provided by the comic source have highest priority.
-         * - Case-insensitive header matching: HTTP header names are case-insensitive (e.g. `User-Agent`, `user-agent`).
-         *   If any casing of `User-Agent` is provided by the comic source, it is preserved and will NOT be overwritten
-         *   or duplicated by the default User-Agent.
-         * - Default UA fallback: If `headers` is missing, empty, or does not include any `User-Agent`, VeneraNext falls
-         *   back to injecting `user-agent: webUA`.
-         * - Failure retries: When chapter image loading fails, `onLoadFailed` can return a new `ImageLoadingConfig`,
-         *   which is resolved under the exact same header fallback rules.
-         *
-         * The 4th argument `target` is optional and nullable (`ComicImageLoadTarget | null`).
-         * Note that `target` represents the reader's display and layout constraints (viewport and fitting mode), NOT the intrinsic dimensions, resolution, or original file size of the comic image.
-         * - `logicalWidth` {number | null}: logical width in Flutter dp. `null` if unconstrained (e.g. horizontal continuous scroll).
-         * - `logicalHeight` {number | null}: logical height in Flutter dp. `null` if unconstrained (e.g. vertical continuous scroll / waterfall).
-         * - `devicePixelRatio` {number}: device pixel ratio (DPR, defaults to 1.0). Physical pixels = Math.round(logical * DPR).
-         * - `fit` {"contain" | "fitWidth" | "fitHeight"}:
-         *   - `contain`: bounded in both dimensions (page-by-page, gallery single page, split dual-page).
-         *   - `fitWidth`: width aligned to viewport, unbounded height (vertical continuous scroll).
-         *   - `fitHeight`: height aligned to viewport, unbounded width (horizontal continuous scroll).
-         * - `splitWideImage` {boolean}: whether wide image / dual-page spread splitting is enabled in the reader.
-         *
-         * Target Null Semantics & Original Image Operations:
-         * - `target: null` indicates that the request has no specific Reader layout or viewport constraints.
-         * - Original image operations (such as Save Image, Copy Image, Share Image, export, and generic background preloading) pass `target: null`.
-         * - Final strategy decided by the source: The app signals unconstrained/original intent via `target: null`, but the comic source's `onImageLoad` ultimately decides the final request headers, CDN selection, and returned URL (e.g. returning uncompressed original images or maintaining default CDN strategy).
-         *
-         * Backward Compatibility:
-         * - Existing sources with `(url, comicId, epId)` continue to work without modification.
-         * - Caches with and without `target` are isolated to prevent cross-resolution pollution.
-         *
-         * No Prescribed Host Algorithm:
-         * - Venera does not prescribe CDN algorithms, resolution tiers, or scaling formulas.
-         * - The app only provides objective layout constraints; comic sources may freely use or ignore `target`.
-         * @param url {string}
-         * @param comicId {string}
-         * @param epId {string?}
-         * @param target {ComicImageLoadTarget?}
-         * @returns {ImageLoadingConfig | Promise<ImageLoadingConfig>}
-         */
-        onImageLoad: (url, comicId, epId, target) => {
-            return {}
-        },
-        /**
-         * [Optional] provide configs for thumbnail and cover loading
-         *
-         * Applies to thumbnails in explore/recommendation pages, category/browse lists, search results,
-         * as well as comic detail page covers.
-         *
-         * Header Resolution & User-Agent Fallback:
-         * - Follows the same header fallback rules as `onImageLoad`: source headers take precedence,
-         *   header names are case-insensitive, and default `webUA` is only used when no `User-Agent` is specified.
-         *
-         * Supported fields:
-         * - Only network request fields (`url`, `headers`, `method`, `data`) are used.
-         * - `ImageLoadingConfig.modifyImage` and `ImageLoadingConfig.onLoadFailed` will be ignored.
-         *   They are not supported for thumbnails.
-         * @param url {string}
-         * @returns {ImageLoadingConfig | Promise<ImageLoadingConfig>}
-         */
-        onThumbnailLoad: (url) => {
-            return {}
-        },
-        /**
-         * [Optional] like or unlike a comic
-         * @param id {string}
-         * @param isLike {boolean} - true for like, false for unlike
-         * @returns {Promise<void>}
-         */
-        likeComic: async (id, isLike) =>  {
-
-        },
-        /**
-         * [Optional] load comments
-         *
-         * Since app version 1.0.6, rich text is supported in comments.
-         * Following html tags are supported: ['a', 'b', 'i', 'u', 's', 'br', 'span', 'img'].
-         * span tag supports style attribute, but only support font-weight, font-style, text-decoration.
-         * All images will be placed at the end of the comment.
-         * Auto link detection is enabled, but only http/https links are supported.
-         * @param comicId {string}
-         * @param subId {string?} - ComicDetails.subId
-         * @param page {number}
-         * @param replyTo {string?} - commentId to reply, not null when reply to a comment
-         * @returns {Promise<{comments: Comment[], maxPage: number?}>}
-         */
-        loadComments: async (comicId, subId, page, replyTo) => {
-
-        },
-        /**
-         * [Optional] send a comment, return any value to indicate success
-         * @param comicId {string}
-         * @param subId {string?} - ComicDetails.subId
-         * @param content {string}
-         * @param replyTo {string?} - commentId to reply, not null when reply to a comment
-         * @returns {Promise<any>}
-         */
-        sendComment: async (comicId, subId, content, replyTo) => {
-
-        },
-        /**
-         * [Optional] load chapter comments
-         * 
-         * Chapter comments are displayed in the reader.
-         * Same rich text support as loadComments.
-         * 
-         * Note: To control reply functionality:
-         * - If a comment does not support replies, set its `id` to null/undefined
-         * - Or set its `replyCount` to null/undefined
-         * - The reply button will only show when both `id` and `replyCount` are present
-         * 
-         * @param comicId {string}
-         * @param epId {string} - chapter id
-         * @param page {number}
-         * @param replyTo {string?} - commentId to reply, not null when reply to a comment
-         * @returns {Promise<{comments: Comment[], maxPage: number?}>}
-         * 
-         * @example
-         * // Example for comments without reply support:
-         * return {
-         *   comments: data.list.map(e => ({
-         *     userName: e.user_name,
-         *     avatar: e.user_avatar,
-         *     content: e.comment,
-         *     time: e.create_at,
-         *     replyCount: null,  // or undefined - no reply support
-         *     id: null,          // or undefined - no reply support
-         *   })),
-         *   maxPage: Math.ceil(total / 20)
-         * }
-         */
-        loadChapterComments: async (comicId, epId, page, replyTo) => {
-
-        },
-        /**
-         * [Optional] send a chapter comment, return any value to indicate success
-         * @param comicId {string}
-         * @param epId {string} - chapter id
-         * @param content {string}
-         * @param replyTo {string?} - commentId to reply, not null when reply to a comment
-         * @returns {Promise<any>}
-         */
-        sendChapterComment: async (comicId, epId, content, replyTo) => {
-
-        },
-        /**
-         * [Optional] like or unlike a comment
-         * @param comicId {string}
-         * @param subId {string?} - ComicDetails.subId
-         * @param commentId {string}
-         * @param isLike {boolean} - true for like, false for unlike
-         * @returns {Promise<void>}
-         */
-        likeComment: async (comicId, subId, commentId, isLike) => {
-
-        },
-        /**
-         * [Optional] vote a comment
-         * @param id {string} - comicId
-         * @param subId {string?} - ComicDetails.subId
-         * @param commentId {string} - commentId
-         * @param isUp {boolean} - true for up, false for down
-         * @param isCancel {boolean} - true for cancel, false for vote
-         * @returns {Promise<number>} - new score
-         */
-        voteComment: async (id, subId, commentId, isUp, isCancel) => {
-
-        },
-        // {string?} - regex string, used to identify comic id from user input
-        idMatch: null,
-        /**
-         * [Optional] Handle tag click event
-         * @param namespace {string}
-         * @param tag {string}
-         * @returns {{action: string, keyword: string, param: string?}}
-         */
-        onClickTag: (namespace, tag) => {
-
-        },
-        /**
-         * [Optional] Handle links
-         */
-        link: {
-            /**
-             * set accepted domains
-             */
-            domains: [
-                'example.com'
-            ],
-            /**
-             * parse url to comic id
-             * @param url {string}
-             * @returns {string | null}
-             */
-            linkToId: (url) => {
-
-            }
-        },
-        // enable tags translate
-        enableTagsTranslate: false,
-    }
-
-```
-
-This part is used to load comic details.
-
-#### Settings
-
-```javascript
-    /*
-    [Optional] settings related
-    Use this.loadSetting to load setting
-    ```
-    let setting1Value = this.loadSetting('setting1')
-    console.log(setting1Value)
-    ```
-     */
-    settings = {
-        setting1: {
-            // title
-            title: "Setting1",
-            // type: input, select, switch
-            type: "select",
-            // options
-            options: [
-                {
-                    // value
-                    value: 'o1',
-                    // [Optional] text, if not set, use value as text
-                    text: 'Option 1',
-                },
-            ],
-            default: 'o1',
-        },
-        setting2: {
-            title: "Setting2",
-            type: "switch",
-            default: true,
-        },
-        setting3: {
-            title: "Setting3",
-            type: "input",
-            validator: null, // string | null, regex string
-            default: '',
-        },
-        setting4: {
-            title: "Setting4",
-            type: "callback",
-            buttonText: "Click me",
-            /**
-             * callback function
-             *
-             * If the callback function returns a Promise, the button will show a loading indicator until the promise is resolved.
-             * @returns {void | Promise<any>}
-             */
-            callback: () => {
-                // do something
-            }
-        }
-    }
-```
-
-This part is used to provide settings for the source.
-
-
-#### Translations
-
-```javascript
-    // [Optional] translations for the strings in this config
-    translation = {
-        'zh_CN': {
-            'Setting1': '设置1',
-            'Setting2': '设置2',
-            'Setting3': '设置3',
-        },
-        'zh_TW': {},
-        'en': {}
-    }
-```
-
-This part is used to provide translations for the source.
-
-> Note: strings in the UI api will not be translated automatically. You need to translate them manually.
+- `name`, `key`, and `version` are required.
+- Use `url` or `fileName` for download locations.
+- This repository does not provide or recommend third-party source repository URLs.

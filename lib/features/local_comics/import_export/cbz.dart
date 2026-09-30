@@ -4,13 +4,12 @@ import 'package:enough_convert/enough_convert.dart';
 import 'package:flutter_7zip/flutter_7zip.dart';
 import 'package:venera_next/features/comic_storage/comic_storage.dart';
 import 'package:venera_next/foundation/app.dart';
-import 'package:venera_next/features/comic_source/comic_source.dart';
-import 'package:venera_next/foundation/comic_type.dart';
 import 'package:venera_next/features/local_comics/local.dart';
 import 'package:venera_next/foundation/log.dart';
 import 'package:venera_next/foundation/file_type.dart';
 import 'package:venera_next/foundation/file_system.dart';
 import 'package:zip_flutter/zip_flutter.dart';
+import 'document_import.dart';
 
 /// Comic Book Archive. Currently supports CBZ, ZIP and 7Z formats.
 abstract class CBZ {
@@ -168,133 +167,122 @@ abstract class CBZ {
   }
 
   static Future<LocalComic> import(File file) async {
-    var cache = Directory(FilePath.join(App.cachePath, 'cbz_import'));
-    if (cache.existsSync()) cache.deleteSync(recursive: true);
-    cache.createSync();
-    await extractArchive(file, cache);
-    final layout = ComicFileSystemLayout.inspect(
-      cache,
-      unwrapSingleDirectory: true,
-    );
-    cache = layout.root;
-    var metaDataFile = File(FilePath.join(cache.path, 'metadata.json'));
-    ComicMetaData? metaData;
-    if (metaDataFile.existsSync()) {
-      try {
-        metaData = ComicMetaData.fromJson(
-          jsonDecode(metaDataFile.readAsStringSync()),
-        );
-      } catch (e) {
-        Log.warning("CBZ", "Failed to parse metadata: $e");
-      }
-    }
-    metaData ??= ComicMetaData(
-      title: file.name.substring(0, file.name.lastIndexOf('.')),
-      author: "",
-      tags: [],
-    );
-    var old = LocalManager().findByName(metaData.title);
-    if (old != null) {
-      throw Exception('Comic with name ${metaData.title} already exists');
-    }
-    final files = List<File>.from(layout.rootPages);
-    final chapterDirectories = layout.chapters;
-    if (!layout.hasImages) {
-      cache.deleteSync(recursive: true);
-      throw Exception('No images found in the archive');
-    }
-    Map<String, String>? cpMap;
-    var dest = Directory(
-      FilePath.join(
-        LocalManager().path,
-        sanitizeFileName(metaData.title, maxLength: maxSanitizedFileNameLength),
-      ),
-    );
-    dest.createSync();
-    File coverFile;
-    if (metaData.chapters == null && layout.useChapterDirectories) {
-      coverFile = layout.inferredCover!;
-      coverFile.copyMem(
-        FilePath.join(dest.path, 'cover.${coverFile.extension}'),
+    final extractionRoot = Directory(
+      App.cachePath,
+    ).createTempSync('cbz_import_');
+    var cache = extractionRoot;
+    DocumentImportSession? session;
+    try {
+      await extractArchive(file, cache);
+      final layout = ComicFileSystemLayout.inspect(
+        cache,
+        unwrapSingleDirectory: true,
       );
-      cpMap = <String, String>{};
-      for (var i = 0; i < chapterDirectories.length; i++) {
-        final chapter = chapterDirectories[i];
-        final chapterKey = i.toString();
-        cpMap[chapterKey] = chapter.title;
-        final chapterDir = Directory(FilePath.join(dest.path, chapterKey));
-        chapterDir.createSync();
-        for (var j = 0; j < chapter.pages.length; j++) {
-          final src = chapter.pages[j];
-          final dst = File(
-            FilePath.join(
-              chapterDir.path,
-              '${j + 1}.${src.path.split('.').last}',
-            ),
+      cache = layout.root;
+      var metaDataFile = File(FilePath.join(cache.path, 'metadata.json'));
+      ComicMetaData? metaData;
+      if (metaDataFile.existsSync()) {
+        try {
+          metaData = ComicMetaData.fromJson(
+            jsonDecode(metaDataFile.readAsStringSync()),
           );
-          await src.copyMem(dst.path);
+        } catch (e) {
+          Log.warning("CBZ", "Failed to parse metadata: $e");
         }
       }
-    } else {
-      if (files.isEmpty) {
-        cache.deleteSync(recursive: true);
+      metaData ??= ComicMetaData(
+        title: file.name.substring(0, file.name.lastIndexOf('.')),
+        author: "",
+        tags: [],
+      );
+      final files = List<File>.from(layout.rootPages);
+      final chapterDirectories = layout.chapters;
+      if (!layout.hasImages) {
         throw Exception('No images found in the archive');
       }
-      coverFile = layout.inferredCover!;
-      coverFile.copyMem(
-        FilePath.join(dest.path, 'cover.${coverFile.extension}'),
-      );
-      if (metaData.chapters == null) {
-        for (var i = 0; i < files.length; i++) {
-          var src = files[i];
-          var dst = File(
-            FilePath.join(dest.path, '${i + 1}.${src.path.split('.').last}'),
-          );
-          await src.copyMem(dst.path);
+
+      session = DocumentImportSession.start(metaData.title);
+      Map<String, String>? cpMap;
+      late final String coverName;
+
+      if (metaData.chapters == null && layout.useChapterDirectories) {
+        final coverFile = layout.inferredCover!;
+        coverName = await session.copyCover(
+          coverFile,
+          extension: coverFile.extension,
+        );
+        cpMap = <String, String>{};
+        for (var i = 0; i < chapterDirectories.length; i++) {
+          final chapter = chapterDirectories[i];
+          final chapterKey = i.toString();
+          cpMap[chapterKey] = chapter.title;
+          for (var j = 0; j < chapter.pages.length; j++) {
+            final src = chapter.pages[j];
+            await session.copyPage(
+              src,
+              pageIndex: j + 1,
+              extension: src.extension,
+              chapterId: chapterKey,
+            );
+          }
         }
       } else {
-        dest.createSync();
-        var chapters = <String, List<File>>{};
-        for (var chapter in metaData.chapters!) {
-          chapters[chapter.title] = files.sublist(
-            chapter.start - 1,
-            chapter.end,
-          );
+        if (files.isEmpty) {
+          throw Exception('No images found in the archive');
         }
-        int i = 0;
-        cpMap = <String, String>{};
-        for (var chapter in chapters.entries) {
-          cpMap[i.toString()] = chapter.key;
-          var chapterDir = Directory(FilePath.join(dest.path, i.toString()));
-          chapterDir.createSync();
-          for (var j = 0; j < chapter.value.length; j++) {
-            var src = chapter.value[j];
-            var dst = File(
-              FilePath.join(
-                chapterDir.path,
-                '${j + 1}.${src.path.split('.').last}',
-              ),
+        final coverFile = layout.inferredCover!;
+        coverName = await session.copyCover(
+          coverFile,
+          extension: coverFile.extension,
+        );
+        if (metaData.chapters == null) {
+          for (var i = 0; i < files.length; i++) {
+            var src = files[i];
+            await session.copyPage(
+              src,
+              pageIndex: i + 1,
+              extension: src.extension,
             );
-            await src.copyMem(dst.path);
           }
-          i++;
+        } else {
+          var chapters = <String, List<File>>{};
+          for (var chapter in metaData.chapters!) {
+            chapters[chapter.title] = files.sublist(
+              chapter.start - 1,
+              chapter.end,
+            );
+          }
+          int i = 0;
+          cpMap = <String, String>{};
+          for (var chapter in chapters.entries) {
+            final chapterKey = i.toString();
+            cpMap[chapterKey] = chapter.key;
+            for (var j = 0; j < chapter.value.length; j++) {
+              var src = chapter.value[j];
+              await session.copyPage(
+                src,
+                pageIndex: j + 1,
+                extension: src.extension,
+                chapterId: chapterKey,
+              );
+            }
+            i++;
+          }
         }
       }
+
+      return session.finish(
+        author: metaData.author,
+        tags: metaData.tags,
+        cover: coverName,
+        chapters: cpMap,
+      );
+    } catch (_) {
+      await session?.abort();
+      rethrow;
+    } finally {
+      await extractionRoot.deleteIgnoreError(recursive: true);
     }
-    var comic = LocalComic(
-      id: LocalManager().findValidId(ComicType.local),
-      title: metaData.title,
-      subtitle: metaData.author,
-      tags: metaData.tags,
-      comicType: ComicType.local,
-      directory: dest.name,
-      chapters: ComicChapters.fromJsonOrNull(cpMap),
-      downloadedChapters: cpMap?.keys.toList() ?? [],
-      cover: 'cover.${coverFile.extension}',
-      createdAt: DateTime.now(),
-    );
-    await cache.delete(recursive: true);
-    return comic;
   }
 
   static Map<String, Object?> inspectImportLayoutForTesting(
@@ -553,7 +541,7 @@ abstract class CBZ {
     return values.toSet().toList();
   }
 
-  static _compress(String src, String dst) async {
+  static Future<void> _compress(String src, String dst) async {
     await ZipFile.compressFolderAsync(src, dst, 4);
   }
 }

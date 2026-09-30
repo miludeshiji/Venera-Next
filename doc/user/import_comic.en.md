@@ -106,10 +106,12 @@ import; the original document is not streamed by the reader.
 ### PDF
 
 - Open `Local` -> `Import` -> `PDF comic files` to select one or more PDFs. Each file becomes a separate comic, and the destination favorites folder is selected once for the batch.
-- Files are converted sequentially. Progress includes the current file, its position in the batch, and its page count, so there is no need to select each volume separately.
-- Each successful comic is saved immediately. Duplicate selections and titles already in the local library are skipped. A damaged, password-protected, or unreadable file does not stop the remaining files; individual results are shown at the end.
-- Cancelling stops subsequent imports and cleans up the unfinished comic after the current file preparation or page operation finishes safely. Successfully imported comics are kept, and unprocessed files are not counted as failures.
-- Keep the app running during import. Continuing after the app exits or resuming across restarts is not supported. On Android, files that cannot be accessed directly are copied to temporary storage one at a time and released after processing.
+- **Background Task Management**: PDF imports run sequentially in a background queue as app-managed tasks. After starting an import, you can close the progress dialog, return to previous views, or read other comics without interrupting the process. You can reopen the task status dialog from the `Local` page or the Home local comics summary; completed tasks never hijack current navigation.
+- **Cancellation & Safe Cleanup**: Cancelling stops remaining queued files (queued tasks are disposed immediately without preparation); in-progress rendering or saving finishes safely before cleaning up unfinished directory artifacts. Successfully imported comics are preserved and never rolled back by late cancellations.
+- **Session Boundary & Exit Limits**: Tasks exist only within the current application session. Keep the app alive during import; resuming tasks after application exit or process termination across restarts is not supported. On Android, files that cannot be accessed directly are prepared in temporary storage one by one and released immediately after conversion.
+- **Storage Migration & Directory Ownership Protection**:
+  - Background imports are protected by `LocalStorageGuard` during rendering and registration. Changing the local storage path (`setNewPath`) and local download recovery scans are rejected while an import is active; conversely, imports safely wait if storage migration is already underway.
+  - Import sessions synchronously allocate and claim exclusive destination directories before rendering begins, preventing conflicts with concurrent CBZ restorations, directory copies, or other imports sharing the same title. Task cancellation cleans only its own designated directory without damaging data from other operations.
 - Each PDF page is rendered to JPEG in order, and the first page is also used as the cover.
 - The result is a flat comic without chapters. Its title defaults to the PDF file name.
 - Pages are rendered at roughly three times their PDF point size with a 3000-pixel longest-edge limit to balance clarity, memory, and storage use.

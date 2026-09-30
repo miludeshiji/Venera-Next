@@ -60,6 +60,7 @@ version: "2.11.1"
 
 ```bash
 python .github/scripts/check_structure_imports.py
+dart tool/check_git_dependencies.dart
 flutter analyze --no-pub
 flutter test --no-pub
 git diff --check
@@ -124,8 +125,18 @@ flutter pub get --enforce-lockfile
 flutter build ios --release --no-codesign --no-pub
 ```
 
-Windows 安装器与便携包由发布工作流生成；本仓库不维护 winget manifest 或公共包管理器条目。
+### Linux Debian 打包
 
+Linux Debian 安装包使用系统自带的 `dpkg-deb` 工具与项目脚本 `debian/build.py` 打包：
+
+```bash
+flutter build linux --release --no-pub
+python debian/build.py --skip-build
+```
+
+构建产物位于 `build/linux/{x64,arm64}/release/debian/`。该方式替代了旧的 `flutter_to_debian` 依赖，不再需要全局安装 Git 打包工具。
+
+Windows 安装器与便携包由发布工作流生成；本仓库不维护 winget manifest 或公共包管理器条目。
 ## GitHub Actions 与发布版本
 
 仓库工作流负责持续集成、手动构建、tag 发布和分发元数据维护。发布版本号统一维护在 `release.json`：
@@ -155,7 +166,7 @@ Android release 工作流需要以下仓库 Secrets：
 - `ANDROID_KEYSTORE`：keystore 文件的 Base64 内容
 - `ANDROID_KEY_PROPERTIES`：`key.properties` 文本内容
 
-发布后的 AltStore 更新会复用固定分支 `automation/update-altstore` 并创建 PR。仓库需要配置可向当前仓库推送分支并创建 PR 的 `ALTSTORE_PR_TOKEN`；未单独配置时会复用 `WINGET_PKGS_TOKEN`。令牌缺失或 PR 创建失败会使任务明确失败，不再产生只有分支、没有 PR 的成功记录。
+本项目为 miludeshiji 个人维护分支，已彻底移除上游 AltStore 自动化发布脚本、仓库元数据及 PR 生成流程，不提供公开发行的 AltStore 源。
 
 AI Issue 检查默认关闭。仅在确认 `API_URL`、`API_KEY` 可用后，将仓库变量 `ENABLE_AI_ISSUE_CHECK` 设为 `true`；可通过 `ISSUE_CHECK_MODEL` 覆盖默认模型。该流程只发表评论和关闭建议，不会自动关闭 Issue。
 

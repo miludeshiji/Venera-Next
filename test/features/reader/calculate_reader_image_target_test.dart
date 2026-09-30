@@ -517,6 +517,70 @@ void main() {
         const Size(0, 0),
       );
     });
+    test(
+      'readerSideMargin reduces width for vertical flow modes and clamps to 0-30%',
+      () {
+        const size = Size(1000, 1000);
+        // 20% margin on each side reduces width by 40% -> 600
+        final margin20 = calculateReaderContentSize(
+          mode: ReaderMode.continuousTopToBottom,
+          viewportSize: size,
+          readerSideMargin: 20,
+        );
+        expect(margin20.width, closeTo(600.0, 0.01));
+        expect(margin20.height, 1000.0);
+
+        // Waterfall behaves identically
+        final waterfallMargin20 = calculateReaderContentSize(
+          mode: ReaderMode.waterfallTopToBottom,
+          viewportSize: size,
+          readerSideMargin: 20,
+        );
+        expect(waterfallMargin20.width, closeTo(600.0, 0.01));
+
+        // Margin clamps to max 30% (reducing width by 60% -> 400)
+        final clampedMax = calculateReaderContentSize(
+          mode: ReaderMode.continuousTopToBottom,
+          viewportSize: size,
+          readerSideMargin: 50,
+        );
+        expect(clampedMax.width, closeTo(400.0, 0.01));
+
+        // Margin clamps to min 0%
+        final clampedMin = calculateReaderContentSize(
+          mode: ReaderMode.continuousTopToBottom,
+          viewportSize: size,
+          readerSideMargin: -10,
+        );
+        expect(clampedMin.width, 1000.0);
+
+        // First limits width, then applies margin
+        // 1920x1080 -> 1080 * 0.7 = 756 -> 756 * (1 - 0.2 * 2) = 453.6
+        final limitAndMargin = calculateReaderContentSize(
+          mode: ReaderMode.continuousTopToBottom,
+          viewportSize: const Size(1920, 1080),
+          limitImageWidth: true,
+          readerSideMargin: 20,
+        );
+        expect(limitAndMargin.width, closeTo(453.6, 0.01));
+
+        // Gallery and horizontal modes are NOT affected by readerSideMargin
+        for (final nonVerticalMode in [
+          ReaderMode.galleryLeftToRight,
+          ReaderMode.galleryRightToLeft,
+          ReaderMode.galleryTopToBottom,
+          ReaderMode.continuousLeftToRight,
+          ReaderMode.continuousRightToLeft,
+        ]) {
+          final res = calculateReaderContentSize(
+            mode: nonVerticalMode,
+            viewportSize: size,
+            readerSideMargin: 20,
+          );
+          expect(res.width, 1000.0);
+        }
+      },
+    );
   });
 
   group('calculateReaderImageTarget - limitImageWidth and splitWideImage', () {
@@ -560,6 +624,25 @@ void main() {
           targetContinuous.cacheIdentity,
           'w1512-hnull-dpr2.0-fitWidth-splittrue',
         );
+      },
+    );
+
+    test(
+      'readerSideMargin consistently reduces target logical and physical width',
+      () {
+        const size = Size(1000, 1000);
+        final target = calculateReaderImageTarget(
+          mode: ReaderMode.continuousTopToBottom,
+          viewportSize: size,
+          devicePixelRatio: 2.0,
+          page: 1,
+          totalImages: 10,
+          readerSideMargin: 20,
+        );
+        // logicalWidth 600, physicalWidth 1200
+        expect(target.logicalWidth, closeTo(600.0, 0.01));
+        expect(target.physicalWidth, 1200);
+        expect(target.fit, ComicImageTargetFit.fitWidth);
       },
     );
 

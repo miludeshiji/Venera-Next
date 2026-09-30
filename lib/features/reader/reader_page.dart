@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:venera_next/components/message.dart';
+import 'package:venera_next/foundation/translations.dart';
 import 'package:venera_next/features/reader/auto_reading.dart';
 
 import 'package:venera_next/foundation/file_system.dart';
@@ -156,6 +158,18 @@ class ReaderState extends State<Reader>
 
   History? history;
   bool localPageOrderChecked = false;
+
+  bool _reportedMissingLocalFiles = false;
+
+  void onLocalChapterRecoveredOnline() {
+    if (!mounted || _reportedMissingLocalFiles) return;
+    _reportedMissingLocalFiles = true;
+    showToast(
+      context: context,
+      message:
+          'Local chapter files are unavailable. Reading online instead.'.tl,
+    );
+  }
 
   late final ReadingSessionTracker _readingSession;
   final _chapterCompletionNotifier = ReaderChapterCompletionNotifier();
@@ -851,12 +865,25 @@ abstract mixin class ReaderLocation {
     return page >= 1 && page <= totalPages;
   }
 
-  void startPageAnimation() {
-    _animationCount++;
-    update();
+  int _animationCount = 0;
+  int _pageAnimationGeneration = 0;
+
+  void resetPageAnimation() {
+    _pageAnimationGeneration++;
+    _animationCount = 0;
+    _pendingPage = null;
   }
 
-  void endPageAnimation() {
+  int startPageAnimation() {
+    _animationCount++;
+    update();
+    return _pageAnimationGeneration;
+  }
+
+  void endPageAnimation([int? generation]) {
+    if (generation != null && generation != _pageAnimationGeneration) {
+      return;
+    }
     if (_animationCount > 0) {
       _animationCount--;
       update();
@@ -879,29 +906,43 @@ abstract mixin class ReaderLocation {
     return toPage(page - 1);
   }
 
-  int _animationCount = 0;
-
-  bool toPage(int page) {
+  bool toPage(int page, {bool animated = true}) {
     final controller = imageViewController;
-    if (controller == null) {
+    if (controller == null || isLoading) {
       return false;
     }
     if (_validatePage(page)) {
-      if (page == this.page && page != 1 && page != totalPages) {
+      if (page == this.page &&
+          page != 1 &&
+          page != totalPages &&
+          !isPageAnimating) {
         return false;
       }
-      final hasAnimation = enablePageAnimation(cid, type);
+      resetPageAnimation();
+      final hasAnimation = animated && enablePageAnimation(cid, type);
       if (hasAnimation) {
         _pendingPage = page;
         _animationCount++;
+        final generation = _pageAnimationGeneration;
         update();
-        controller.animateToPage(page).then((_) {
+        void finishAnimation() {
+          if (generation != _pageAnimationGeneration) return;
           _animationCount--;
           if (_pendingPage == page) {
             _pendingPage = null;
           }
           update();
-        });
+        }
+
+        unawaited(
+          Future<void>.sync(() => controller.animateToPage(page)).then(
+            (_) => finishAnimation(),
+            onError: (Object error, StackTrace stackTrace) {
+              Log.error('Reader', 'Page navigation failed: $error', stackTrace);
+              finishAnimation();
+            },
+          ),
+        );
       } else {
         this.page = page;
         update();

@@ -1,0 +1,51 @@
+import 'dart:async';
+
+class LocalComicStorageBusy implements Exception {
+  const LocalComicStorageBusy(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// Keeps background PDF writes out of storage migration and library recovery.
+/// Normal reading remains available throughout these operations.
+class LocalComicStorageGuard {
+  static final instance = LocalComicStorageGuard();
+
+  int _imports = 0;
+  Completer<void>? _exclusive;
+
+  Future<T> runImport<T>(Future<T> Function() action) async {
+    while (_exclusive != null) {
+      await _exclusive!.future;
+    }
+    _imports++;
+    try {
+      return await action();
+    } finally {
+      _imports--;
+    }
+  }
+
+  Future<T> runExclusive<T>(Future<T> Function() action) async {
+    if (_imports > 0) {
+      throw const LocalComicStorageBusy(
+        'Wait for PDF imports to finish or cancel them before changing the local library.',
+      );
+    }
+    if (_exclusive != null) {
+      throw const LocalComicStorageBusy(
+        'Local comic storage is busy. Try again later.',
+      );
+    }
+    final done = _exclusive = Completer<void>();
+    try {
+      return await action();
+    } finally {
+      _exclusive = null;
+      done.complete();
+    }
+  }
+}

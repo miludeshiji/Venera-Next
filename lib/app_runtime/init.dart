@@ -168,7 +168,7 @@ Future<void> init() async {
       chapterTitle: event.chapterTitle,
     ),
   );
-  configureComicSourceDataSavedHandler(() => DataSync().uploadData());
+  configureComicSourceDataSavedHandler(() async => DataSync().onDataChanged());
   configureRuntimeComicSourcesProvider(
     () => WebDavLibraryConfig.fromSettings().isValid
         ? [WebDavLibrarySource.create()]

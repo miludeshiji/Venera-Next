@@ -26,10 +26,8 @@ English version: [dependencies.en.md](dependencies.en.md)
 | `webdav_client` | `2f669c98fb81cff1c64fee93466a1475c77e4273` | `wgh136/webdav_client` / BSD-3-Clause | 固定版本增加多种认证方式支持，WebDAV 阅读和备份依赖该兼容性 |
 | `flutter_saf` | `fe182cdf40e5fa6230f451bc1d643b860f610d13` | `pkuislm/flutter_saf` / 许可证文件仍为占位内容 | 固定版本关闭代码压缩以规避 Android 发布构建问题，存储访问流程依赖该插件 |
 | `flutter_7zip` | `b33344797f1d2469339e0e1b75f5f954f1da224c` | `wgh136/flutter_7zip` / 许可证文件仍为占位内容 | 固定版本修复编译错误，CBZ 和归档兼容回退链路依赖该插件 |
-| `flutter_to_debian` | `3777c91b6b1cc0b7c03357c67ca216d4313c3db5` | `jeffrey0606/flutter_to_debian` / MIT | 固定版本修复 Debian `Depends` 字段传递，仅用于 Linux 打包 |
 
-上表依据当前固定 commit 的提交说明记录“为什么现在不能直接切回上游”，不等同于完整差异审计。每次升级 Git 依赖时，应在 PR 中补充上游仓库、对比范围、全部定制修改、上游 PR（如有）、安全影响和回滚方式。
-
+上表依据当前固定 commit 的提交说明记录“为什么现在不能直接切回上游”。完整机器可读清单见 [git_dependencies.json](git_dependencies.json)，详细替换审计与责任边界见 [Git 依赖接管与替换审计](dependency_audit.zh.md)。每次升级 Git 依赖时，应在 PR 中补充上游仓库、对比范围、全部定制修改、上游 PR（如有）、安全影响和回滚方式。
 `desktop_webview_window` 未声明许可证，`lodepng_flutter`、`flutter_saf` 和 `flutter_7zip` 的许可证文件仍是占位内容。这些是已知供应链债务：升级前必须向维护方核实许可证，无法确认时应迁移到许可证清晰的上游版本或替代包。
 
 ## 上游化流程

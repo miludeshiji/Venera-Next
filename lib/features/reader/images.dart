@@ -16,6 +16,7 @@ import 'package:venera_next/features/local_comics/local_comics.dart';
 import 'package:venera_next/features/webdav_library/webdav_library.dart';
 import 'package:venera_next/features/reader/auto_reading.dart';
 import 'package:venera_next/features/reader/chapter_comments.dart';
+import 'package:venera_next/features/reader/chapter_loader.dart';
 import 'package:venera_next/features/reader/comic_image.dart';
 import 'package:venera_next/features/reader/gallery_page_plan.dart';
 import 'package:venera_next/features/reader/gallery_coordinator.dart';
@@ -77,100 +78,82 @@ class ReaderImagesState extends State<ReaderImages> {
   void load() async {
     if (inProgress) return;
     inProgress = true;
-    final isLocalOrDownloaded =
-        reader.type == ComicType.local ||
-        (LocalManager().isDownloaded(
-          reader.cid,
-          reader.type,
-          reader.chapter,
-          reader.widget.chapters,
-        ));
-    if (isLocalOrDownloaded) {
-      try {
-        if (!reader.localPageOrderChecked) {
-          final history = reader.history;
-          if (history != null) {
-            final previousPage = history.page;
-            await LocalManager().migrateLegacyPageOrder(history);
-            if (!mounted) return;
-            if ((reader.widget.initialChapter ?? 1) == history.ep &&
-                reader.widget.initialPage == previousPage) {
-              final imagePage = history.page;
-              reader.pageValue = reader.imagesPerPage == 1
-                  ? imagePage
-                  : reader.showSingleImageOnFirstPage()
-                  ? ((imagePage - 1) / reader.imagesPerPage).ceil() + 1
-                  : (imagePage / reader.imagesPerPage).ceil();
-            }
-          }
-          reader.localPageOrderChecked = true;
-        }
-        var images = await LocalManager().getImages(
-          reader.cid,
-          reader.type,
-          reader.chapter,
-        );
-        if (!mounted) return;
-        setState(() {
-          reader.images = images;
-          reader.isLoading = false;
-          inProgress = false;
-          _handleJumpToLastPage();
-          Future.microtask(() {
-            reader.onReaderContentReady();
-            reader.updateHistory();
-          });
-        });
-      } catch (e) {
-        setState(() {
-          error = e.toString();
-          reader.isLoading = false;
-          inProgress = false;
-        });
-      }
-    } else {
-      var cp = reader.widget.chapters?.ids.elementAtOrNull(reader.chapter - 1);
-      var res = await reader.type.comicSource!.loadComicPages!(
-        reader.widget.cid,
-        cp,
+    error = null;
+    var fellBackOnline = false;
+    try {
+      final images = await loadReaderChapterImages(
+        comicId: reader.cid,
+        type: reader.type,
+        chapter: reader.chapter,
+        chapters: reader.widget.chapters,
+        onOnlineFallback: () {
+          fellBackOnline = true;
+          reader.onLocalChapterRecoveredOnline();
+        },
       );
-      if (res.error) {
-        setState(() {
-          error = res.errorMessage;
-          reader.isLoading = false;
-          inProgress = false;
-        });
-      } else {
-        if (!reader.localPageOrderChecked &&
-            reader.type == ComicType.fromKey(WebDavLibrarySource.sourceKey)) {
-          final history = reader.history;
-          if (history != null) {
-            final previousPage = history.page;
-            await LocalManager().migrateLegacyPageOrder(history, res.data);
-            if (!mounted) return;
-            if ((reader.widget.initialChapter ?? 1) == history.ep &&
-                reader.widget.initialPage == previousPage) {
-              final imagePage = history.page;
-              reader.pageValue = reader.imagesPerPage == 1
-                  ? imagePage
-                  : reader.showSingleImageOnFirstPage()
-                  ? ((imagePage - 1) / reader.imagesPerPage).ceil() + 1
-                  : (imagePage / reader.imagesPerPage).ceil();
+      if (!mounted) return;
+      reader.images = images;
+
+      if (!reader.localPageOrderChecked) {
+        final history = reader.history;
+        if (history != null) {
+          final previousPage = history.page;
+          final isSameChapter =
+              (reader.widget.initialChapter ?? reader.chapter) == history.ep;
+          final isLocalOrDownloaded =
+              !fellBackOnline &&
+              (reader.type == ComicType.local ||
+                  LocalManager().isDownloaded(
+                    reader.cid,
+                    reader.type,
+                    reader.chapter,
+                    reader.widget.chapters,
+                  ));
+          final isWebDav =
+              reader.type == ComicType.fromKey(WebDavLibrarySource.sourceKey);
+
+          if ((isLocalOrDownloaded || isWebDav) && isSameChapter) {
+            try {
+              await LocalManager().migrateLegacyPageOrder(history, images);
+              if (!mounted) return;
+              if ((reader.widget.initialChapter ?? 1) == history.ep &&
+                  reader.widget.initialPage == previousPage) {
+                final imagePage = history.page;
+                reader.pageValue = reader.imagesPerPage == 1
+                    ? imagePage
+                    : reader.showSingleImageOnFirstPage()
+                    ? ((imagePage - 1) / reader.imagesPerPage).ceil() + 1
+                    : (imagePage / reader.imagesPerPage).ceil();
+              }
+            } catch (e, s) {
+              Log.error(
+                'Migration',
+                'Failed to migrate legacy page order: $e',
+                s,
+              );
             }
           }
-          reader.localPageOrderChecked = true;
         }
-        setState(() {
-          reader.images = res.data;
-          reader.isLoading = false;
-          inProgress = false;
-          _handleJumpToLastPage();
-          Future.microtask(() {
-            reader.onReaderContentReady();
-            reader.updateHistory();
-          });
-        });
+        reader.localPageOrderChecked = true;
       }
+
+      setState(() {
+        reader.isLoading = false;
+        inProgress = false;
+        _handleJumpToLastPage();
+        Future.microtask(() {
+          if (!mounted) return;
+          reader.onReaderContentReady();
+          reader.updateHistory();
+        });
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        error = e.toString();
+        reader.isLoading = false;
+        inProgress = false;
+      });
     }
     if (mounted) {
       if (error != null || reader.images?.isEmpty == true) {
@@ -281,6 +264,7 @@ class GalleryModeState extends State<_GalleryMode>
   final _pool = GalleryPhotoViewControllerPool();
   String? _lastVisibleStableIdentity;
   bool _isAnimatingVisualPage = false;
+  int? _visualAnimationToken;
 
   String _controllerKeyForIndex(int index) {
     return resolveControllerKey(
@@ -539,7 +523,7 @@ class GalleryModeState extends State<_GalleryMode>
     controller.dispose();
     if (_isAnimatingVisualPage) {
       _isAnimatingVisualPage = false;
-      reader.endPageAnimation();
+      reader.endPageAnimation(_visualAnimationToken);
     }
     _pool.disposeAll();
     super.dispose();
@@ -1108,7 +1092,8 @@ class GalleryModeState extends State<_GalleryMode>
   Future<void> animateToControllerPage(int target) async {
     if (_isAnimatingVisualPage) return;
     _isAnimatingVisualPage = true;
-    reader.startPageAnimation();
+    final token = reader.startPageAnimation();
+    _visualAnimationToken = token;
     try {
       final current = controller.hasClients && controller.page != null
           ? controller.page!.round()
@@ -1124,7 +1109,7 @@ class GalleryModeState extends State<_GalleryMode>
     } finally {
       if (_isAnimatingVisualPage) {
         _isAnimatingVisualPage = false;
-        reader.endPageAnimation();
+        reader.endPageAnimation(token);
       }
     }
   }
@@ -1531,23 +1516,14 @@ class ContinuousModeState extends State<_ContinuousMode>
     return _waterfallFlow.imageRefAt(index);
   }
 
-  Future<List<String>> _loadChapterImages(int chapter) async {
-    if (reader.type == ComicType.local ||
-        LocalManager().isDownloaded(
-          reader.cid,
-          reader.type,
-          chapter,
-          reader.widget.chapters,
-        )) {
-      return LocalManager().getImages(reader.cid, reader.type, chapter);
-    }
-    var chapterId = reader.widget.chapters?.ids.elementAtOrNull(chapter - 1);
-    var res = await reader.type.comicSource!.loadComicPages!(
-      reader.widget.cid,
-      chapterId,
+  Future<List<String>> _loadChapterImages(int chapter) {
+    return loadReaderChapterImages(
+      comicId: reader.cid,
+      type: reader.type,
+      chapter: chapter,
+      chapters: reader.widget.chapters,
+      onOnlineFallback: reader.onLocalChapterRecoveredOnline,
     );
-    if (res.error) throw res.errorMessage ?? 'Failed to load chapter';
-    return res.data;
   }
 
   Future<void> _ensureWaterfallImagesAfter(int current) async {
@@ -2207,14 +2183,29 @@ class ContinuousModeState extends State<_ContinuousMode>
       child: widget,
     );
     final safeSize = _getSafeReaderViewportSize(context, reader);
+    final limitImageWidth =
+        appdata.settings.getReaderSetting(
+          reader.cid,
+          reader.type.sourceKey,
+          'limitImageWidth',
+        ) ==
+        true;
+    final rawMargin = appdata.settings.getReaderSetting(
+      reader.cid,
+      reader.type.sourceKey,
+      'readerSideMargin',
+    );
+    final readerSideMargin = rawMargin is num && rawMargin.isFinite
+        ? rawMargin
+        : 0;
     final contentSize = calculateReaderContentSize(
       mode: reader.mode,
       viewportSize: safeSize,
-      limitImageWidth: appdata.settings['limitImageWidth'] == true,
+      limitImageWidth: limitImageWidth,
+      readerSideMargin: readerSideMargin,
     );
     final width = contentSize.width;
     final height = contentSize.height;
-
     return PhotoView.customChild(
       backgroundDecoration: BoxDecoration(color: context.colorScheme.surface),
       childSize: contentSize,
@@ -2624,6 +2615,7 @@ Size calculateReaderContentSize({
   required ReaderMode mode,
   required Size viewportSize,
   bool limitImageWidth = false,
+  num readerSideMargin = 0,
 }) {
   var width = viewportSize.width;
   var height = viewportSize.height;
@@ -2637,6 +2629,14 @@ Size calculateReaderContentSize({
     if (width / height > 0.7) {
       width = height * 0.7;
     }
+  }
+
+  if (mode.isContinuous && mode.isTopToBottom) {
+    final percent = (readerSideMargin.isFinite ? readerSideMargin : 0).clamp(
+      0,
+      30,
+    );
+    width *= 1 - percent * 2 / 100;
   }
 
   return Size(width, height);
@@ -2688,11 +2688,13 @@ ComicImageLoadTarget calculateReaderImageTarget({
   bool showSingleImageOnFirstPage = false,
   bool splitWideImage = false,
   bool limitImageWidth = false,
+  num readerSideMargin = 0,
 }) {
   final contentSize = calculateReaderContentSize(
     mode: mode,
     viewportSize: viewportSize,
     limitImageWidth: limitImageWidth,
+    readerSideMargin: readerSideMargin,
   );
 
   final dpr = (devicePixelRatio.isFinite && devicePixelRatio > 0)
@@ -2805,7 +2807,21 @@ ComicImageLoadTarget calculateReaderImageTargetFromContext(
   final safeSize = _getSafeReaderViewportSize(context, reader);
   final mediaQuery = MediaQuery.of(context);
   final split = splitWideImage ?? _isSplitWideImagesEnabled(reader);
-  final limitImageWidth = appdata.settings['limitImageWidth'] == true;
+  final limitImageWidth =
+      appdata.settings.getReaderSetting(
+        reader.cid,
+        reader.type.sourceKey,
+        'limitImageWidth',
+      ) ==
+      true;
+  final rawMargin = appdata.settings.getReaderSetting(
+    reader.cid,
+    reader.type.sourceKey,
+    'readerSideMargin',
+  );
+  final readerSideMargin = rawMargin is num && rawMargin.isFinite
+      ? rawMargin
+      : 0;
   return calculateReaderImageTarget(
     mode: reader.mode,
     viewportSize: safeSize,
@@ -2816,6 +2832,7 @@ ComicImageLoadTarget calculateReaderImageTargetFromContext(
     showSingleImageOnFirstPage: reader.showSingleImageOnFirstPage(),
     splitWideImage: split,
     limitImageWidth: limitImageWidth,
+    readerSideMargin: readerSideMargin,
   );
 }
 

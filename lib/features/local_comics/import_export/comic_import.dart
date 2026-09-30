@@ -10,6 +10,7 @@ import 'package:venera_next/foundation/file_interaction.dart';
 import 'package:zip_flutter/zip_flutter.dart';
 
 import 'comic_export.dart';
+import 'document_import.dart';
 
 /// 导入结果
 class ImportResult {
@@ -170,39 +171,31 @@ class ComicImporter {
     // 1. 复制漫画文件到本地存储
     final localPath = LocalManager().path;
 
-    // 如果目标目录已存在，添加后缀避免冲突
-    var finalDirectory = info.directory;
-    var counter = 1;
-    while (Directory(FilePath.join(localPath, finalDirectory)).existsSync()) {
-      finalDirectory = '${info.directory}_$counter';
-      counter++;
-    }
-
-    await copyDirectoryIsolate(
-      sourceDir,
-      Directory(FilePath.join(localPath, finalDirectory)),
+    final target = DocumentImportSession.allocateDirectory(
+      localPath,
+      info.directory,
     );
-
-    // 2. 添加到数据库
-    final comic = LocalComic(
-      id: info.id,
-      title: info.title,
-      subtitle: info.subtitle,
-      tags: info.tags,
-      directory: finalDirectory,
-      chapters: ComicChapters.fromJsonOrNull(info.chapters),
-      cover: info.cover,
-      comicType: ComicType(info.comicType),
-      downloadedChapters: info.downloadedChapters,
-      createdAt: DateTime.fromMillisecondsSinceEpoch(info.createdAt),
-    );
+    final finalDirectory = target.name;
     try {
-      LocalManager().add(comic);
+      await copyDirectoryIsolate(sourceDir, target);
+
+      // 2. 添加到数据库
+      final comic = LocalComic(
+        id: info.id,
+        title: info.title,
+        subtitle: info.subtitle,
+        tags: info.tags,
+        directory: finalDirectory,
+        chapters: ComicChapters.fromJsonOrNull(info.chapters),
+        cover: info.cover,
+        comicType: ComicType(info.comicType),
+        downloadedChapters: info.downloadedChapters,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(info.createdAt),
+      );
+      await LocalManager().add(comic);
     } catch (e) {
-      // 数据库写入失败，清理已复制的文件
-      Directory(
-        FilePath.join(localPath, finalDirectory),
-      ).deleteIgnoreError(recursive: true);
+      // Only this allocation belongs to the failed import.
+      await target.deleteIgnoreError(recursive: true);
       rethrow;
     }
   }

@@ -83,22 +83,29 @@ class SideBarRoute<T> extends PopupRoute<T> {
     Animation<double> animation,
     Animation<double> secondaryAnimation,
   ) {
-    bool showSideBar = MediaQuery.of(context).size.width > width;
+    final mediaQuery = MediaQuery.of(context);
+    bool showSideBar = mediaQuery.size.width > width;
 
     Widget body = widget;
 
-    if (addTopPadding) {
-      body = Padding(
-        padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top),
-        child: MediaQuery.removePadding(
-          context: context,
-          removeTop: true,
-          child: body,
-        ),
+    if (addTopPadding || addBottomPadding) {
+      // 移除已由外层侧栏消费的 safe padding / view insets，避免子组件重复键盘避让
+      body = MediaQuery(
+        data: mediaQuery
+            .removePadding(removeTop: addTopPadding)
+            .removeViewInsets(removeBottom: addBottomPadding),
+        child: body,
       );
     }
 
-    final sideBarWidth = math.min(width, MediaQuery.of(context).size.width);
+    if (addTopPadding) {
+      body = Padding(
+        padding: EdgeInsets.only(top: mediaQuery.padding.top),
+        child: body,
+      );
+    }
+
+    final sideBarWidth = math.min(width, mediaQuery.size.width);
 
     body = Container(
       decoration: BoxDecoration(
@@ -118,7 +125,7 @@ class SideBarRoute<T> extends PopupRoute<T> {
       ),
       clipBehavior: Clip.antiAlias,
       constraints: BoxConstraints(maxWidth: sideBarWidth),
-      height: MediaQuery.of(context).size.height,
+      height: mediaQuery.size.height,
       child: GestureDetector(
         child: Material(
           child: ClipRect(
@@ -127,10 +134,9 @@ class SideBarRoute<T> extends PopupRoute<T> {
               padding: EdgeInsets.fromLTRB(
                 0,
                 0,
-                MediaQuery.of(context).padding.right,
+                mediaQuery.padding.right,
                 addBottomPadding
-                    ? MediaQuery.of(context).padding.bottom +
-                          MediaQuery.of(context).viewInsets.bottom
+                    ? mediaQuery.padding.bottom + mediaQuery.viewInsets.bottom
                     : 0,
               ),
               color: useSurfaceTintColor

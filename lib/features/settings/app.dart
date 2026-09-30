@@ -13,6 +13,7 @@ import 'package:venera_next/features/bangumi/bangumi.dart';
 import 'package:venera_next/features/history/history.dart';
 import 'package:venera_next/features/local_comics/local_comics.dart';
 import 'package:venera_next/features/comic_source/comic_source.dart';
+import 'package:venera_next/features/settings/data_sync_schedule_fields.dart';
 import 'package:venera_next/features/settings/setting_components.dart';
 import 'package:venera_next/features/settings/webdav_connection_fields.dart';
 import 'package:venera_next/features/sync/sync.dart';
@@ -277,7 +278,12 @@ class _WebdavSettingState extends State<_WebdavSetting> {
   String pass = "";
   String disableSync = "";
 
-  bool autoSync = true;
+  DataSyncMode syncMode = DataSyncMode.realtime;
+  int syncInterval = 30;
+  late final TextEditingController urlController;
+  late final TextEditingController userController;
+  late final TextEditingController passController;
+  late final TextEditingController fieldsController;
 
   bool isTesting = false;
   bool upload = true;
@@ -292,232 +298,229 @@ class _WebdavSettingState extends State<_WebdavSetting> {
       disableSync = appdata.settings['disableSyncFields'];
     }
     var configs = appdata.settings['webdav'] as List;
-    if (configs.whereType<String>().length != 3) {
-      return;
+    if (configs.length == 3 && configs.whereType<String>().length == 3) {
+      url = configs[0];
+      user = configs[1];
+      pass = configs[2];
+      syncMode = DataSync.mode;
     }
-    url = configs[0];
-    user = configs[1];
-    pass = configs[2];
-    autoSync = appdata.implicitData['webdavAutoSync'] ?? true;
+    syncInterval = DataSync.intervalMinutes;
+    urlController = TextEditingController(text: url);
+    userController = TextEditingController(text: user);
+    passController = TextEditingController(text: pass);
+    fieldsController = TextEditingController(text: disableSync);
   }
 
-  void onAutoSyncChanged(bool value) {
-    setState(() {
-      autoSync = value;
-      appdata.implicitData['webdavAutoSync'] = value;
-      appdata.writeImplicitData();
-    });
+  @override
+  void dispose() {
+    urlController.dispose();
+    userController.dispose();
+    passController.dispose();
+    fieldsController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return PopUpWidgetScaffold(
       title: "Webdav",
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            const SizedBox(height: 12),
-            TextField(
-              decoration: InputDecoration(
-                labelText: "URL",
-                hintText: "A valid WebDav directory URL".tl,
-                border: OutlineInputBorder(),
-              ),
-              controller: TextEditingController(text: url),
-              onChanged: (value) => url = value,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              decoration: InputDecoration(
-                labelText: "Username".tl,
-                border: const OutlineInputBorder(),
-              ),
-              controller: TextEditingController(text: user),
-              onChanged: (value) => user = value,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              decoration: InputDecoration(
-                labelText: "Password".tl,
-                border: const OutlineInputBorder(),
-              ),
-              controller: TextEditingController(text: pass),
-              onChanged: (value) => pass = value,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              decoration: InputDecoration(
-                labelText: "Skip Setting Fields (Optional)".tl,
-                hintText: "field0, field1, field2, ...",
-                hintStyle: TextStyle(color: Theme.of(context).hintColor),
-                border: OutlineInputBorder(),
-                suffixIcon: IconButton(
-                  icon: Icon(Icons.help_outline),
-                  onPressed: () {
-                    showDialog(
-                      context: context,
-                      builder: (_) => AlertDialog(
-                        title: Text("Skip Setting Fields".tl),
-                        content: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              "When sync data, skip certain setting fields, which means these won't be uploaded / override."
-                                  .tl,
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    "See source code for available fields.".tl,
-                                  ),
-                                ),
-                                Align(
-                                  alignment: Alignment.centerRight,
-                                  child: IconButton(
-                                    icon: const Icon(Icons.open_in_new),
-                                    onPressed: () {
-                                      launchUrlString(
-                                        "https://github.com/miludeshiji/Venera-Next/blob/main/lib/foundation/appdata.dart#L335",
-                                      );
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
+      body: AbsorbPointer(
+        absorbing: isTesting,
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
+              const SizedBox(height: 12),
+              TextField(
+                decoration: InputDecoration(
+                  labelText: "URL",
+                  hintText: "A valid WebDav directory URL".tl,
+                  border: OutlineInputBorder(),
                 ),
+                controller: urlController,
+                onChanged: (value) => url = value,
               ),
-              controller: TextEditingController(text: disableSync),
-              onChanged: (value) => disableSync = value,
-            ),
-            const SizedBox(height: 12),
-            ListTile(
-              leading: Icon(Icons.sync),
-              title: Text("Auto Sync Data".tl),
-              contentPadding: EdgeInsets.zero,
-              trailing: Switch(value: autoSync, onChanged: onAutoSyncChanged),
-            ),
-            const SizedBox(height: 12),
-            RadioGroup<bool>(
-              groupValue: upload,
-              onChanged: (value) {
-                setState(() {
-                  upload = value ?? upload;
-                });
-              },
-              child: Row(
-                children: [
-                  Text("Operation".tl),
-                  Radio<bool>(value: true),
-                  Text("Upload".tl),
-                  Radio<bool>(value: false),
-                  Text("Download".tl),
-                ],
+              const SizedBox(height: 12),
+              TextField(
+                decoration: InputDecoration(
+                  labelText: "Username".tl,
+                  border: const OutlineInputBorder(),
+                ),
+                controller: userController,
+                onChanged: (value) => user = value,
               ),
-            ),
-            const SizedBox(height: 16),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 200),
-              child: autoSync
-                  ? Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.info_outline, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              "Once the operation is successful, app will automatically sync data with the server."
-                                  .tl,
-                            ),
+              const SizedBox(height: 12),
+              TextField(
+                decoration: InputDecoration(
+                  labelText: "Password".tl,
+                  border: const OutlineInputBorder(),
+                ),
+                controller: passController,
+                onChanged: (value) => pass = value,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                decoration: InputDecoration(
+                  labelText: "Skip Setting Fields (Optional)".tl,
+                  hintText: "field0, field1, field2, ...",
+                  hintStyle: TextStyle(color: Theme.of(context).hintColor),
+                  border: OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: Icon(Icons.help_outline),
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: Text("Skip Setting Fields".tl),
+                          content: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                "When sync data, skip certain setting fields, which means these won't be uploaded / override."
+                                    .tl,
+                              ),
+                              const SizedBox(height: 12),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      "See source code for available fields."
+                                          .tl,
+                                    ),
+                                  ),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: IconButton(
+                                      icon: const Icon(Icons.open_in_new),
+                                      onPressed: () {
+                                        launchUrlString(
+                                          "https://github.com/miludeshiji/Venera-Next/blob/main/lib/foundation/appdata.dart#L335",
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                controller: fieldsController,
+                onChanged: (value) => disableSync = value,
+              ),
+              const SizedBox(height: 12),
+              DataSyncScheduleFields(
+                mode: syncMode,
+                minutes: syncInterval,
+                onModeChanged: (value) => setState(() => syncMode = value),
+                onIntervalChanged: (value) =>
+                    setState(() => syncInterval = value),
+              ),
+              const SizedBox(height: 12),
+              if (syncMode != DataSyncMode.manual) ...[
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Initial sync'.tl),
+                ),
+                RadioGroup<bool>(
+                  groupValue: upload,
+                  onChanged: (value) {
+                    setState(() {
+                      upload = value ?? upload;
+                    });
+                  },
+                  child: Column(
+                    children: [
+                      RadioListTile<bool>(
+                        value: true,
+                        title: Text('Upload'.tl),
+                        contentPadding: EdgeInsets.zero,
                       ),
-                    )
-                  : const SizedBox.shrink(),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: Button.outlined(
-                    isLoading: isTesting,
-                    onPressed: testConnection,
-                    child: Text("Test Connection".tl),
+                      RadioListTile<bool>(
+                        value: false,
+                        title: Text('Download'.tl),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ],
                   ),
                 ),
               ],
-            ),
-            const SizedBox(height: 12),
-            Center(
-              child: Button.filled(
-                isLoading: isTesting,
-                onPressed: () async {
-                  var oldConfig = appdata.settings['webdav'];
-                  var oldAutoSync = appdata.implicitData['webdavAutoSync'];
-
-                  if (url.trim().isEmpty &&
-                      user.trim().isEmpty &&
-                      pass.trim().isEmpty) {
-                    appdata.settings['webdav'] = [];
-                    appdata.implicitData['webdavAutoSync'] = false;
-                    appdata.writeImplicitData();
-                    appdata.saveData();
-                    context.showMessage(message: "Saved".tl);
-                    App.rootPop();
-                    return;
-                  }
-
-                  appdata.settings['webdav'] = [url, user, pass];
-                  appdata.settings['disableSyncFields'] = disableSync;
-                  appdata.implicitData['webdavAutoSync'] = autoSync;
-                  appdata.writeImplicitData();
-
-                  if (!autoSync) {
-                    appdata.saveData();
-                    context.showMessage(message: "Saved".tl);
-                    App.rootPop();
-                    return;
-                  }
-
-                  setState(() {
-                    isTesting = true;
-                  });
-                  var testResult = upload
-                      ? await DataSync().uploadData()
-                      : await DataSync().downloadData();
-                  if (testResult.error) {
-                    setState(() {
-                      isTesting = false;
-                    });
-                    appdata.settings['webdav'] = oldConfig;
-                    appdata.implicitData['webdavAutoSync'] = oldAutoSync;
-                    appdata.writeImplicitData();
-                    appdata.saveData();
-                    context.showMessage(message: testResult.errorMessage!);
-                    context.showMessage(message: "Saved Failed".tl);
-                  } else {
-                    appdata.saveData();
-                    context.showMessage(message: "Saved".tl);
-                    App.rootPop();
-                  }
-                },
-                child: Text("Continue".tl),
+              const SizedBox(height: 16),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 200),
+                child: syncMode != DataSyncMode.manual
+                    ? Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.info_outline, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                "Once the operation is successful, app will automatically sync data with the server."
+                                    .tl,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : const SizedBox.shrink(),
               ),
-            ),
-          ],
-        ).paddingHorizontal(16),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: Button.outlined(
+                      isLoading: isTesting,
+                      onPressed: testConnection,
+                      child: Text("Test Connection".tl),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Center(
+                child: Button.filled(
+                  isLoading: isTesting,
+                  onPressed: () async {
+                    if (isTesting) return;
+                    setState(() {
+                      isTesting = true;
+                    });
+                    final clear =
+                        url.trim().isEmpty &&
+                        user.trim().isEmpty &&
+                        pass.trim().isEmpty;
+                    final testResult = await DataSync().configure(
+                      config: clear ? [] : [url.trim(), user, pass],
+                      excludedFields: disableSync,
+                      syncMode: syncMode,
+                      minutes: syncInterval,
+                      initialUpload: upload,
+                    );
+                    if (!mounted) return;
+                    setState(() => isTesting = false);
+                    if (testResult.error) {
+                      context.showMessage(message: testResult.errorMessage!);
+                      context.showMessage(message: "Saved Failed".tl);
+                    } else {
+                      context.showMessage(message: "Saved".tl);
+                      App.rootPop();
+                    }
+                  },
+                  child: Text("Continue".tl),
+                ),
+              ),
+            ],
+          ).paddingHorizontal(16),
+        ),
       ),
     );
   }
