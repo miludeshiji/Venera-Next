@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/readme_logo.png" alt="VeneraNext" width="200" />
+  <img src="https://raw.githubusercontent.com/miludeshiji/Venera-Next/refs/heads/backup/main-before-readme-only/assets/readme_logo.png" alt="VeneraNext" width="200" />
 
   # VeneraNext
 
@@ -14,9 +14,10 @@
 
 - **新项目仓库**：[https://github.com/Venera-Works/Venera-Plus](https://github.com/Venera-Works/Venera-Plus)
 - **最新版本下载**：[https://github.com/miludeshiji/Venera-Next/releases/latest](https://github.com/miludeshiji/Venera-Next/releases/latest)
-- **更新日志**：[CHANGELOG.md](CHANGELOG.md)
-- **中文文档**：[doc/README.md](doc/README.md)
-- **许可证**：[LICENSE](LICENSE)
+- **源码备份**：[https://github.com/miludeshiji/Venera-Next/tree/backup/main-before-readme-only](https://github.com/miludeshiji/Venera-Next/tree/backup/main-before-readme-only)
+- **更新日志**：[CHANGELOG.md](https://github.com/miludeshiji/Venera-Next/blob/backup/main-before-readme-only/CHANGELOG.md)
+- **中文文档**：[doc/README.md](https://github.com/miludeshiji/Venera-Next/blob/backup/main-before-readme-only/doc/README.md)
+- **许可证**：[LICENSE](https://github.com/miludeshiji/Venera-Next/blob/backup/main-before-readme-only/LICENSE)
 
 ## 致谢
 
@@ -27,4 +28,4 @@
 
 ## 许可
 
-本项目遵循 [GPL-3.0](LICENSE) 许可。使用、修改和再分发时，请遵守原项目、直接上游及相关依赖的许可要求。
+本项目遵循 [GPL-3.0](https://github.com/miludeshiji/Venera-Next/blob/backup/main-before-readme-only/LICENSE) 许可。使用、修改和再分发时，请遵守原项目、直接上游及相关依赖的许可要求。
