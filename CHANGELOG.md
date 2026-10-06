@@ -4,7 +4,7 @@
 
 ## v2.2.3
 
-项目已经迁移至https://github.com/Venera-Works/Venera-Plus，请到https://github.com/miludeshiji/Venera-Next/releases/latest下载最新版。
+项目已经迁移至[https://github.com/Venera-Works/Venera-Plus](https://github.com/Venera-Works/Venera-Plus)，请到[https://github.com/miludeshiji/Venera-Next/releases/latest](https://github.com/miludeshiji/Venera-Next/releases/latest)下载最新版。
 
 ## v2.2.2
 
