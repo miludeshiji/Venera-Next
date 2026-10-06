@@ -9,12 +9,12 @@
 
 > [!IMPORTANT]
 > 项目已经迁移至 [https://github.com/Venera-Works/Venera-Plus](https://github.com/Venera-Works/Venera-Plus)。
-请到 [https://github.com/Venera-Works/Venera-Plus/releases/latest](https://github.com/Venera-Works/Venera-Plus/releases/latest) 下载最新版。
+> 请到 [https://github.com/Venera-Works/Venera-Plus/releases/latest](https://github.com/Venera-Works/Venera-Plus/releases/latest) 下载最新版。
 
 ## 相关入口
 
 - **新项目仓库**：[https://github.com/Venera-Works/Venera-Plus](https://github.com/Venera-Works/Venera-Plus)
-- **最新版本下载**：[https://github.com/Venera-Works/Venera-Plus/releases/latest](https://github.com/Venera-Works/Venera-Plus/releases/
+- **最新版本下载**：[最新版本](https://github.com/Venera-Works/Venera-Plus/releases/)
 - **许可证**：[LICENSE](https://github.com/miludeshiji/Venera-Next/blob/backup/main-before-readme-only/LICENSE)
 
 ## 致谢
