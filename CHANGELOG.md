@@ -2,6 +2,10 @@
 
 本项目遵循语义化版本，记录 fork 后的主要变更。
 
+## v2.2.3
+
+项目已经迁移至https://github.com/Venera-Works/Venera-Plus，请到https://github.com/miludeshiji/Venera-Next/releases/latest下载最新版。
+
 ## v2.2.2
 
 ### 新增
